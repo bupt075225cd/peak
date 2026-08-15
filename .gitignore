@@ -1,0 +1,36 @@
+# Go
+*.exe
+*.test
+*.out
+bin/
+vendor/
+
+# 编译产物（各服务二进制）
+/gateway
+/question-service
+/recognition-service
+/user-service
+
+# 本地存储数据
+apps/*/data/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 项目本地数据
+.codebuddy/
+
+# 日志
+*.log
+
+# 本地配置（含密钥）
+*.local.yaml
+.env

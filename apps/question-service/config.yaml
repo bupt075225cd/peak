@@ -1,0 +1,12 @@
+server:
+  port: "${SERVER_PORT:-8081}"
+
+log:
+  development: ${LOG_DEV:-true}
+
+tracing:
+  endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
+
+database:
+  dialect: "${DB_DIALECT:-mysql}"  # mysql / postgres / sqlite
+  dsn: "${DB_DSN:-root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local}"

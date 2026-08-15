@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: peak-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: peak123456
+      MYSQL_DATABASE: peak
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppeak123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Prometheus（可观测性，预留）
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: peak-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+
+volumes:
+  mysql-data:

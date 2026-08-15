@@ -1,0 +1,14 @@
+server:
+  port: "${SERVER_PORT:-8080}"
+
+log:
+  development: ${LOG_DEV:-true}
+
+tracing:
+  endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
+
+# 路由前缀 -> 后端服务地址（可用环境变量覆盖，生产环境指向服务名）
+routes:
+  /api/questions: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
+  /api/recognition: "${RECOGNITION_SERVICE_URL:-http://localhost:8082}"
+  /api/users: "${USER_SERVICE_URL:-http://localhost:8083}"

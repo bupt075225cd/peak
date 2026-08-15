@@ -1,0 +1,262 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 取消同一分支上旧的、仍在运行的流水线，避免资源浪费
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 与本地开发一致的网络/工具链配置
+  GOPROXY: https://goproxy.cn,direct
+  GOSUMDB: off
+  GOTOOLCHAIN: local
+
+jobs:
+  # ── 1. 编译：确保所有模块都能 build ─────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Build all modules
+        run: |
+          # workspace 模式下一次性构建全部包，能精准暴露出错的模块
+          go build peak/...
+
+      - name: Build binaries (vet-free compile check)
+        run: |
+          for svc in gateway question-service recognition-service user-service; do
+            echo "building apps/$svc"
+            (cd "apps/$svc" && go build -o /dev/null .)
+          done
+
+  # ── 2. 静态检查：go vet + golangci-lint ────────────────────────
+  staticcheck:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: go vet
+        run: go vet peak/...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59
+          # 仅扫描 workspace 内模块
+          args: --timeout=5m
+
+  # ── 3. 单元测试：执行测试并收集覆盖率 ──────────────────────────
+  test:
+    name: Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Run tests with coverage
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic peak/...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out
+
+      # 把覆盖率报告上传为 artifact，方便下载查看
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+      # ── 覆盖率门禁 ─────────────────────────────────────────────
+      # 1) 总体覆盖率低于 TOTAL_MIN 则失败
+      # 2) 每个包的覆盖率低于其指定阈值则失败（阈值见 PER_PKG_MIN）
+      # 阈值设定原则：先取「略低于当前实测值」，随测试补全逐步收紧。
+      - name: Coverage gate
+        run: |
+          set -euo pipefail
+
+          TOTAL_MIN=70   # 总体覆盖率门槛（%）
+
+          # 每个包的最低覆盖率门槛（%）。key 为包路径，value 为阈值。
+          # 当前较低覆盖率的包（storage/observability/http）先设为「不低于现有水平」，
+          # 待补齐测试后可上调至 70+。其余包已达标，直接锁 70。
+          declare -A PER_PKG_MIN=(
+            ["peak/apps/gateway"]=60
+            ["peak/apps/question-service/internal/handler"]=80
+            ["peak/apps/question-service/internal/repository"]=85
+            ["peak/apps/question-service/internal/service"]=95
+            ["peak/apps/recognition-service/internal/handler"]=70
+            ["peak/apps/recognition-service/internal/provider"]=90
+            ["peak/apps/recognition-service/internal/service"]=80
+            ["peak/libs/config"]=90
+            ["peak/libs/domain"]=70
+            ["peak/libs/errors"]=95
+            ["peak/libs/http"]=60
+            ["peak/libs/logger"]=90
+            ["peak/libs/observability"]=60
+            ["peak/libs/storage"]=45
+          )
+
+          # 用 go test -cover 的逐包结果（已是按包聚合的覆盖率）
+          # 输出形如：ok  peak/apps/gateway  coverage: 66.7% of statements
+          # 解析为 pkg_cov[package]=percent(取整)
+          declare -A pkg_cov
+          while read -r status pkg rest; do
+            case "$status" in
+              ok|FAIL)
+                pct=$(echo "$rest" | grep -oE 'coverage: [0-9.]+%' | grep -oE '[0-9.]+' | cut -d. -f1)
+                [ -n "$pct" ] && pkg_cov["$pkg"]=$pct
+                ;;
+            esac
+          done < <(go test -cover peak/... 2>/dev/null)
+
+          # 1) 逐包检查
+          pkg_failed=0
+          for pkg in "${!PER_PKG_MIN[@]}"; do
+            threshold=${PER_PKG_MIN[$pkg]}
+            got=${pkg_cov[$pkg]:-0}
+            if [ "$got" -lt "$threshold" ]; then
+              echo "✗ $pkg 覆盖率 ${got}% < 门槛 ${threshold}%"
+              pkg_failed=1
+            else
+              echo "✓ $pkg 覆盖率 ${got}% (门槛 ${threshold}%)"
+            fi
+          done
+
+          # 2) 总体检查（基于 coverage.out 的函数级聚合）
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%' | cut -d. -f1)
+          echo "────────────────────────────"
+          echo "总体覆盖率: ${total}% (门槛 ${TOTAL_MIN}%)"
+          if [ "$total" -lt "$TOTAL_MIN" ]; then
+            echo "✗ 总体覆盖率低于 ${TOTAL_MIN}%"
+            exit 1
+          fi
+
+          if [ "$pkg_failed" -ne 0 ]; then
+            echo "✗ 存在未达标的包，流水线失败"
+            exit 1
+          fi
+          echo "✓ 全部覆盖率门禁通过"
+
+  # ── 4. 前端测试：Vitest 单元测试 + 覆盖率 ─────────────────────
+  web-test:
+    name: Web Unit Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (vue-tsc)
+        run: npm run typecheck
+
+      - name: Run tests with coverage
+        run: npm run test:cov
+
+      # 覆盖率门禁：总体语句覆盖率低于阈值则失败
+      - name: Coverage gate
+        run: |
+          set -euo pipefail
+          WEB_TOTAL_MIN=80   # 前端总体语句覆盖率门槛（%）
+
+          total=$(node -e "
+            const s = require('./coverage/coverage-summary.json');
+            console.log(Math.floor(s.total.statements.pct));
+          ")
+          echo "前端总体语句覆盖率: ${total}% (门槛 ${WEB_TOTAL_MIN}%)"
+          if [ "$total" -lt "$WEB_TOTAL_MIN" ]; then
+            echo "✗ 前端覆盖率低于 ${WEB_TOTAL_MIN}%"
+            exit 1
+          fi
+          echo "✓ 前端覆盖率门禁通过"
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage
+          path: web/coverage/
+
+  # ── 5. 镜像构建：验证 Dockerfile 可构建（不推送）─────────────
+  docker-build:
+    name: Docker Image Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 依次构建各镜像，仅验证可构建，不推送
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          push: false
+          tags: peak/gateway:ci
+
+      - name: Build question-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/question-service/Dockerfile
+          push: false
+          tags: peak/question-service:ci
+
+      - name: Build recognition-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/recognition-service/Dockerfile
+          push: false
+          tags: peak/recognition-service:ci
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: Dockerfile
+          push: false
+          tags: peak/web:ci

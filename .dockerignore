@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# 前端（后端镜像构建无需）
+web/node_modules
+web/dist
+web/coverage
+
+# Go 构建产物
+bin/
+vendor/
+*.out
+
+# 本地数据与密钥
+apps/*/data/
+*.local.yaml
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# 其他
+.github/
+.husky/
+node_modules/
+README.md

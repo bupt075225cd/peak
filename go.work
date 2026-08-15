@@ -1,0 +1,15 @@
+go 1.21
+
+use (
+	./apps/gateway
+	./apps/question-service
+	./apps/recognition-service
+	./apps/user-service
+	./libs/config
+	./libs/domain
+	./libs/errors
+	./libs/http
+	./libs/logger
+	./libs/observability
+	./libs/storage
+)

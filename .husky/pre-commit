@@ -1,0 +1,6 @@
+# Pre-commit hook：提交前自动跑静态检查
+# 由 husky 管理，npm install 后自动启用（prepare 脚本）
+# 若检查失败会阻断提交；可用 git commit --no-verify 跳过（不推荐）
+
+echo "==> pre-commit: 运行静态检查 (make check)"
+make check

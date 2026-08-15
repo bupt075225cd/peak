@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # 生产环境：通过服务名访问容器网络
+  - job_name: "gateway"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+
+  - job_name: "question-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["question-service:8081"]
+
+  - job_name: "recognition-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["recognition-service:8082"]

@@ -1,0 +1,122 @@
+# 生产部署编排：后端微服务 + MySQL + Prometheus
+# 用法：
+#   docker compose -f docker-compose.prod.yml up -d --build
+# 说明：
+#   - 配置通过环境变量注入（config.yaml 使用 ${VAR} 占位）
+#   - 敏感信息（DB 密码、阿里云密钥）通过 .env 文件或环境注入，勿提交到仓库
+version: "3.8"
+
+services:
+  # ── 基础设施 ────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: peak-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-peak123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-peak}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-peak123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 不对外暴露 3306，仅内网访问
+    expose:
+      - "3306"
+
+  # ── 后端服务 ────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    container_name: peak-gateway
+    restart: unless-stopped
+    depends_on:
+      question-service:
+        condition: service_started
+      recognition-service:
+        condition: service_started
+    environment:
+      SERVER_PORT: "8080"
+      LOG_DEV: "false"
+      QUESTION_SERVICE_URL: "http://question-service:8081"
+      RECOGNITION_SERVICE_URL: "http://recognition-service:8082"
+      USER_SERVICE_URL: "http://user-service:8083"
+      TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
+    ports:
+      - "8080:8080"
+
+  question-service:
+    build:
+      context: .
+      dockerfile: apps/question-service/Dockerfile
+    container_name: peak-question-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8081"
+      LOG_DEV: "false"
+      DB_DIALECT: "mysql"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
+    expose:
+      - "8081"
+
+  recognition-service:
+    build:
+      context: .
+      dockerfile: apps/recognition-service/Dockerfile
+    container_name: peak-recognition-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8082"
+      LOG_DEV: "false"
+      DB_DIALECT: "mysql"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      STORAGE_ROOT: "/data"
+      RECOGNITION_PROVIDER: ${RECOGNITION_PROVIDER:-aliyun}
+      ALIYUN_ACCESS_KEY_ID: ${ALIYUN_ACCESS_KEY_ID:-}
+      ALIYUN_ACCESS_SECRET: ${ALIYUN_ACCESS_SECRET:-}
+      ALIYUN_OCR_ENDPOINT: ${ALIYUN_OCR_ENDPOINT:-}
+      ALIYUN_DASH_KEY: ${ALIYUN_DASH_KEY:-}
+      ALIYUN_DASH_MODEL: ${ALIYUN_DASH_MODEL:-qwen-vl-max}
+      TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
+    volumes:
+      - recognition-data:/data
+    expose:
+      - "8082"
+
+  # ── 前端（Nginx 托管静态资源 + 反代 /api）────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: peak-web
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_started
+    ports:
+      - "80:80"
+
+  # ── 可观测性 ────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: peak-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+volumes:
+  mysql-data:
+  recognition-data:
