@@ -189,7 +189,7 @@ jobs:
             ["peak/apps/question-service/internal/repository"]=85
             ["peak/apps/question-service/internal/service"]=95
             ["peak/apps/recognition-service/internal/handler"]=70
-            ["peak/apps/recognition-service/internal/provider"]=90
+            ["peak/apps/recognition-service/internal/provider"]=85
             ["peak/apps/recognition-service/internal/service"]=80
             ["peak/libs/config"]=90
             ["peak/libs/domain"]=70

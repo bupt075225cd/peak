@@ -1,0 +1,8 @@
+# Pre-push hook：推送前本地跑通 CI（等价远端 GitHub Actions）
+# 由 husky 管理，npm install 后自动启用（prepare 脚本）
+# 若失败会阻断推送；可用 git push --no-verify 跳过（不推荐，仅紧急情况）
+#
+# 说明：make ci = check（Go vet + 前端类型检查）+ build（Go + 前端）+ test（前后端 + 覆盖率）
+
+echo "==> pre-push: 运行本地 CI (make ci)"
+make ci

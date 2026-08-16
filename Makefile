@@ -55,8 +55,12 @@ test:
 	cd $(WEB) && npm run test:cov
 	@echo "✓ 测试通过"
 
-## 一键全跑：静态检查 + 编译 + 测试（提交前执行）
-ci: check build test
+## 覆盖率门禁：与远端 CI 一致（Go 70% + 逐包阈值、前端 80%）
+coverage-gate:
+	bash scripts/coverage-gate.sh
+
+## 一键全跑：静态检查 + 编译 + 测试 + 覆盖率门禁（提交前执行，等价远端 CI）
+ci: check build test coverage-gate
 	@echo "✓ 全部通过，可以提交"
 
 ## 一键安装辅助工具：watchexec（文件监听）+ air（Go 热重载）
@@ -136,4 +140,4 @@ stop-sqlite:
 	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/gateway.log
 	@echo "✓ 已停止并清空 $(PEAK_RUN)/data 与日志"
 
-.PHONY: check build test ci watch install-tools run-sqlite stop-sqlite
+.PHONY: check build test coverage-gate ci watch install-tools run-sqlite stop-sqlite

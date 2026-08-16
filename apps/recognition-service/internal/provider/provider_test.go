@@ -509,3 +509,109 @@ func TestExtractStructuredMock(t *testing.T) {
 		t.Fatal("expected at least 1 item")
 	}
 }
+
+func TestDashEmptyResponse(t *testing.T) {
+	// 响应无 choices 时应返回错误。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer srv.Close()
+
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
+	if _, err := a.RecognizeText(context.Background(), []byte("img")); err == nil {
+		t.Fatal("expected error for empty choices")
+	}
+}
+
+func TestDashParseError(t *testing.T) {
+	// 响应非 JSON 时应返回解析错误。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
+	if _, err := a.RecognizeText(context.Background(), []byte("img")); err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestExtractDocumentImageOCRFail(t *testing.T) {
+	// 图片 OCR 失败时，ExtractDocument 应保留原始 image 项（降级），而非报错。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
+	}))
+	defer srv.Close()
+
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
+	res, err := a.ExtractDocument(context.Background(), buildTestDocxWithImage(t), "paper.docx")
+	if err != nil {
+		t.Fatalf("extract document should not fail: %v", err)
+	}
+	// 应包含 1 个文本项 + 1 个降级保留的 image 项。
+	if len(res.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(res.Items))
+	}
+	if res.Items[1].Kind != "image" {
+		t.Fatalf("expected image item preserved, got kind=%s", res.Items[1].Kind)
+	}
+}
+
+func TestExtractStructuredImageOCRFail(t *testing.T) {
+	// 图片 OCR 失败（chat 返回错误）但结构化拆题成功时，仍应产出结果（图片 OCR 文本为空）。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		var content string
+		if bytes.Contains(body, []byte("image_url")) {
+			// 图片 OCR 调用：返回错误。
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
+			return
+		}
+		// 纯文本结构化拆题：返回 JSON。
+		content = `[{"stem_text":"18. 如图，AB//CD。","sub_questions":[]}]`
+		resp, _ := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": content}}},
+		})
+		w.Write(resp)
+	}))
+	defer srv.Close()
+
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
+	res, err := a.ExtractStructured(context.Background(), buildTestDocxWithImage(t), "paper.docx")
+	if err != nil {
+		t.Fatalf("extract structured should tolerate image ocr failure: %v", err)
+	}
+	if res == nil || len(res.Items) == 0 {
+		t.Fatal("expected at least 1 item")
+	}
+}
+
+func TestRecognizeFormulaError(t *testing.T) {
+	// dashscope 返回错误时 RecognizeFormula 应透传错误。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
+	}))
+	defer srv.Close()
+
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
+	if _, err := a.RecognizeFormula(context.Background(), []byte("img")); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestParseOcrGeoWithColonAndEmpty(t *testing.T) {
+	// 覆盖 "文字:" / "几何:" 半角冒号分支，以及无匹配行。
+	text, geo := parseOcrGeo("文字:abc\n几何:def\n无关行")
+	if text != "abc" {
+		t.Fatalf("unexpected text: %q", text)
+	}
+	if geo != "def" {
+		t.Fatalf("unexpected geo: %q", geo)
+	}
+}

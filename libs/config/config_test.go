@@ -184,3 +184,43 @@ func TestIntTypeConversions(t *testing.T) {
 		t.Fatalf("expected 30, got %d", got)
 	}
 }
+
+func TestExpandEnvInSlice(t *testing.T) {
+	// 覆盖 expandMap 的 []any 分支：slice 中的字符串与嵌套 map 都会被展开。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slice.yaml")
+	content := `items:
+  - "${SLICE_VAR:-a}"
+  - name: "${SLICE_VAR2:-b}"
+    nested: "${SLICE_VAR3:-c}"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := Load(path)
+	v := cfg.Get("items")
+	items, ok := v.([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", v)
+	}
+	if items[0] != "a" {
+		t.Fatalf("expected 'a', got %v", items[0])
+	}
+	m := items[1].(map[string]any)
+	if m["name"] != "b" || m["nested"] != "c" {
+		t.Fatalf("unexpected nested map: %v", m)
+	}
+}
+
+func TestGetNonMapPath(t *testing.T) {
+	// Get 中间路径非 map 时应返回 nil（覆盖 cur.(map[string]any) 失败分支）。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "scalar.yaml")
+	if err := os.WriteFile(path, []byte("a: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := Load(path)
+	if got := cfg.Get("a.b.c"); got != nil {
+		t.Fatalf("expected nil, got %v", got)
+	}
+}

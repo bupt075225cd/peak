@@ -271,3 +271,66 @@ func TestRetryTaskNotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
 }
+
+func TestGetFile(t *testing.T) {
+	r, _, store := setupHandler(t)
+	ctx := context.Background()
+
+	key := "geometry/some.jpg"
+	if err := store.Put(ctx, key, []byte("image-bytes")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/recognition/files/"+key, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if w.Body.String() != "image-bytes" {
+		t.Fatalf("unexpected body: %q", w.Body.String())
+	}
+}
+
+func TestGetFileEmptyKey(t *testing.T) {
+	r, _, _ := setupHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/recognition/files/", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetFileNotFound(t *testing.T) {
+	r, _, _ := setupHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/recognition/files/missing.jpg", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestUploadFileEmpty(t *testing.T) {
+	r, _, _ := setupHandler(t)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "empty.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 写入 0 字节内容。
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw
+
+	req := httptest.NewRequest(http.MethodPost, "/api/recognition/files", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty file, got %d", w.Code)
+	}
+}

@@ -101,13 +101,18 @@ make check
 make ci
 ```
 
-### 4. 提交与静态检查（git hook）
+### 4. 提交与推送的本地门禁（git hook）
 
-已通过 **husky** 配置 `pre-commit` hook，每次 `git commit` 自动执行 `make check`：
+已通过 **husky** 配置两个 hook，随代码提交，全团队一致：
 
-- 静态检查失败会**阻断提交**
-- 紧急跳过（不推荐）：`git commit --no-verify`
-- hook 脚本位于 `.husky/pre-commit`，随代码提交，全团队一致
+| Hook | 触发时机 | 执行内容 | 失败后果 |
+|---|---|---|---|
+| `pre-commit` | `git commit` 前 | `make check`（Go vet + 前端类型检查） | 阻断提交 |
+| `pre-push` | `git push` 前 | `make ci`（check + build + test，等价远端 CI） | **阻断推送** |
+
+- 推送前会先在本地跑通 `make ci`，确保与远端 GitHub Actions 结果一致，避免推送后才发现 CI 失败
+- 紧急跳过（不推荐）：`git commit --no-verify` / `git push --no-verify`
+- hook 脚本位于 `.husky/pre-commit`、`.husky/pre-push`
 
 ---
 
