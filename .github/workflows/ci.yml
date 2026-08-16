@@ -62,11 +62,84 @@ jobs:
       - name: go vet
         run: go vet peak/...
 
-      - name: golangci-lint
+      # golangci-lint 对 go.work 多模块 workspace 的 ./... 支持不完善，
+      # 在根目录运行会报 "directory prefix . does not contain modules listed in go.work"。
+      # 因此逐个模块进入其目录后单独 lint（每个模块的 ./... 只覆盖自身）。
+      - name: golangci-lint (per module)
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.59
-          # 仅扫描 workspace 内模块
+          version: v1.64
+          working-directory: apps/gateway
+          args: --timeout=5m
+
+      - name: golangci-lint (apps/question-service)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: apps/question-service
+          args: --timeout=5m
+
+      - name: golangci-lint (apps/recognition-service)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: apps/recognition-service
+          args: --timeout=5m
+
+      - name: golangci-lint (apps/user-service)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: apps/user-service
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/config)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/config
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/domain)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/domain
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/errors)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/errors
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/http)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/http
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/logger)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/logger
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/observability)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/observability
+          args: --timeout=5m
+
+      - name: golangci-lint (libs/storage)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/storage
           args: --timeout=5m
 
   # ── 3. 单元测试：执行测试并收集覆盖率 ──────────────────────────
@@ -181,7 +254,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 

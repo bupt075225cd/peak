@@ -171,9 +171,7 @@ func parseStructured(out string) ([]StructuredItem, error) {
 		if idx := strings.Index(s, "\n"); idx >= 0 {
 			s = s[idx+1:]
 		}
-		if strings.HasSuffix(s, "```") {
-			s = strings.TrimSuffix(s, "```")
-		}
+		s = strings.TrimSuffix(s, "```")
 	}
 	s = strings.TrimSpace(s)
 

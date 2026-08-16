@@ -2,6 +2,7 @@ package errors
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -49,8 +50,7 @@ func TestFromNil(t *testing.T) {
 
 func TestFromWrappedBusinessError(t *testing.T) {
 	be := New(CodeForbidden, "denied")
-	wrapped := errors.New("outer")
-	wrapped = be
+	wrapped := fmt.Errorf("outer: %w", be)
 	// errors.As 直接提取业务错误。
 	got := From(wrapped)
 	if got != be {

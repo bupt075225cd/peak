@@ -41,7 +41,7 @@ func TestWithCtx(t *testing.T) {
 	l := NewNop()
 
 	// nil ctx 返回自身。
-	if got := l.WithCtx(nil); got != l {
+	if got := l.WithCtx(nil); got != l { //nolint:staticcheck // 有意验证 nil ctx 行为
 		t.Fatal("expected same logger for nil ctx")
 	}
 

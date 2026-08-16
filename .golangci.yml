@@ -1,0 +1,14 @@
+# golangci-lint 全局配置。
+# 配合 .github/workflows/ci.yml 中逐模块运行（working-directory）使用，
+# golangci-lint 会从模块目录向上查找本文件。
+
+run:
+  timeout: 5m
+
+issues:
+  exclude-rules:
+    # 测试文件中的 httptest.ResponseRecorder.Write 等 mock 写入，
+    # 失败概率极低且不影响被测逻辑，忽略 errcheck。
+    - path: _test\.go
+      linters:
+        - errcheck

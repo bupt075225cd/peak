@@ -49,9 +49,8 @@ func NewS3Storage(cfg Config) (*S3Storage, error) {
 	if cfg.Bucket == "" {
 		return nil, errors.New("storage: bucket is required")
 	}
-	region := cfg.Region
-	if region == "" {
-		region = "us-east-1"
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
 	}
 
 	client, err := newS3Client(cfg)
