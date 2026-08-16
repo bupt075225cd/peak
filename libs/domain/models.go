@@ -113,6 +113,7 @@ const (
 	ImageTypeOriginal = "original"
 	ImageTypeErased   = "erased"
 	ImageTypeCrop     = "crop"
+	ImageTypeDocument = "document" // word/pdf 文档
 )
 
 // 分类类型常量。

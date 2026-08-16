@@ -1,6 +1,6 @@
 module peak/libs/logger
 
-go 1.21
+go 1.24.1
 
 require go.uber.org/zap v1.27.0
 

@@ -14,11 +14,9 @@ func NewFromConfig(cfg *config.Loader) (Provider, error) {
 		return NewMockProvider(), nil
 	case "aliyun":
 		return NewAliyunProvider(AliyunConfig{
-			AccessKeyID:  cfg.String("recognition.aliyun.access_key_id", ""),
-			AccessSecret: cfg.String("recognition.aliyun.access_secret", ""),
-			OCREndpoint:  cfg.String("recognition.aliyun.ocr_endpoint", ""),
 			DashKey:      cfg.String("recognition.aliyun.dash_key", ""),
 			DashModel:    cfg.String("recognition.aliyun.dash_model", ""),
+			DashEndpoint: cfg.String("recognition.aliyun.dash_endpoint", ""),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported recognition provider: %s", name)

@@ -1,35 +1,61 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { BookOpen, Plus, Search, Filter } from 'lucide-vue-next'
+import { ref, computed, onMounted } from 'vue'
+import { BookOpen, Plus, Search, Filter, Loader2 } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
+import { listMistakes, type Mistake } from '../api'
+import ImageViewer from '../components/ImageViewer.vue'
 
 const router = useRouter()
 const keyword = ref('')
+const loading = ref(false)
+const items = ref<Mistake[]>([])
 
-// 示例错题数据（后续接入真实接口）。
-interface MistakeItem {
-  id: number
-  subject: string
-  stem: string
-  difficulty: number
-  category: string
-  date: string
-}
+// 按关键词过滤（题干/学科）。
+const filteredItems = computed(() => {
+  const kw = keyword.value.trim()
+  if (!kw) return items.value
+  return items.value.filter((m) => {
+    const subject = m.question?.subject ?? ''
+    const stem = m.question?.stem_text ?? ''
+    return subject.includes(kw) || stem.includes(kw)
+  })
+})
 
-const items = ref<MistakeItem[]>([
-  { id: 1, subject: '数学', stem: '已知二次函数 y = x² - 2x - 3，求其顶点坐标与对称轴。', difficulty: 3, category: '二次函数', date: '2026-08-10' },
-  { id: 2, subject: '数学', stem: '在直角三角形 ABC 中，∠C=90°，AC=3，BC=4，求 AB 的长。', difficulty: 2, category: '勾股定理', date: '2026-08-09' },
-  { id: 3, subject: '物理', stem: '一个质量为 2kg 的物体在水平面上受到 10N 拉力，求加速度。', difficulty: 2, category: '牛顿定律', date: '2026-08-08' },
-])
-
-const difficultyLabels = ['', '很简单', '简单', '中等', '较难', '很难']
-
-onMounted(() => {
-  // 预留：从接口加载错题列表。
+onMounted(async () => {
+  loading.value = true
+  try {
+    items.value = await listMistakes()
+  } catch (err) {
+    console.error('加载错题失败', err)
+  } finally {
+    loading.value = false
+  }
 })
 
 function goEntry() {
   router.push('/entry')
+}
+
+// 解析题目的 geometry_refs（JSON 字符串数组）为 image key 列表。
+function geometryKeys(q: Mistake['question']): string[] {
+  if (!q?.geometry_refs) return []
+  try {
+    const arr = JSON.parse(q.geometry_refs)
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+// ImageViewer 状态：点击几何图时打开放大查看。
+const viewerOpen = ref(false)
+const viewerSrc = ref('')
+function openViewer(url: string) {
+  viewerSrc.value = url
+  viewerOpen.value = true
+}
+function closeViewer() {
+  viewerOpen.value = false
 }
 </script>
 
@@ -69,8 +95,13 @@ function goEntry() {
 
     <!-- 错题卡片列表 -->
     <div class="space-y-4">
+      <div v-if="loading" class="flex items-center justify-center py-20 text-ink-faint">
+        <Loader2 class="w-6 h-6 animate-spin mr-2" />
+        <span>加载中…</span>
+      </div>
+
       <div
-        v-for="item in items"
+        v-for="item in filteredItems"
         :key="item.id"
         class="rounded-2xl bg-white p-5 shadow-sm border border-slate-200/60 hover:shadow-md transition-shadow animate-fade-up"
       >
@@ -81,26 +112,40 @@ function goEntry() {
             </div>
             <div class="flex-1">
               <div class="flex items-center gap-2 mb-1">
-                <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">{{ item.subject }}</span>
-                <span class="text-xs text-ink-faint">{{ item.category }}</span>
-                <span class="text-xs text-ink-faint">{{ item.date }}</span>
+                <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">{{ item.question?.subject ?? '未分类' }}</span>
+                <span class="text-xs text-ink-faint">{{ item.question?.question_type }}</span>
+                <span class="text-xs text-ink-faint">{{ item.recorded_at?.slice(0, 10) }}</span>
               </div>
-              <p class="text-sm text-ink leading-relaxed">{{ item.stem }}</p>
+              <p class="text-sm text-ink leading-relaxed">{{ item.question?.stem_text }}</p>
+              <!-- 几何图形：点击放大查看 -->
+              <div v-if="geometryKeys(item.question)" class="mt-2 flex gap-2 flex-wrap">
+                <button
+                  v-for="(gk, i) in geometryKeys(item.question)"
+                  :key="i"
+                  type="button"
+                  class="block group focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg"
+                  title="点击放大查看"
+                  @click="openViewer(`/api/recognition/files/${gk}`)"
+                >
+                  <img
+                    :src="`/api/recognition/files/${gk}`"
+                    class="h-20 rounded-lg border border-slate-200 object-contain bg-white cursor-zoom-in transition-transform group-hover:scale-[1.03]"
+                    alt="几何图"
+                  />
+                </button>
+              </div>
             </div>
           </div>
-          <span
-            class="text-xs font-medium shrink-0 px-2.5 py-1 rounded-full"
-            :class="item.difficulty >= 4 ? 'bg-red-50 text-red-500' : item.difficulty === 3 ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600'"
-          >
-            {{ difficultyLabels[item.difficulty] }}
-          </span>
         </div>
       </div>
 
-      <div v-if="!items.length" class="text-center py-20 text-ink-faint">
+      <div v-if="!loading && !filteredItems.length" class="text-center py-20 text-ink-faint">
         <BookOpen class="w-12 h-12 mx-auto mb-3 opacity-40" />
         <p>还没有错题，点击「录入错题」开始</p>
       </div>
     </div>
+
+    <!-- 几何图放大查看器 -->
+    <ImageViewer :src="viewerSrc" :open="viewerOpen" @close="closeViewer" />
   </div>
 </template>

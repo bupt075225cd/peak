@@ -1,9 +1,12 @@
 module peak/apps/recognition-service
 
-go 1.21
+go 1.24.1
+
+toolchain go1.24.4
 
 require (
 	github.com/gin-gonic/gin v1.10.0
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	go.uber.org/zap v1.27.0
 	gorm.io/gorm v1.25.11
 	peak/libs/config v0.0.0

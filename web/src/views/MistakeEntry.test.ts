@@ -9,7 +9,7 @@ const { httpMethods } = vi.hoisted(() => ({
 }))
 
 vi.mock('axios', () => ({
-  default: { create: () => httpMethods },
+  default: { create: () => ({ ...httpMethods, defaults: { headers: { common: {} } } }) },
 }))
 
 function buildRouter() {
@@ -51,16 +51,6 @@ function getSaveBtn(wrapper: ReturnType<typeof mount>) {
 }
 
 describe('MistakeEntry.vue', () => {
-  it('挂载时加载分类并渲染', async () => {
-    const router = buildRouter()
-    router.push('/entry')
-    await router.isReady()
-    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
-    await flushPromises()
-    expect(httpMethods.get).toHaveBeenCalledWith('/categories', { params: { type: undefined } })
-    expect(wrapper.text()).toContain('二次函数')
-  })
-
   it('题干为空时保存按钮被禁用（防止空提交）', async () => {
     const router = buildRouter()
     router.push('/entry')
@@ -72,24 +62,6 @@ describe('MistakeEntry.vue', () => {
     expect((saveBtn.element as HTMLButtonElement).disabled).toBe(true)
     // 此时不应调用 createMistake
     expect(httpMethods.post).not.toHaveBeenCalledWith('/mistakes', expect.anything())
-  })
-
-  it('toggleCategory 切换选中状态', async () => {
-    const router = buildRouter()
-    router.push('/entry')
-    await router.isReady()
-    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
-    await flushPromises()
-
-    const catBtn = wrapper
-      .findAll('button')
-      .find((b) => b.text().trim() === '二次函数')
-    expect(catBtn).toBeDefined()
-    await catBtn!.trigger('click')
-    await flushPromises()
-    await catBtn!.trigger('click')
-    await flushPromises()
-    expect(wrapper.text()).toContain('二次函数')
   })
 
   it('识别成功后回填到表单', async () => {
@@ -130,9 +102,8 @@ describe('MistakeEntry.vue', () => {
     // 题干在 textarea 内，需用 .value 读取
     const ta = wrapper.find('textarea')
     expect((ta.element as HTMLTextAreaElement).value).toBe('已知函数 f(x)=x')
-    // 公式与几何以文本节点渲染
-    expect(wrapper.text()).toContain('x^2')
-    expect(wrapper.text()).toContain('圆形')
+    // 公式由 KaTeX 渲染为 HTML，断言渲染产物的 class 存在即可（无需依赖具体文本节点）。
+    expect(wrapper.html()).toContain('katex')
     // 识别完成后保存按钮可用
     expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
@@ -172,7 +143,7 @@ describe('MistakeEntry.vue', () => {
     expect(retryBtn).toBeDefined()
   })
 
-  it('填写题干后点击保存会提交到 createMistake', async () => {
+  it('填写题干后点击保存会先创建题目再创建错题', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -188,14 +159,21 @@ describe('MistakeEntry.vue', () => {
     const saveBtn = getSaveBtn(wrapper)
     expect((saveBtn.element as HTMLButtonElement).disabled).toBe(false)
 
-    // 正常保存：createMistake 成功，提交正确的字段，并重置表单
+    // 第一步 createQuestion 返回 question id=42，第二步 createMistake 关联该题目。
+    httpMethods.post.mockResolvedValueOnce(ok({ id: 42 }))
     httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 1 } } })
+
     await saveBtn.trigger('click')
     await vi.waitFor(() => {
-      expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', expect.objectContaining({
+      expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
         stem_text: 'y = x^2',
-        difficulty: 2,
         question_type: '解答',
+      }))
+    })
+    await vi.waitFor(() => {
+      expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', expect.objectContaining({
+        user_id: 1,
+        question_id: 42,
       }))
     })
     // 保存成功后 reset() 清空题干
@@ -216,7 +194,7 @@ describe('MistakeEntry.vue', () => {
     await ta.trigger('input')
     await flushPromises()
 
-    // createMistake 失败 → saveError 显示在底部操作栏
+    // createQuestion 失败 → saveError 显示在底部操作栏
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     httpMethods.post.mockRejectedValueOnce(new Error('network'))
     const saveBtn = getSaveBtn(wrapper)

@@ -1,195 +1,128 @@
 package provider
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
 )
 
-// AliyunProvider 阿里云识别能力组合实现。
-// 文本/公式使用阿里云 OCR（通用文字识别、公式识别），
-// 手写擦除与几何图形识别使用通义千问-VL（DashScope 视觉大模型）。
+// AliyunProvider 阿里云识别能力组合实现（方案 B：统一使用通义千问-VL）。
+// 文字/公式/几何识别全部走 DashScope 千问-VL 多模态大模型，
+// 手写擦除因千问-VL 以文本输出为主、无法可靠返回图片，降级为返回原图。
 type AliyunProvider struct {
-	httpClient   *http.Client
-	ocrEndpoint  string // OCR OpenAPI endpoint
-	accessKeyID  string
-	accessSecret string
-	dashKey      string // DashScope API Key
-	dashModel    string // 千问-VL 模型名，默认 qwen-vl-max
-	dashEndpoint string // DashScope API endpoint，默认官方地址
+	dash *DashScopeClient
 }
 
 // AliyunConfig 阿里云 provider 配置。
 type AliyunConfig struct {
+	// 保留字段以兼容历史配置（方案 B 不再使用传统 OCR）。
 	AccessKeyID  string
 	AccessSecret string
-	OCRAppCode   string // OCR 应用 code（阿里云 OCR 市场版）
 	OCREndpoint  string
+	// 千问-VL 配置。
 	DashKey      string // DashScope API Key
-	DashModel    string
+	DashModel    string // 千问-VL 模型名，默认 qwen-vl-max
 	DashEndpoint string // DashScope API endpoint（可注入，便于测试）
 }
 
 // NewAliyunProvider 创建阿里云 provider。
 func NewAliyunProvider(cfg AliyunConfig) *AliyunProvider {
-	if cfg.DashModel == "" {
-		cfg.DashModel = "qwen-vl-max"
-	}
-	if cfg.OCREndpoint == "" {
-		cfg.OCREndpoint = "https://ocrapi-advanced.taobao.com/ocrservice/advanced"
-	}
-	if cfg.DashEndpoint == "" {
-		cfg.DashEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-	}
 	return &AliyunProvider{
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		ocrEndpoint:  cfg.OCREndpoint,
-		accessKeyID:  cfg.AccessKeyID,
-		accessSecret: cfg.AccessSecret,
-		dashKey:      cfg.DashKey,
-		dashModel:    cfg.DashModel,
-		dashEndpoint: cfg.DashEndpoint,
+		dash: NewDashScopeClient(DashScopeConfig{
+			APIKey:   cfg.DashKey,
+			Model:    cfg.DashModel,
+			Endpoint: cfg.DashEndpoint,
+		}),
 	}
 }
 
 func (a *AliyunProvider) Name() string { return "aliyun" }
 
-// RecognizeText 调用阿里云通用文字识别 OCR。
+// RecognizeText 调用千问-VL 提取图片中的全部文字（含题目）。
 func (a *AliyunProvider) RecognizeText(ctx context.Context, image []byte) (*TextResult, error) {
-	resp, err := a.callOCR(ctx, "general", image)
+	prompt := "请识别图片中的全部文字内容，按阅读顺序原样输出，不要添加任何解释。"
+	out, err := a.dash.chat(ctx, prompt, image)
 	if err != nil {
 		return nil, err
 	}
-	text := extractText(resp)
-	return &TextResult{Text: text, Confidence: 0.9}, nil
+	return &TextResult{Text: out, Confidence: 0.9}, nil
 }
 
-// RecognizeFormula 调用阿里云公式识别 OCR，返回 LaTeX。
+// RecognizeFormula 调用千问-VL 识别图片中的公式并输出 LaTeX。
 func (a *AliyunProvider) RecognizeFormula(ctx context.Context, image []byte) (*FormulaResult, error) {
-	resp, err := a.callOCR(ctx, "formula", image)
+	prompt := "请识别图片中的数学公式，仅输出对应的 LaTeX 表达式，不要添加任何其他内容。若图片中没有公式，输出空。"
+	out, err := a.dash.chat(ctx, prompt, image)
 	if err != nil {
 		return nil, err
 	}
-	latex := extractLaTeX(resp)
-	return &FormulaResult{LaTeX: latex, RawText: extractText(resp)}, nil
+	return &FormulaResult{LaTeX: out, RawText: out}, nil
 }
 
-// EraseHandwriting 调用通义千问-VL 完成手写擦除（视觉理解 + 生成）。
-func (a *AliyunProvider) EraseHandwriting(ctx context.Context, image []byte) (*ErasureResult, error) {
-	prompt := "识别并移除图片中的手写笔迹，保留印刷体内容。"
-	out, err := a.callDashVL(ctx, prompt, image)
-	if err != nil {
-		return nil, err
-	}
-	// 千问-VL 返回擦除后的图片（base64 或描述），此处解析出图片数据。
-	imgData, err := decodeImage(out)
-	if err != nil {
-		// 若无法直接得到图片，回退返回原图，由上层降级处理。
-		return &ErasureResult{ImageData: image}, nil
-	}
-	return &ErasureResult{ImageData: imgData}, nil
-}
-
-// RecognizeGeometry 调用通义千问-VL 输出结构化几何描述。
+// RecognizeGeometry 调用千问-VL 输出结构化几何描述（JSON），并附带几何图形在原图中的位置框。
 func (a *AliyunProvider) RecognizeGeometry(ctx context.Context, image []byte) (*GeometryResult, error) {
-	prompt := "识别图片中的几何图形，输出 JSON：{shape_type, properties, description}，描述边长、角度、位置关系。"
-	out, err := a.callDashVL(ctx, prompt, image)
+	prompt := `识别图片中的几何图形，仅输出如下 JSON（不要输出其他内容、不要用 Markdown 代码块）：
+{"shape_type":"triangle|circle|quadrilateral|other","properties":{"边长":"","角度":"","位置关系":""},"description":"对图形的文字描述","bounding_box":{"x":0.1,"y":0.2,"width":0.5,"height":0.4}}
+
+其中 bounding_box 是几何图形（仅图形本身，不含题目文字）在原图中的外接矩形，坐标采用归一化（0~1），x/y 为左上角，width/height 为宽高。
+重要：若图中有多块几何图形（例如多个子图、图1/图2/图3），请输出包含「所有几何图形整体」的最大外接矩形，确保完整覆盖每一个图，不要只框出其中一部分。适度宽松即可，不要缩得太紧。若图片中没有几何图形，bounding_box 设为 null。`
+	out, err := a.dash.chat(ctx, prompt, image)
 	if err != nil {
 		return nil, err
 	}
 	return parseGeometry(out), nil
 }
 
-// callOCR 调用阿里云 OCR OpenAPI（骨架，需配置 appcode/签名）。
-func (a *AliyunProvider) callOCR(ctx context.Context, ocrType string, image []byte) (map[string]any, error) {
-	body := map[string]any{
-		"type":  ocrType,
-		"image": base64.StdEncoding.EncodeToString(image),
-	}
-	payload, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ocrEndpoint, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// 预留：签名鉴权（阿里云 OCR 市场版使用 AppCode）。
-	if a.accessKeyID != "" {
-		req.Header.Set("Authorization", "APPCODE "+a.accessSecret)
-	}
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("aliyun ocr request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("aliyun ocr parse: %w", err)
-	}
-	return out, nil
+// EraseHandwriting 千问-VL 以文本输出为主，无法可靠返回擦除后的图片，降级返回原图。
+func (a *AliyunProvider) EraseHandwriting(_ context.Context, image []byte) (*ErasureResult, error) {
+	return &ErasureResult{ImageData: image}, nil
 }
 
-// callDashVL 调用 DashScope 通义千问-VL。
-func (a *AliyunProvider) callDashVL(ctx context.Context, prompt string, image []byte) (string, error) {
-	reqBody := map[string]any{
-		"model": a.dashModel,
-		"input": map[string]any{
-			"messages": []map[string]any{
-				{
-					"role": "user",
-					"content": []map[string]any{
-						{"image": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(image)},
-						{"text": prompt},
-					},
-				},
-			},
-		},
-	}
-	payload, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.dashEndpoint, bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.dashKey)
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("dashscope request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	// 提取输出文本（简化解析，实际结构按 DashScope 返回解析）。
-	return string(data), nil
-}
-
-// extractText / extractLaTeX / parseGeometry / decodeImage 为结果解析占位实现。
-func extractText(resp map[string]any) string {
-	if v, ok := resp["text"].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func extractLaTeX(resp map[string]any) string {
-	if v, ok := resp["latex"].(string); ok {
-		return v
-	}
-	return ""
-}
-
+// parseGeometry 解析千问-VL 返回的几何 JSON（容错处理非 JSON 输出）。
 func parseGeometry(out string) *GeometryResult {
-	return &GeometryResult{
-		ShapeType:  "unknown",
-		Properties: map[string]string{},
-		Description: out,
+	var g GeometryResult
+	if err := json.Unmarshal([]byte(out), &g); err != nil {
+		// 若模型未按 JSON 输出，将原文放入 description 兜底。
+		return &GeometryResult{
+			ShapeType:   "unknown",
+			Properties:  map[string]string{},
+			Description: out,
+		}
 	}
+	g.BoundingBox = normalizeBBox(g.BoundingBox)
+	return &g
 }
 
-func decodeImage(out string) ([]byte, error) {
-	return nil, fmt.Errorf("image not embedded in output")
+// normalizeBBox 规范化几何图形外接矩形：
+//   - 越界/非法坐标（<0 或 >1、宽高非正、x+width>1 等）视为无效，返回 nil。
+//   - 有效时 clamp 到 [0,1] 区间，保证服务端裁剪安全。
+func normalizeBBox(b *BoundingBox) *BoundingBox {
+	if b == nil {
+		return nil
+	}
+	if b.Width <= 0 || b.Height <= 0 {
+		return nil
+	}
+	clamp01 := func(v float64) float64 {
+		if v < 0 {
+			return 0
+		}
+		if v > 1 {
+			return 1
+		}
+		return v
+	}
+	x := clamp01(b.X)
+	y := clamp01(b.Y)
+	w := clamp01(b.Width)
+	h := clamp01(b.Height)
+	// 宽高越界修正：不能超出图片范围。
+	if x+w > 1 {
+		w = 1 - x
+	}
+	if y+h > 1 {
+		h = 1 - y
+	}
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	return &BoundingBox{X: x, Y: y, Width: w, Height: h}
 }

@@ -31,7 +31,30 @@ func Load(path string) (*Loader, error) {
 	if data == nil {
 		data = map[string]any{}
 	}
+	// 递归展开所有字符串值中的环境变量占位（含嵌套 map，如 routes.<prefix>）。
+	expandMap(data)
 	return &Loader{data: data}, nil
+}
+
+// expandMap 递归展开 map/slice 中字符串值里的 ${VAR} / ${VAR:-default} 占位。
+func expandMap(m map[string]any) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			m[k] = expandEnv(val)
+		case map[string]any:
+			expandMap(val)
+		case []any:
+			for i, item := range val {
+				switch it := item.(type) {
+				case string:
+					val[i] = expandEnv(it)
+				case map[string]any:
+					expandMap(it)
+				}
+			}
+		}
+	}
 }
 
 // Get 按点分路径读取配置值（如 "server.port"）。

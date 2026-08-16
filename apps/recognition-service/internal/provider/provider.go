@@ -26,6 +26,19 @@ type GeometryResult struct {
 	ShapeType string            `json:"shape_type"` // triangle/circle/quadrilateral/...
 	Properties map[string]string `json:"properties"` // 结构化属性，如边长、角度
 	Description string          `json:"description"`
+	// BoundingBox 几何图形在原图中的位置（归一化坐标，0~1，原点左上角）。
+	// 用于从原图中裁剪出“只有几何图”的子图，避免把题干文字一起展示。
+	// 为 nil 表示模型未能定位图形。
+	BoundingBox *BoundingBox `json:"bounding_box,omitempty"`
+}
+
+// BoundingBox 几何图形在原图中的外接矩形，采用归一化坐标（0~1）。
+// 服务端根据原图实际宽高换算成像素后裁剪。
+type BoundingBox struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 // OCRProvider 文本 OCR 能力。
@@ -55,4 +68,6 @@ type Provider interface {
 	FormulaProvider
 	ErasureProvider
 	GeometryProvider
+	DocumentProvider
+	StructuredDocumentProvider
 }

@@ -1,6 +1,6 @@
 module peak/libs/domain
 
-go 1.21
+go 1.24.1
 
 require (
 	gorm.io/driver/mysql v1.5.7

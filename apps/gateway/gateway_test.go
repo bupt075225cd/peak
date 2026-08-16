@@ -61,6 +61,12 @@ func TestDefaultRoutes(t *testing.T) {
 	if gw.routes["/api/users"] == "" {
 		t.Fatal("expected users route")
 	}
+	if gw.routes["/api/mistakes"] == "" {
+		t.Fatal("expected mistakes route")
+	}
+	if gw.routes["/api/categories"] == "" {
+		t.Fatal("expected categories route")
+	}
 }
 
 func TestConfiguredRoutes(t *testing.T) {
@@ -151,13 +157,35 @@ func TestProxyForwardsToBackend(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 from backend, got %d", w.Code)
 	}
-	// 路径前缀应被剥离。
-	if w.Header().Get("X-Backend-Path") != "/1" {
-		t.Fatalf("expected stripped path /1, got %s", w.Header().Get("X-Backend-Path"))
+	// 路径应完整透传（不剥离前缀），与后端注册的完整路径一致。
+	if w.Header().Get("X-Backend-Path") != "/api/questions/1" {
+		t.Fatalf("expected path /api/questions/1, got %s", w.Header().Get("X-Backend-Path"))
 	}
 	// traceID 应透传。
 	if w.Header().Get("X-Received-Trace") != "trace-xyz" {
 		t.Fatalf("expected trace trace-xyz, got %s", w.Header().Get("X-Received-Trace"))
+	}
+}
+
+func TestProxyForwardsPrefixRoot(t *testing.T) {
+	// 前缀本身（无尾随斜杠）也应被转发，例如 GET /api/questions 列表请求。
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend-Path", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	content := "routes:\n  /api/questions: \"" + backend.URL + "\"\n"
+	r := setupGateway(t, content)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/questions", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from backend, got %d", w.Code)
+	}
+	if w.Header().Get("X-Backend-Path") != "/api/questions" {
+		t.Fatalf("expected path /api/questions, got %s", w.Header().Get("X-Backend-Path"))
 	}
 }
 

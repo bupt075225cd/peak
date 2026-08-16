@@ -1,5 +1,5 @@
 # 构建阶段：Go workspace 多模块，需在仓库根目录构建
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 ENV GOPROXY=https://goproxy.cn,direct \
     GOSUMDB=off \

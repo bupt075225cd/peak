@@ -1,6 +1,6 @@
 module peak/apps/user-service
 
-go 1.21
+go 1.24.1
 
 require (
 	github.com/gin-gonic/gin v1.10.0

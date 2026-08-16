@@ -12,3 +12,5 @@ routes:
   /api/questions: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
   /api/recognition: "${RECOGNITION_SERVICE_URL:-http://localhost:8082}"
   /api/users: "${USER_SERVICE_URL:-http://localhost:8083}"
+  /api/mistakes: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
+  /api/categories: "${QUESTION_SERVICE_URL:-http://localhost:8081}"

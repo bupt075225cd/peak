@@ -1,6 +1,6 @@
 module peak/libs/config
 
-go 1.21
+go 1.24.1
 
 require gopkg.in/yaml.v3 v3.0.1
 

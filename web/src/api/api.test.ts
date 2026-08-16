@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   uploadImage,
+  uploadDocument,
+  isDocument,
   getTask,
   retryTask,
   listCategories,
+  createQuestion,
   createMistake,
+  listMistakes,
   type ApiResponse,
   type RecognitionTask,
   type Category,
@@ -22,7 +26,7 @@ const { httpMethods } = vi.hoisted(() => ({
 
 vi.mock('axios', () => ({
   default: {
-    create: () => httpMethods,
+    create: () => ({ ...httpMethods, defaults: { headers: { common: {} } } }),
   },
 }))
 
@@ -55,6 +59,34 @@ describe('api/index.ts', () => {
     )
     expect(res.id).toBe(7)
     expect(res.provider).toBe('mock')
+  })
+
+  it('uploadDocument 发送 document 字段并返回 task', async () => {
+    const task: RecognitionTask = {
+      id: 8,
+      image_id: 1,
+      status: 'pending',
+      progress: 0,
+      provider: 'mock',
+    }
+    httpMethods.post.mockResolvedValueOnce(ok(task))
+
+    const file = new File(['x'], 'a.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    const res = await uploadDocument(file)
+
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/recognition/tasks',
+      expect.any(FormData),
+    )
+    expect(res.id).toBe(8)
+  })
+
+  it('isDocument 正确判断文档类型', () => {
+    expect(isDocument(new File(['x'], 'a.docx'))).toBe(true)
+    expect(isDocument(new File(['x'], 'a.pdf'))).toBe(true)
+    expect(isDocument(new File(['x'], 'a.PDF'))).toBe(true)
+    expect(isDocument(new File(['x'], 'a.png'))).toBe(false)
+    expect(isDocument(new File(['x'], 'a.jpg'))).toBe(false)
   })
 
   it('getTask 返回对应任务', async () => {
@@ -96,8 +128,27 @@ describe('api/index.ts', () => {
 
   it('createMistake 返回 data 字段', async () => {
     httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 42 } } })
-    const res = await createMistake({ stem_text: '1+1=2' })
-    expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', { stem_text: '1+1=2' })
+    const res = await createMistake({ question_id: 7, user_id: 1 })
+    expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', { question_id: 7, user_id: 1 })
     expect(res).toEqual({ id: 42 })
+  })
+
+  it('createQuestion 提交到 /questions 并返回题目', async () => {
+    httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 7, subject: '数学' } } })
+    const res = await createQuestion({ subject: '数学', stem_text: '1+1=?' })
+    expect(httpMethods.post).toHaveBeenCalledWith('/questions', { subject: '数学', stem_text: '1+1=?' })
+    expect(res.id).toBe(7)
+  })
+
+  it('listMistakes 返回 items 并在无数据时兜底空数组', async () => {
+    httpMethods.get.mockResolvedValueOnce(ok({ items: [{ id: 1, question_id: 2, user_id: 1 }], total: 1 }))
+    const res = await listMistakes()
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes')
+    expect(res).toHaveLength(1)
+
+    // 兜底：data 为 null 时返回 []
+    httpMethods.get.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: null } })
+    const empty = await listMistakes()
+    expect(empty).toEqual([])
   })
 })

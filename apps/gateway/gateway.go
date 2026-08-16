@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -39,6 +38,8 @@ func NewGateway(cfg *config.Loader, log *logger.Logger) *Gateway {
 		routes["/api/questions"] = "http://localhost:8081"
 		routes["/api/recognition"] = "http://localhost:8082"
 		routes["/api/users"] = "http://localhost:8083"
+		routes["/api/mistakes"] = "http://localhost:8081"
+		routes["/api/categories"] = "http://localhost:8081"
 	}
 	return &Gateway{cfg: cfg, log: log, routes: routes}
 }
@@ -76,6 +77,8 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 }
 
 // proxy 为指定前缀创建反向代理，转发时透传 traceID。
+// 后端服务注册的是完整路径（如 /api/questions/:id），
+// 因此网关不剥离前缀，直接透传，保证与后端路由一致。
 func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 	target, err := url.Parse(backend)
 	if err != nil {
@@ -83,9 +86,8 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 		return
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	engine.Any(prefix+"/*path", func(c *gin.Context) {
-		// 剥离前缀，保留子路径。
-		c.Request.URL.Path = strings.TrimPrefix(c.Request.URL.Path, prefix)
+
+	handler := func(c *gin.Context) {
 		// 透传 traceID 与用户信息。
 		if tid := c.GetString("trace_id"); tid != "" {
 			c.Request.Header.Set("X-Trace-Id", tid)
@@ -96,7 +98,11 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 		// gin 的 ResponseWriter 未实现 http.CloseNotifier，
 		// 通过适配器补齐以兼容 httputil.ReverseProxy。
 		proxy.ServeHTTP(&closeNotifyWriter{ResponseWriter: c.Writer}, c.Request)
-	})
+	}
+
+	// 同时注册前缀本身（无尾随）与子路径，保证 /api/questions 与 /api/questions/1 都能匹配。
+	engine.Any(prefix, handler)
+	engine.Any(prefix+"/*path", handler)
 }
 
 // corsMiddleware 跨域处理（开发阶段全放开，生产通过配置收紧）。
@@ -114,7 +120,7 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 // closeNotifyWriter 适配器：为 gin.ResponseWriter 补齐 http.CloseNotifier，
-// 使 httputil.ReverseProxy 能正常转发（Go 1.21 仍会探测 CloseNotify）。
+// 使 httputil.ReverseProxy 能正常转发（Go 仍会探测 CloseNotify）。
 type closeNotifyWriter struct {
 	http.ResponseWriter
 }

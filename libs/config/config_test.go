@@ -129,6 +129,31 @@ func TestExpandEnvWithDefault(t *testing.T) {
 	}
 }
 
+func TestExpandEnvInNestedMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestedmap.yaml")
+	content := `routes:
+  /api/questions: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
+  /api/recognition: "${RECOGNITION_SERVICE_URL:-http://localhost:8082}"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 环境变量未设置，应展开为默认值。
+	cfg, _ := Load(path)
+	v := cfg.Get("routes")
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", v)
+	}
+	if m["/api/questions"] != "http://localhost:8081" {
+		t.Fatalf("expected default expansion, got %v", m["/api/questions"])
+	}
+	if m["/api/recognition"] != "http://localhost:8082" {
+		t.Fatalf("expected default expansion, got %v", m["/api/recognition"])
+	}
+}
+
 func TestExpandEnvNoDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "envnodefault.yaml")

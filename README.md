@@ -53,7 +53,7 @@ peak/
 
 ### 0. 环境要求
 
-- **Go 1.21+**（workspace 模式，`go.work` 已就绪）
+- **Go 1.24+**（workspace 模式，`go.work` 已就绪）
 - **Node.js 20+**（前端 Vue3 + Vite）
 - **Docker**（可选，用于启动 MySQL 基础设施）
 
@@ -87,6 +87,8 @@ make install-tools   # 安装 watchexec（文件监听）+ air（Go 热重载）
 | `make ci` | 一键全跑 = check + build + test | **提交前执行**，等价 CI |
 | `make watch` | 监听 `.go/.ts/.vue`，保存即自动 check | 开发中持续反馈 |
 | `make install-tools` | 安装辅助工具 | 首次环境准备 |
+| `make run-sqlite` | 编译并以 SQLite 空库一键启动全部服务（gateway/question/recognition） | 本地免 MySQL 调测，重启即清空数据 |
+| `make stop-sqlite` | 停止 `run-sqlite` 启动的服务并清空数据目录与日志 | 结束调测 |
 
 ```bash
 # 开发中（可选，开着自动检查）
@@ -153,6 +155,18 @@ database:
 
 核心表：`users`、`questions`、`mistakes`、`images`、`categories`、`question_categories`、`recognition_tasks`。
 
+### 本地 SQLite 调测（免 MySQL）
+
+不想起 MySQL 时，可用 `make run-sqlite` 一键以 SQLite 空库启动全部服务，数据落在 `/tmp/peak-run/data/*.db`，与仓库隔离，且每次重启都重建为空库（自动清空上次测试数据）：
+
+```bash
+make run-sqlite                              # recognition 用 aliyun provider（需配 DASHSCOPE_API_KEY）
+make run-sqlite RECOGNITION_PROVIDER=mock    # 用 mock 识别，无需 API Key（推荐日常调测）
+make stop-sqlite                             # 停止服务并清空 /tmp/peak-run/data 与日志
+```
+
+服务端口：gateway `:8080`、question `:8081`、recognition `:8082`；日志见 `/tmp/peak-run/{gateway,question,recognition}.log`。
+
 ## AI 识别服务（provider 可配置切换）
 
 识别服务通过能力级接口隔离厂商，通过 `recognition.provider` 配置切换：
@@ -170,7 +184,19 @@ recognition:
     dash_model: "qwen-vl-max"
 ```
 
-能力接口：`OCRProvider` / `FormulaProvider` / `ErasureProvider` / `GeometryProvider`。
+能力接口：`OCRProvider` / `FormulaProvider` / `ErasureProvider` / `GeometryProvider` / `DocumentProvider`。
+
+### 文档识别（word/pdf）
+
+识别服务支持上传 `.docx` / `.pdf` 文档，自动提取文本与内嵌图片，并按题号拆分多道题：
+
+- 文档解析为纯 Go 实现（无 cgo、无外部命令依赖），位于 `apps/recognition-service/internal/docparse`：
+  - `.docx`：解 zip 读取 `word/document.xml` 段落文本 + `word/media/` 内嵌图片
+  - `.pdf`：基于 `ledongthuc/pdf` 逐页提取文本
+- 文档中的图片项交由 provider 的 OCR 能力处理（aliyun 下走通义千问-VL）
+- 识别结果以 `questions` 数组返回多道题，前端可逐题确认后保存
+- 上传入口：`POST /api/recognition/tasks` 的 `document` 字段（图片走 `image` 字段）
+- 暂不支持旧版 `.doc`（需先转为 `.docx`）
 
 ## 文件存储（本地 → S3 兼容对象存储平滑迁移）
 
@@ -220,7 +246,7 @@ cd web && npm run test:cov
 
 测试覆盖：
 
-- **后端**：错误码、存储接口、题目/错题服务（SQLite 集成）、识别任务状态机（MockProvider）
+- **后端**：错误码、存储接口、题目/错题服务（SQLite 集成）、识别任务状态机（MockProvider）、文档解析（docx/pdf 提取与多题拆分）
 - **前端**：API 封装层、路由、导航组件、错题录入/列表交互（Vitest + @vue/test-utils）
 
 ## 持续集成（CI）

@@ -17,8 +17,7 @@ storage:
 recognition:
   provider: "${RECOGNITION_PROVIDER:-mock}"  # mock / aliyun
   aliyun:
-    access_key_id: "${ALIYUN_ACCESS_KEY_ID:-}"
-    access_secret: "${ALIYUN_ACCESS_SECRET:-}"
-    ocr_endpoint: "${ALIYUN_OCR_ENDPOINT:-}"
-    dash_key: "${ALIYUN_DASH_KEY:-}"
+    # 方案 B：识别统一使用通义千问-VL（DashScope），只需 API Key。
+    dash_key: "${ALIYUN_DASH_KEY:-${DASHSCOPE_API_KEY:-}}"
     dash_model: "${ALIYUN_DASH_MODEL:-qwen-vl-max}"
+    dash_endpoint: "${ALIYUN_DASH_ENDPOINT:-}"  # 留空使用官方 OpenAI 兼容端点
