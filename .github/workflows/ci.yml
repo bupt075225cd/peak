@@ -330,6 +330,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./web
-          file: Dockerfile
+          file: web/Dockerfile
           push: false
           tags: peak/web:ci
