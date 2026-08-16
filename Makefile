@@ -59,7 +59,11 @@ test:
 coverage-gate:
 	bash scripts/coverage-gate.sh
 
-## 一键全跑：静态检查 + 编译 + 测试 + 覆盖率门禁（提交前执行，等价远端 CI）
+## 提交前门禁：静态检查 + 测试 + 覆盖率门禁（等价 CI，不含 build）
+precommit: check test coverage-gate
+	@echo "✓ 提交前检查通过"
+
+## 一键全跑：静态检查 + 编译 + 测试 + 覆盖率门禁（推送前执行，等价远端 CI）
 ci: check build test coverage-gate
 	@echo "✓ 全部通过，可以提交"
 
@@ -140,4 +144,4 @@ stop-sqlite:
 	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/gateway.log
 	@echo "✓ 已停止并清空 $(PEAK_RUN)/data 与日志"
 
-.PHONY: check build test coverage-gate ci watch install-tools run-sqlite stop-sqlite
+.PHONY: check build test coverage-gate precommit ci watch install-tools run-sqlite stop-sqlite

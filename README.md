@@ -107,10 +107,11 @@ make ci
 
 | Hook | 触发时机 | 执行内容 | 失败后果 |
 |---|---|---|---|
-| `pre-commit` | `git commit` 前 | `make check`（Go vet + 前端类型检查） | 阻断提交 |
-| `pre-push` | `git push` 前 | `make ci`（check + build + test，等价远端 CI） | **阻断推送** |
+| `pre-commit` | `git commit` 前 | `make precommit`（check + test + **覆盖率门禁**） | 阻断提交 |
+| `pre-push` | `git push` 前 | `make ci`（check + build + test + 覆盖率门禁，等价远端 CI） | **阻断推送** |
 
-- 推送前会先在本地跑通 `make ci`，确保与远端 GitHub Actions 结果一致，避免推送后才发现 CI 失败
+- **提交前**先跑 `make precommit`（含覆盖率门禁），**推送前**再跑 `make ci`（多一步 build），两者覆盖率门禁与远端 GitHub Actions 完全一致
+- 覆盖率门禁：Go 总体 70% + 逐包阈值、前端 80%（实现见 `scripts/coverage-gate.sh`）
 - 紧急跳过（不推荐）：`git commit --no-verify` / `git push --no-verify`
 - hook 脚本位于 `.husky/pre-commit`、`.husky/pre-push`
 
