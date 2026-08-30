@@ -63,24 +63,37 @@ function closeViewer() {
 
 // GeometryCropper 状态：手动重选几何图区域。
 const cropperOpen = ref(false)
+// 裁剪弹窗内的错误提示与上传中状态。
+const cropperError = ref('')
+const cropperConfirming = ref(false)
 function openCropper() {
+  cropperError.value = ''
   cropperOpen.value = true
 }
 function closeCropper() {
   cropperOpen.value = false
+  cropperError.value = ''
+  cropperConfirming.value = false
 }
 // 手动裁剪完成后：上传裁剪图得到新 key，替换原几何图 key。
+// 上传失败时保持弹窗打开并显示错误，避免用户误以为已保存裁剪图。
 async function onCropperConfirm(file: File) {
+  cropperConfirming.value = true
+  cropperError.value = ''
   try {
     const key = await uploadGeometryImage(file)
-    if (key) {
-      selectedGeometryKeys.value = [key]
+    if (!key) {
+      // 返回空 key 视为失败，保持弹窗打开。
+      cropperError.value = '几何图上传失败，请重试'
+      return
     }
+    selectedGeometryKeys.value = [key]
+    closeCropper()
   } catch (err) {
     console.error('上传裁剪几何图失败', err)
-    saveError.value = '几何图上传失败，请重试'
+    cropperError.value = '几何图上传失败，请重试'
   } finally {
-    closeCropper()
+    cropperConfirming.value = false
   }
 }
 
@@ -505,6 +518,13 @@ function selectQuestion(idx: number) {
     <ImageViewer :src="viewerSrc" :open="viewerOpen" @close="closeViewer" />
 
     <!-- 几何图重新框选弹窗 -->
-    <GeometryCropper :open="cropperOpen" :src="previewUrl" @close="closeCropper" @confirm="onCropperConfirm" />
+    <GeometryCropper
+      :open="cropperOpen"
+      :src="previewUrl"
+      :error="cropperError"
+      :confirming="cropperConfirming"
+      @close="closeCropper"
+      @confirm="onCropperConfirm"
+    />
   </div>
 </template>

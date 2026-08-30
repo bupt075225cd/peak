@@ -310,4 +310,114 @@ describe('MistakeEntry.vue', () => {
     await flushPromises()
     expect(httpMethods.post).toHaveBeenCalledWith('/recognition/tasks/4/retry')
   })
+
+  it('裁剪上传失败时弹窗保持打开并显示错误，不静默关闭', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    // 先完成一次识别，让 previewUrl 有值（"重新框选"按钮才会显示）。
+    const task: RecognitionTask = {
+      id: 5,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '几何题',
+        formula: { latex: '', raw_text: '' },
+        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
+        geometry_keys: ['geometry/task_5.jpg'],
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+    // 初始几何图是识别自动带出的旧值。
+    expect(wrapper.text()).toContain('几何图形')
+
+    // 点击「重新框选」打开裁剪弹窗。
+    const recropBtn = wrapper.findAll('button').find((b) => b.text().includes('重新框选'))!
+    await recropBtn.trigger('click')
+    await flushPromises()
+
+    // 裁剪上传失败：POST /recognition/files 拒绝。
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    httpMethods.post.mockRejectedValueOnce(new Error('upload crop fail'))
+
+    // 触发 GeometryCropper 的 confirm 事件（模拟用户点击确认裁剪）。
+    const cropper = wrapper.findComponent({ name: 'GeometryCropper' })
+    expect(cropper.exists()).toBe(true)
+    cropper.vm.$emit('confirm', new File(['crop'], 'geometry.jpg', { type: 'image/jpeg' }))
+    await flushPromises()
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    // 弹窗保持打开（未 close）。
+    const cropperProps = wrapper.findComponent({ name: 'GeometryCropper' }).props()
+    expect(cropperProps.open).toBe(true)
+    // 错误信息显示在弹窗内。
+    expect(cropperProps.error).toContain('几何图上传失败')
+    // 几何图 key 未被替换（仍是识别自动带出的旧值）。
+    expect(httpMethods.post).not.toHaveBeenCalledWith('/questions', expect.objectContaining({
+      geometry_refs: JSON.stringify(['geometry/task_5.jpg']),
+    }))
+    errSpy.mockRestore()
+  })
+
+  it('裁剪上传成功后替换几何图 key 并关闭弹窗', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const task: RecognitionTask = {
+      id: 6,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '几何题',
+        formula: { latex: '', raw_text: '' },
+        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
+        geometry_keys: ['geometry/task_6.jpg'],
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    const recropBtn = wrapper.findAll('button').find((b) => b.text().includes('重新框选'))!
+    await recropBtn.trigger('click')
+    await flushPromises()
+
+    // 上传成功，返回新 key。
+    httpMethods.post.mockResolvedValueOnce(ok({ key: 'geometry/cropped_123.jpg' }))
+    const cropper = wrapper.findComponent({ name: 'GeometryCropper' })
+    cropper.vm.$emit('confirm', new File(['crop'], 'geometry.jpg', { type: 'image/jpeg' }))
+    await flushPromises()
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    // 弹窗关闭 + 错误清空。
+    const cropperProps = wrapper.findComponent({ name: 'GeometryCropper' }).props()
+    expect(cropperProps.open).toBe(false)
+    expect(cropperProps.error).toBe('')
+  })
 })
