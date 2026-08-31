@@ -419,4 +419,53 @@ describe('GeometryCropper', () => {
     expect(style).toMatch(/margin-top:\s*0px/)
     expect(style).toMatch(/margin-left:\s*0px/)
   })
+
+  // ---- 旋转后手柄 cursor 方向：箭头需随视觉方向旋转 90° ----
+  // 手柄渲染顺序：['nw','n','ne','e','se','s','sw','w']（HANDLES 数组）。
+  it('edge handle cursor rotates with image (n: ns→ew, e: ew→ns)', async () => {
+    const wrapper = mountCropper(true)
+    mockImgRect(wrapper)
+    await drawSelection(wrapper, 100, 100, 200, 150)
+
+    const cursorAt = (idx: number) => {
+      const style = wrapper.findAll('.cropper-handle')[idx].attributes('style') || ''
+      const m = style.match(/cursor:\s*([\w-]+)/)
+      return m ? m[1] : ''
+    }
+    // 未旋转：n(索引1)=ns-resize, e(索引3)=ew-resize。
+    expect(cursorAt(1)).toBe('ns-resize')
+    expect(cursorAt(3)).toBe('ew-resize')
+
+    // 旋转 90°。
+    const btns = wrapper.findAll('.ct-btn')
+    await btns[3].trigger('click')
+    await flushPromises()
+
+    // 旋转后：n 手柄视觉变为水平，cursor 应为 ew-resize；e 手柄视觉变为垂直，cursor 应为 ns-resize。
+    expect(cursorAt(1)).toBe('ew-resize')
+    expect(cursorAt(3)).toBe('ns-resize')
+  })
+
+  it('corner handle cursor rotates nwse↔nesw at 90°', async () => {
+    const wrapper = mountCropper(true)
+    mockImgRect(wrapper)
+    await drawSelection(wrapper, 100, 100, 200, 150)
+
+    const cursorAt = (idx: number) => {
+      const style = wrapper.findAll('.cropper-handle')[idx].attributes('style') || ''
+      const m = style.match(/cursor:\s*([\w-]+)/)
+      return m ? m[1] : ''
+    }
+    // 未旋转：nw(索引0)=nwse, ne(索引2)=nesw。
+    expect(cursorAt(0)).toBe('nwse-resize')
+    expect(cursorAt(2)).toBe('nesw-resize')
+
+    const btns = wrapper.findAll('.ct-btn')
+    await btns[3].trigger('click')
+    await flushPromises()
+
+    // 旋转 90° 后：nw↔ne 对角线互换。
+    expect(cursorAt(0)).toBe('nesw-resize')
+    expect(cursorAt(2)).toBe('nwse-resize')
+  })
 })

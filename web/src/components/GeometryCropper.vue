@@ -394,16 +394,29 @@ const wrapMargin = computed(() => {
   }
 })
 
-// 手柄位置用 sel 原图坐标 × imgScale（CSS 像素），随 wrap 旋转一起视觉旋转
+// 手柄位置用 sel 原图坐标 × imgScale（CSS 像素），随 wrap 旋转一起视觉旋转。
+// 旋转 90°/270° 时，手柄视觉方向跟着旋转 90°，光标箭头方向需同步旋转：
+//   ns-resize（上下）↔ ew-resize（左右），nwse-resize ↔ nesw-resize。
+function rotateCursor(cursor: string): string {
+  if (rotation.value % 180 === 0) return cursor
+  const map: Record<string, string> = {
+    'ns-resize': 'ew-resize',
+    'ew-resize': 'ns-resize',
+    'nwse-resize': 'nesw-resize',
+    'nesw-resize': 'nwse-resize',
+  }
+  return map[cursor] ?? cursor
+}
+
 const handlePos: Record<Handle, (s: { x: number; y: number; w: number; h: number }) => { left: string; top: string; cursor: string }> = {
-  nw: (s) => ({ left: (s.x * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: 'nwse-resize' }),
-  n: (s) => ({ left: ((s.x + s.w / 2) * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: 'ns-resize' }),
-  ne: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: 'nesw-resize' }),
-  e: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: ((s.y + s.h / 2) * imgScale.value) + 'px', cursor: 'ew-resize' }),
-  se: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: 'nwse-resize' }),
-  s: (s) => ({ left: ((s.x + s.w / 2) * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: 'ns-resize' }),
-  sw: (s) => ({ left: (s.x * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: 'nesw-resize' }),
-  w: (s) => ({ left: (s.x * imgScale.value) + 'px', top: ((s.y + s.h / 2) * imgScale.value) + 'px', cursor: 'ew-resize' }),
+  nw: (s) => ({ left: (s.x * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: rotateCursor('nwse-resize') }),
+  n: (s) => ({ left: ((s.x + s.w / 2) * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: rotateCursor('ns-resize') }),
+  ne: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: (s.y * imgScale.value) + 'px', cursor: rotateCursor('nesw-resize') }),
+  e: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: ((s.y + s.h / 2) * imgScale.value) + 'px', cursor: rotateCursor('ew-resize') }),
+  se: (s) => ({ left: ((s.x + s.w) * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: rotateCursor('nwse-resize') }),
+  s: (s) => ({ left: ((s.x + s.w / 2) * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: rotateCursor('ns-resize') }),
+  sw: (s) => ({ left: (s.x * imgScale.value) + 'px', top: ((s.y + s.h) * imgScale.value) + 'px', cursor: rotateCursor('nesw-resize') }),
+  w: (s) => ({ left: (s.x * imgScale.value) + 'px', top: ((s.y + s.h / 2) * imgScale.value) + 'px', cursor: rotateCursor('ew-resize') }),
 }
 
 onBeforeUnmount(() => {
