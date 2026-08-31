@@ -21,6 +21,8 @@ type SubQuestion struct {
 // StructuredItem 文档中识别出的一道完整题（含所有子问）。
 type StructuredItem struct {
 	StemText     string         `json:"stem_text"`     // 题干（含主问题，可能包含全部子问文本）
+	Subject      string         `json:"subject"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType string         `json:"question_type"` // 题型：选择题/填空题/解答题
 	SubQuestions []SubQuestion  `json:"sub_questions"` // 子问列表
 	Answer       string         `json:"answer"`        // 答案（若模型识别到）
 	Geometry     GeometryResult `json:"geometry"`      // 整体几何描述（无子问时使用）
@@ -54,13 +56,16 @@ const structuredPrompt = `你是数学试卷结构化解析器。请将下面的
 1. 每一道“大题”是独立的一道题；大题内部可能包含若干子问，如 "(1)"、"(2)"、"（1）" 等，这些子问必须归入同一道大题，不要拆成多道题。
 2. 文档开头的标题、副标题（如“相交线与平行线（角度计算与证明）”“七下第3周周中练习·18题”等）不是题目，不要单独输出为一道题；若它紧邻某道题，可作为该题的说明前缀并入题干。
 3. 形如 "18."、"第18题" 的编号属于题号，题号本身与题干正文合并输出。
-4. 每道题包含：题干 stem_text（完整正文，包含所有子问的原始文字）、子问列表 sub_questions（每个子问含 label、text、geometry_desc、geometry_refs）。
-5. geometry_refs 是整数数组，表示该子问关联的图片序号（对应文档中的 [图N]，从 1 开始）。若子问无关联图片，则为空数组 []。例如子问提到“如图2”，且该图是文档中的第 2 张图，则 geometry_refs 为 [2]。
-6. 仅输出如下 JSON 数组，不要输出任何解释或 Markdown 代码块：
+4. 每道题包含：题干 stem_text（完整正文，包含所有子问的原始文字）、学科 subject、题型 question_type、子问列表 sub_questions（每个子问含 label、text、geometry_desc、geometry_refs）。
+5. subject 从以下选项中选择：数学、语文、英语、物理、化学；question_type 从以下选项中选择：选择题、填空题、解答题。
+6. geometry_refs 是整数数组，表示该子问关联的图片序号（对应文档中的 [图N]，从 1 开始）。若子问无关联图片，则为空数组 []。例如子问提到“如图2”，且该图是文档中的第 2 张图，则 geometry_refs 为 [2]。
+7. 仅输出如下 JSON 数组，不要输出任何解释或 Markdown 代码块：
 
 [
   {
     "stem_text": "完整题干（含所有子问）",
+    "subject": "数学",
+    "question_type": "解答题",
     "sub_questions": [
       {"label": "(1)", "text": "子问1内容", "geometry_desc": "该子问几何图形描述，若无则为空", "geometry_refs": []}
     ]

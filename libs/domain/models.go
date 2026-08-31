@@ -23,6 +23,7 @@ type User struct {
 type Question struct {
 	ID           uint64         `gorm:"primaryKey" json:"id"`
 	Subject      string         `gorm:"size:32;index" json:"subject"`
+	Grade        string         `gorm:"size:32;index" json:"grade"` // 年级，如"七年级上"
 	StemText     string         `gorm:"type:text" json:"stem_text"`
 	StemFormula  string         `gorm:"type:json" json:"stem_formula"`   // LaTeX 公式结构 JSON
 	GeometryRefs string         `gorm:"type:json" json:"geometry_refs"`  // 几何图形引用（image key 列表）
@@ -46,6 +47,7 @@ type Mistake struct {
 	WrongReason  string         `gorm:"size:255" json:"wrong_reason"`
 	MasteryLevel int            `gorm:"default:0" json:"mastery_level"` // 0-未掌握 1-部分掌握 2-已掌握
 	SourcePaper  string         `gorm:"size:128" json:"source_paper"`
+	Remark       string         `gorm:"type:text" json:"remark"` // 备注（错题出处、易错点等，选填）
 	RecordedAt   time.Time      `json:"recorded_at"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`

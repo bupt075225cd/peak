@@ -39,12 +39,17 @@ func (m *MockProvider) EraseHandwriting(_ context.Context, image []byte) (*Erasu
 
 func (m *MockProvider) RecognizeGeometry(_ context.Context, image []byte) (*GeometryResult, error) {
 	return &GeometryResult{
-		ShapeType:  "triangle",
-		Properties: map[string]string{"type": "right-angle", "note": fmt.Sprintf("%d bytes", len(image))},
+		ShapeType:   "triangle",
+		Properties:  map[string]string{"type": "right-angle", "note": fmt.Sprintf("%d bytes", len(image))},
 		Description: "直角三角形 ABC，∠C = 90°",
 		// 固定返回一个右下区域的外接矩形，便于流程测试裁剪路径。
 		BoundingBox: &BoundingBox{X: 0.5, Y: 0.5, Width: 0.5, Height: 0.5},
 	}, nil
+}
+
+// ClassifyQuestion mock 实现：返回固定分类，便于流程测试。
+func (m *MockProvider) ClassifyQuestion(_ context.Context, image []byte) (*QuestionClassifyResult, error) {
+	return &QuestionClassifyResult{Subject: "数学", QuestionType: "解答题"}, nil
 }
 
 // ExtractDocument mock 实现：本地解析文档（无需第三方），返回文本与内嵌图片。

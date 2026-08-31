@@ -5,27 +5,27 @@ import "context"
 
 // TextResult 文本 OCR 结果。
 type TextResult struct {
-	Text     string `json:"text"`
+	Text       string  `json:"text"`
 	Confidence float64 `json:"confidence"`
 }
 
 // FormulaResult 公式识别结果（LaTeX 结构）。
 type FormulaResult struct {
-	LaTeX    string `json:"latex"`
-	RawText  string `json:"raw_text"`
+	LaTeX   string `json:"latex"`
+	RawText string `json:"raw_text"`
 }
 
 // ErasureResult 手写擦除结果。
 type ErasureResult struct {
-	ImageData []byte `json:"-"`        // 擦除后的图片字节
+	ImageData  []byte `json:"-"`           // 擦除后的图片字节
 	StorageKey string `json:"storage_key"` // 若已存储，返回 key
 }
 
 // GeometryResult 几何图形识别结果（结构化描述）。
 type GeometryResult struct {
-	ShapeType string            `json:"shape_type"` // triangle/circle/quadrilateral/...
-	Properties map[string]string `json:"properties"` // 结构化属性，如边长、角度
-	Description string          `json:"description"`
+	ShapeType   string            `json:"shape_type"` // triangle/circle/quadrilateral/...
+	Properties  map[string]string `json:"properties"` // 结构化属性，如边长、角度
+	Description string            `json:"description"`
 	// BoundingBox 几何图形在原图中的位置（归一化坐标，0~1，原点左上角）。
 	// 用于从原图中裁剪出“只有几何图”的子图，避免把题干文字一起展示。
 	// 为 nil 表示模型未能定位图形。
@@ -61,6 +61,17 @@ type GeometryProvider interface {
 	RecognizeGeometry(ctx context.Context, image []byte) (*GeometryResult, error)
 }
 
+// QuestionClassifyResult 学科与题型分类结果（由识别模型输出）。
+type QuestionClassifyResult struct {
+	Subject      string `json:"subject"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType string `json:"question_type"` // 题型：选择题/填空题/解答题
+}
+
+// QuestionClassifier 学科/题型分类能力：让识别模型判断题目所属学科与题型。
+type QuestionClassifier interface {
+	ClassifyQuestion(ctx context.Context, image []byte) (*QuestionClassifyResult, error)
+}
+
 // Provider 聚合接口，表示一个厂商提供的完整识别能力组合。
 type Provider interface {
 	Name() string
@@ -68,6 +79,7 @@ type Provider interface {
 	FormulaProvider
 	ErasureProvider
 	GeometryProvider
+	QuestionClassifier
 	DocumentProvider
 	StructuredDocumentProvider
 }

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // AliyunProvider 阿里云识别能力组合实现（方案 B：统一使用通义千问-VL）。
@@ -125,4 +126,27 @@ func normalizeBBox(b *BoundingBox) *BoundingBox {
 		return nil
 	}
 	return &BoundingBox{X: x, Y: y, Width: w, Height: h}
+}
+
+// ClassifyQuestion 调用千问-VL 判断题目所属学科与题型。
+func (a *AliyunProvider) ClassifyQuestion(ctx context.Context, image []byte) (*QuestionClassifyResult, error) {
+	prompt := `请判断这道题目的学科和题型。
+学科只能从以下选项中选择：数学、语文、英语、物理、化学。
+题型只能从以下选项中选择：选择题、填空题、解答题。
+仅输出如下 JSON（不要 Markdown 代码块、不要解释）：
+{"subject":"数学","question_type":"解答题"}`
+	out, err := a.dash.chat(ctx, prompt, image)
+	if err != nil {
+		return nil, err
+	}
+	return parseClassify(out), nil
+}
+
+// parseClassify 解析千问-VL 返回的学科/题型 JSON，容错非 JSON 输出。
+func parseClassify(out string) *QuestionClassifyResult {
+	var r QuestionClassifyResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &r); err != nil {
+		return &QuestionClassifyResult{Subject: "", QuestionType: ""}
+	}
+	return &r
 }

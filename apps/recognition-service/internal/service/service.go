@@ -4,6 +4,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,6 +25,8 @@ import (
 type RecognitionResult struct {
 	StemText       string                  `json:"stem_text"`
 	Answer         string                  `json:"answer"`
+	Subject        string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType   string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
 	Formula        provider.FormulaResult  `json:"formula"`
 	Geometry       provider.GeometryResult `json:"geometry"`
 	ErasedImageKey string                  `json:"erased_image_key"`
@@ -39,6 +43,8 @@ type RecognitionResult struct {
 type QuestionItem struct {
 	StemText     string                  `json:"stem_text"`
 	Answer       string                  `json:"answer"`
+	Subject      string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
 	Formula      provider.FormulaResult  `json:"formula"`
 	Geometry     provider.GeometryResult `json:"geometry"`
 	// SubQuestions 子问列表，如 (1)(2)(3)（方案 B 结构化拆题时填充）。
@@ -178,6 +184,8 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 		return nil, err
 	}
 	result.StemText = textRes.Text
+	// 学科/题型：优先模型识别，失败降级规则。
+	result.Subject, result.QuestionType = s.classifyQuestion(ctx, imageData, result.StemText)
 	s.updateStatus(taskID, domain.TaskProcessing, 40, "")
 
 	// 公式识别（增强步骤，失败仅记录 warning）。
@@ -300,4 +308,71 @@ func itoa(n uint64) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// 题型判断正则。
+var (
+	// choiceMarkRe 选择题选项标记：A-D 后跟句点/全角句点/冒号及非空内容。
+	// 排除顿号（A、B、C），避免把几何题里的“点 A、B、C”误判为选项。
+	choiceMarkRe = regexp.MustCompile(`[A-Da-d][.．:：]\s*\S`)
+	// blankRe 填空题空位：连续下划线，或全角/半角空括号。
+	blankRe = regexp.MustCompile(`_{2,}|（\s*）|\(\s*\)`)
+)
+
+// detectQuestionType 根据题干文本启发式判断题型，返回"选择题"/"填空题"/"解答题"。
+func detectQuestionType(stem string) string {
+	s := strings.TrimSpace(stem)
+
+	// 选择题：至少出现两个选项标记（如 A. xxx B. xxx）。
+	if len(choiceMarkRe.FindAllString(s, -1)) >= 2 {
+		return "选择题"
+	}
+	// 填空题：出现下划线填空或空括号。
+	if blankRe.MatchString(s) {
+		return "填空题"
+	}
+	// 其余默认解答题。
+	return "解答题"
+}
+
+// 学科判断正则（启发式，按特征强度排序，命中即返回）。
+var (
+	// englishWordRe 英语常见词。用常见词而非“连续字母”判断，避免几何题的字母（AB、CD、∠ABC）被误判为英语。
+	englishWordRe = regexp.MustCompile(`(?i)\b(the|what|which|is|are|was|were|of|to|in|on|for|and|or|not|choose|answer|following|correct|best|true|false|read|write|text|word|sentence|letter|from|with|about|this|that|there|here|you|your|my|he|she|it|we|they)\b`)
+	// chemistryRe 化学特征关键词。
+	chemistryRe = regexp.MustCompile(`化学|元素|化合物|化合价|离子|酸|碱|盐|溶液|氧化|还原|摩尔|催化|电解|置换|复分解|中和|溶质|溶剂|沉淀|化学式|化学方程式|质量守恒|分子|原子|盐酸|硫酸|氢气|氧气|二氧化碳`)
+	// physicsRe 物理特征关键词。
+	physicsRe = regexp.MustCompile(`速度|加速度|电压|电流|电阻|功率|压强|浮力|密度|电路|磁场|摩擦|重力|杠杆|透镜|折射|反射|串联|并联|牛顿|焦耳|欧姆|瓦特|安培|伏特|电荷|电场|动量|动能|势能|做功|机械能|弹簧|滑轮|频率|波长|振幅`)
+	// chineseRe 语文特征关键词。
+	chineseRe = regexp.MustCompile(`古诗|文言|阅读|字词|拼音|修辞|病句|标点|默写|翻译|作者|诗句|成语|歇后语|散文|小说|诗歌|注音|释义|选词|组词|造句|朗读|背诵`)
+)
+
+// detectSubject 根据题干文本启发式判断学科，返回"数学"/"语文"/"英语"/"物理"/"化学"。
+// 优先命中强特征学科；无强特征时兜底为数学（数学错题为主，且数学应用题常无强关键词）。
+func detectSubject(stem string) string {
+	s := strings.TrimSpace(stem)
+
+	if englishWordRe.MatchString(s) {
+		return "英语"
+	}
+	if chemistryRe.MatchString(s) {
+		return "化学"
+	}
+	if physicsRe.MatchString(s) {
+		return "物理"
+	}
+	if chineseRe.MatchString(s) {
+		return "语文"
+	}
+	return "数学"
+}
+
+// classifyQuestion 判断题目学科与题型：优先调用识别模型，失败时降级为规则判断。
+func (s *Service) classifyQuestion(ctx context.Context, image []byte, stem string) (string, string) {
+	if cls, err := s.prov.ClassifyQuestion(ctx, image); err == nil && cls != nil {
+		if cls.Subject != "" && cls.QuestionType != "" {
+			return cls.Subject, cls.QuestionType
+		}
+	}
+	return detectSubject(stem), detectQuestionType(stem)
 }

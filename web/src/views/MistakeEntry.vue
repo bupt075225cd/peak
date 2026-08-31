@@ -30,9 +30,13 @@ const formula = ref('')
 const geometry = ref('')
 const selectedGeometryKeys = ref<string[]>([])
 
-// 学科与题型。
-const questionType = ref('解答')
-const subject = ref('数学')
+// 年级（学科、题型由识别自动回填，见 applyResult/selectQuestion）。
+const grade = ref('')
+const gradeOptions = ['七年级上', '七年级下', '八年级上', '八年级下', '九年级上', '九年级下']
+const questionType = ref('')
+const subject = ref('')
+// 备注（错题出处、易错点等，选填）。
+const remark = ref('')
 
 const progressText = computed(() => {
   if (!task.value) return ''
@@ -172,6 +176,8 @@ function applyResult(t: RecognitionTask) {
   } else {
     // 图片单题结果。
     stemText.value = result.stem_text || ''
+    subject.value = result.subject || '数学'
+    questionType.value = result.question_type || '解答题'
     formula.value = result.formula?.latex || ''
     geometry.value = result.geometry?.description || ''
     // 单图场景默认携带裁剪出的几何图 key。
@@ -202,21 +208,27 @@ async function handleSave() {
     saveError.value = '题干不能为空'
     return
   }
+  if (!grade.value) {
+    saveError.value = '请选择年级'
+    return
+  }
   loading.value = true
   try {
     // 第一步：创建题目本体。
     const question = await createQuestion({
-      subject: subject.value,
+      subject: subject.value || '数学',
+      grade: grade.value,
       stem_text: stemText.value,
       stem_formula: JSON.stringify({ latex: formula.value }),
       geometry_refs: JSON.stringify(selectedGeometryKeys.value),
-      question_type: questionType.value,
+      question_type: questionType.value || '解答题',
     })
     // 第二步：创建错题记录，关联刚创建的题目。
     await createMistake({
       user_id: 1,
       question_id: question.id,
       source_paper: '',
+      remark: remark.value,
     })
     alert('错题已保存')
     reset()
@@ -238,6 +250,8 @@ function reset() {
   formula.value = ''
   geometry.value = ''
   selectedGeometryKeys.value = []
+  grade.value = ''
+  remark.value = ''
   errorMsg.value = ''
   saveError.value = ''
   warningMsg.value = ''
@@ -264,6 +278,8 @@ function selectQuestion(idx: number) {
     }
   }
   stemText.value = stem
+  subject.value = q.subject || '数学'
+  questionType.value = q.question_type || '解答题'
   formula.value = q.formula?.latex || ''
   geometry.value = q.geometry?.description || ''
   // 收集该题所有子问的几何图片 key，用于保存到题目记录。
@@ -276,7 +292,7 @@ function selectQuestion(idx: number) {
   <div class="mx-auto max-w-5xl px-4 py-8">
     <div class="mb-6 animate-fade-up">
       <h1 class="text-2xl font-semibold text-ink">录入错题</h1>
-      <p class="text-sm text-ink-soft mt-1">拍照上传试卷图片，或上传 word/pdf 文档，自动识别题目</p>
+      <p class="text-sm text-ink-soft mt-1">拍照上传错题图片，或上传 word/pdf 文档，自动识别题目</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -293,7 +309,7 @@ function selectQuestion(idx: number) {
             <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 group-hover:animate-float">
               <ImagePlus class="w-8 h-8 text-primary" />
             </div>
-            <p class="font-medium text-ink">拍照 / 上传试卷图片或文档</p>
+            <p class="font-medium text-ink">拍照 / 上传错题图片或文档</p>
             <p class="text-sm text-ink-faint mt-1">支持图片、Word、PDF，拖拽或点击上传，自动识别</p>
             <button
               type="button"
@@ -414,7 +430,7 @@ function selectQuestion(idx: number) {
           </div>
         </div>
 
-        <div class="rounded-2xl bg-white shadow-sm border border-slate-200/60 p-6 animate-fade-up">
+        <div v-if="stemText.trim()" class="rounded-2xl bg-white shadow-sm border border-slate-200/60 p-6 animate-fade-up">
           <div class="flex items-center gap-2 mb-5">
             <BookOpen class="w-4 h-4 text-primary" />
             <h2 class="font-semibold text-ink">题目信息</h2>
@@ -431,23 +447,34 @@ function selectQuestion(idx: number) {
               />
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-medium text-ink-soft mb-1.5">学科</label>
-                <select v-model="subject" class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
-                  <option>数学</option>
-                  <option>物理</option>
-                  <option>化学</option>
-                </select>
+            <div>
+              <label class="block text-sm font-medium text-ink-soft mb-1.5">年级 <span class="text-red-500">*</span></label>
+              <select v-model="grade" class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
+                <option disabled value="">请选择年级</option>
+                <option v-for="g in gradeOptions" :key="g" :value="g">{{ g }}</option>
+              </select>
+            </div>
+
+            <!-- 学科、题型由识别自动回填，识别后才展示 -->
+            <div v-if="subject || questionType" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div v-if="subject" class="flex items-center gap-2 text-sm">
+                <span class="text-ink-soft shrink-0">学科</span>
+                <span class="inline-flex items-center rounded-md bg-surface-tint px-2 py-0.5 text-xs font-medium text-primary">{{ subject }}</span>
               </div>
-              <div>
-                <label class="block text-sm font-medium text-ink-soft mb-1.5">题型</label>
-                <select v-model="questionType" class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
-                  <option>选择题</option>
-                  <option>填空题</option>
-                  <option>解答题</option>
-                </select>
+              <div v-if="questionType" class="flex items-center gap-2 text-sm">
+                <span class="text-ink-soft shrink-0">题型</span>
+                <span class="inline-flex items-center rounded-md bg-surface-tint px-2 py-0.5 text-xs font-medium text-primary">{{ questionType }}</span>
               </div>
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-ink-soft mb-1.5">备注（选填）</label>
+              <textarea
+                v-model="remark"
+                rows="2"
+                class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow resize-none"
+                placeholder="可填写错题出处、易错点等补充信息"
+              />
             </div>
 
             <div v-if="formula.trim()" class="rounded-xl bg-surface-tint p-4">
@@ -489,7 +516,7 @@ function selectQuestion(idx: number) {
         </div>
 
         <!-- 底部操作栏 -->
-        <div class="space-y-3">
+        <div v-if="stemText.trim()" class="space-y-3">
           <p v-if="saveError" class="text-sm text-red-500 text-right">{{ saveError }}</p>
           <div class="flex items-center justify-end gap-3">
             <button
@@ -502,7 +529,7 @@ function selectQuestion(idx: number) {
             <button
               type="button"
               class="inline-flex items-center gap-2 rounded-xl bg-primary text-white px-6 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="loading || !stemText.trim()"
+              :disabled="loading || !stemText.trim() || !grade"
               @click="handleSave"
             >
               <Loader2 v-if="loading" class="w-4 h-4 animate-spin" />

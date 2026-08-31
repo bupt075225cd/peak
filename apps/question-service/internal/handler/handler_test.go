@@ -168,6 +168,10 @@ func TestMistakeHandlerFlow(t *testing.T) {
 		t.Fatalf("unmarshal mistake: %v", err)
 	}
 	mid := mresp.Data.ID
+	// 服务端应兜底填充 recorded_at，避免列表展示 0001-01-01。
+	if mresp.Data.RecordedAt.IsZero() {
+		t.Fatal("expected recorded_at to be set, got zero value")
+	}
 
 	// 列表。
 	w = doRequest(t, r, http.MethodGet, "/api/mistakes", nil)

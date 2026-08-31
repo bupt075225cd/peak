@@ -70,6 +70,17 @@ func fromStructured(res *provider.StructuredResult, imgKeys []string) []Question
 			}
 			q.StemText = sb.String()
 		}
+		// 学科/题型：优先使用结构化拆题时模型输出的结果，空则规则兜底。
+		if it.Subject != "" {
+			q.Subject = it.Subject
+		} else {
+			q.Subject = detectSubject(q.StemText)
+		}
+		if it.QuestionType != "" {
+			q.QuestionType = it.QuestionType
+		} else {
+			q.QuestionType = detectQuestionType(q.StemText)
+		}
 		questions = append(questions, q)
 	}
 	return questions
@@ -140,6 +151,10 @@ func splitQuestions(ctx context.Context, prov provider.Provider, items []provide
 		if s := strings.TrimSpace(sb.String()); s != "" {
 			questions = append(questions, QuestionItem{StemText: s})
 		}
+	}
+	for i := range questions {
+		questions[i].Subject = detectSubject(questions[i].StemText)
+		questions[i].QuestionType = detectQuestionType(questions[i].StemText)
 	}
 	return questions
 }

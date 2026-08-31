@@ -51,15 +51,18 @@ function getSaveBtn(wrapper: ReturnType<typeof mount>) {
 }
 
 describe('MistakeEntry.vue', () => {
-  it('题干为空时保存按钮被禁用（防止空提交）', async () => {
+  it('未上传照片时不展示题目信息与保存按钮', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    const saveBtn = getSaveBtn(wrapper)
-    expect((saveBtn.element as HTMLButtonElement).disabled).toBe(true)
+    // 未识别：不展示题目信息卡片、学科/题型、保存按钮
+    expect(wrapper.text()).not.toContain('题目信息')
+    expect(wrapper.text()).not.toContain('学科')
+    expect(wrapper.text()).not.toContain('题型')
+    expect(wrapper.findAll('button').find((b) => b.text().includes('保存错题'))).toBeUndefined()
     // 此时不应调用 createMistake
     expect(httpMethods.post).not.toHaveBeenCalledWith('/mistakes', expect.anything())
   })
@@ -83,6 +86,8 @@ describe('MistakeEntry.vue', () => {
         formula: { latex: 'x^2', raw_text: '' },
         geometry: { shape_type: 'circle', properties: {}, description: '圆形' },
         erased_image_key: 'key123',
+        subject: '物理',
+        question_type: '选择题',
       }),
     }
     httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
@@ -104,7 +109,15 @@ describe('MistakeEntry.vue', () => {
     expect((ta.element as HTMLTextAreaElement).value).toBe('已知函数 f(x)=x')
     // 公式由 KaTeX 渲染为 HTML，断言渲染产物的 class 存在即可（无需依赖具体文本节点）。
     expect(wrapper.html()).toContain('katex')
-    // 识别完成后保存按钮可用
+    // 学科、题型由识别结果自动回填并只读展示
+    expect(wrapper.text()).toContain('物理')
+    expect(wrapper.text()).toContain('选择题')
+    // 未选择年级时保存按钮禁用（年级必填）
+    expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(true)
+    // 选择年级后保存按钮可用
+    const gradeSelect = wrapper.findAll('select')[0]
+    await gradeSelect.setValue('七年级上')
+    await flushPromises()
     expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -143,20 +156,45 @@ describe('MistakeEntry.vue', () => {
     expect(retryBtn).toBeDefined()
   })
 
-  it('填写题干后点击保存会先创建题目再创建错题', async () => {
+  it('识别后选择年级并保存会先创建题目再创建错题', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    const ta = wrapper.find('textarea')
-    ;(ta.element as HTMLTextAreaElement).value = 'y = x^2'
-    await ta.trigger('input')
+    // 先识别成功，回填题干，题目信息随之展示。
+    const task: RecognitionTask = {
+      id: 7,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: 'y = x^2',
+        subject: '数学',
+        question_type: '解答题',
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
     await flushPromises()
 
-    // 此时保存按钮可用
-    const saveBtn = getSaveBtn(wrapper)
+    // 识别后题目信息展示，未选年级时保存按钮禁用（年级必填）
+    let saveBtn = getSaveBtn(wrapper)
+    expect((saveBtn.element as HTMLButtonElement).disabled).toBe(true)
+
+    // 选择年级后保存按钮可用
+    const gradeSelect = wrapper.findAll('select')[0]
+    await gradeSelect.setValue('七年级上')
+    await flushPromises()
+    saveBtn = getSaveBtn(wrapper)
     expect((saveBtn.element as HTMLButtonElement).disabled).toBe(false)
 
     // 第一步 createQuestion 返回 question id=42，第二步 createMistake 关联该题目。
@@ -167,7 +205,8 @@ describe('MistakeEntry.vue', () => {
     await vi.waitFor(() => {
       expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
         stem_text: 'y = x^2',
-        question_type: '解答',
+        grade: '七年级上',
+        question_type: '解答题',
       }))
     })
     await vi.waitFor(() => {
@@ -176,9 +215,9 @@ describe('MistakeEntry.vue', () => {
         question_id: 42,
       }))
     })
-    // 保存成功后 reset() 清空题干
+    // 保存成功后 reset() 清空题干，题目信息随之隐藏
     await vi.waitFor(() => {
-      expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
+      expect(wrapper.text()).not.toContain('题目信息')
     })
   })
 
@@ -189,9 +228,28 @@ describe('MistakeEntry.vue', () => {
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    const ta = wrapper.find('textarea')
-    ;(ta.element as HTMLTextAreaElement).value = 'y = x^2'
-    await ta.trigger('input')
+    // 先识别成功，回填题干，题目信息随之展示。
+    const task: RecognitionTask = {
+      id: 8,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({ stem_text: 'y = x^2', subject: '数学', question_type: '解答题' }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    // 选择年级
+    const gradeSelect = wrapper.findAll('select')[0]
+    await gradeSelect.setValue('七年级上')
     await flushPromises()
 
     // createQuestion 失败 → saveError 显示在底部操作栏

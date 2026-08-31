@@ -31,6 +31,8 @@ export interface RecognitionTask {
 export interface RecognitionResult {
   stem_text: string
   answer: string
+  subject?: string
+  question_type?: string
   formula: { latex: string; raw_text: string }
   geometry: { shape_type: string; properties: Record<string, string>; description: string }
   erased_image_key: string
@@ -54,6 +56,8 @@ export interface SubQuestion {
 export interface QuestionItem {
   stem_text: string
   answer: string
+  subject?: string
+  question_type?: string
   formula: { latex: string; raw_text: string }
   geometry: { shape_type: string; properties: Record<string, string>; description: string }
   sub_questions?: SubQuestion[]
@@ -121,6 +125,7 @@ export async function listCategories(type?: string): Promise<Category[]> {
 export interface Question {
   id: number
   subject: string
+  grade?: string
   stem_text: string
   answer: string
   analysis: string
@@ -137,6 +142,7 @@ export interface Mistake {
   wrong_reason: string
   mastery_level: number
   source_paper: string
+  remark?: string
   recorded_at: string
   question?: Question
 }

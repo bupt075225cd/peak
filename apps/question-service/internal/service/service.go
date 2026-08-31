@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"peak/libs/domain"
 	"peak/libs/errors"
@@ -59,6 +60,10 @@ func (s *Service) CreateMistake(ctx context.Context, m *domain.Mistake) error {
 	}
 	if m.QuestionID == 0 {
 		return errors.New(errors.CodeInvalidArgument, "question_id is required")
+	}
+	// 前端未传 recorded_at 时由服务端兜底为当前时间，避免入库为零值（0001-01-01）。
+	if m.RecordedAt.IsZero() {
+		m.RecordedAt = time.Now()
 	}
 	return s.repos.Mistake.Create(ctx, m)
 }
