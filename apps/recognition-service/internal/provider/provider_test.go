@@ -221,15 +221,25 @@ func TestAliyunErrorResponse(t *testing.T) {
 	}
 }
 
-func TestAliyunEraseHandwritingFallback(t *testing.T) {
-	// 手写擦除降级：直接返回原图，不发起网络调用。
-	a := NewAliyunProvider(AliyunConfig{DashKey: "k"})
+func TestAliyunEraseHandwriting(t *testing.T) {
+	// 手写擦除：wanx 提交 -> 轮询 -> 下载完整链路。
+	srv := wanxTestServer(t, "erased-image-bytes")
+	a := NewAliyunProvider(AliyunConfig{DashKey: "test-key", WanxEndpoint: srv.URL})
+
 	res, err := a.EraseHandwriting(context.Background(), []byte("orig"))
 	if err != nil {
 		t.Fatalf("erase: %v", err)
 	}
-	if string(res.ImageData) != "orig" {
-		t.Fatalf("expected original image, got %s", res.ImageData)
+	if string(res.ImageData) != "erased-image-bytes" {
+		t.Fatalf("expected erased image, got %s", res.ImageData)
+	}
+}
+
+func TestAliyunEraseHandwritingError(t *testing.T) {
+	// wanx 调用失败时向上透传错误。
+	a := NewAliyunProvider(AliyunConfig{DashKey: "k", WanxEndpoint: "://bad"})
+	if _, err := a.EraseHandwriting(context.Background(), []byte("img")); err == nil {
+		t.Fatal("expected erase error")
 	}
 }
 

@@ -9,6 +9,8 @@ import {
   createQuestion,
   createMistake,
   listMistakes,
+  uploadGeometryImage,
+  eraseHandwriting,
   type ApiResponse,
   type RecognitionTask,
   type Category,
@@ -109,6 +111,24 @@ describe('api/index.ts', () => {
     httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok' } })
     await expect(retryTask(9)).resolves.toBeUndefined()
     expect(httpMethods.post).toHaveBeenCalledWith('/recognition/tasks/9/retry')
+  })
+
+  it('uploadGeometryImage 上传 file 并返回 key', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ key: 'geometry/1.jpg' }))
+    const res = await uploadGeometryImage(new File(['x'], 'a.png', { type: 'image/png' }))
+    expect(httpMethods.post).toHaveBeenCalledWith('/recognition/files', expect.any(FormData))
+    expect(res).toBe('geometry/1.jpg')
+  })
+
+  it('eraseHandwriting 提交 key 并返回擦除后的 key（放大超时）', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ key: 'erased/123.jpg' }))
+    const res = await eraseHandwriting('geometry/1.jpg')
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/recognition/erase',
+      { key: 'geometry/1.jpg' },
+      { timeout: 120000 },
+    )
+    expect(res).toBe('erased/123.jpg')
   })
 
   it('listCategories 透传 type 参数并在无数据时兜底空数组', async () => {

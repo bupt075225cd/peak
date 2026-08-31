@@ -17,6 +17,8 @@ func NewFromConfig(cfg *config.Loader) (Provider, error) {
 			DashKey:      cfg.String("recognition.aliyun.dash_key", ""),
 			DashModel:    cfg.String("recognition.aliyun.dash_model", ""),
 			DashEndpoint: cfg.String("recognition.aliyun.dash_endpoint", ""),
+			WanxModel:    cfg.String("recognition.aliyun.wanx_model", ""),
+			WanxEndpoint: cfg.String("recognition.aliyun.wanx_endpoint", ""),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported recognition provider: %s", name)

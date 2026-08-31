@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -332,5 +335,76 @@ func TestUploadFileEmpty(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for empty file, got %d", w.Code)
+	}
+}
+
+// makeJPEG 生成一张 800x600 的纯色 JPEG，供擦除端点测试（ensureMinSize 需要合法图片）。
+func makeJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 800, 600))
+	for y := 0; y < 600; y++ {
+		for x := 0; x < 800; x++ {
+			img.Set(x, y, color.RGBA{R: 200, G: 200, B: 200, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestErase(t *testing.T) {
+	r, _, store := setupHandler(t)
+	ctx := context.Background()
+
+	key := "geometry/geo.jpg"
+	if err := store.Put(ctx, key, makeJPEG(t)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"key": key})
+	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Data.Key == "" {
+		t.Fatal("expected erased key")
+	}
+}
+
+func TestEraseEmptyKey(t *testing.T) {
+	r, _, _ := setupHandler(t)
+	body, _ := json.Marshal(map[string]string{"key": ""})
+	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestEraseMissingImage(t *testing.T) {
+	r, _, _ := setupHandler(t)
+	body, _ := json.Marshal(map[string]string{"key": "missing/key.jpg"})
+	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", w.Code, w.Body.String())
 	}
 }

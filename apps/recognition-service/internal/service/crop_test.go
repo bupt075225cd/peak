@@ -96,3 +96,54 @@ func approxEqualFloat(a, b float64) bool {
 	}
 	return d < 1e-9
 }
+
+func TestEnsureWanSize(t *testing.T) {
+	// 小图：短边被等比放大到 512（200x100 -> 1024x512）。
+	small := makeTestJPEG(t, 200, 100)
+	upscaled, err := ensureWanSize(small)
+	if err != nil {
+		t.Fatalf("ensureWanSize small: %v", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(upscaled))
+	if err != nil {
+		t.Fatalf("decode upscaled: %v", err)
+	}
+	if w, h := img.Bounds().Dx(), img.Bounds().Dy(); w != 1024 || h != 512 {
+		t.Fatalf("unexpected upscaled size: %dx%d (expected 1024x512)", w, h)
+	}
+
+	// 范围内的大图：原样返回。
+	ok := makeTestJPEG(t, 800, 600)
+	got, err := ensureWanSize(ok)
+	if err != nil {
+		t.Fatalf("ensureWanSize ok: %v", err)
+	}
+	if !bytes.Equal(got, ok) {
+		t.Fatal("expected in-range image unchanged")
+	}
+
+	// 超长边的大图：长边被等比缩小到 4096（5712x2357 -> 4096x1689）。
+	tooBig := makeTestJPEG(t, 5712, 2357)
+	resized, err := ensureWanSize(tooBig)
+	if err != nil {
+		t.Fatalf("ensureWanSize tooBig: %v", err)
+	}
+	img2, _, err := image.Decode(bytes.NewReader(resized))
+	if err != nil {
+		t.Fatalf("decode resized: %v", err)
+	}
+	w, h := img2.Bounds().Dx(), img2.Bounds().Dy()
+	if w != 4096 {
+		t.Fatalf("unexpected resized width: %d (expected 4096)", w)
+	}
+	// h = round(2357 * 4096 / 5712) ≈ 1690；允许 ±1 像素误差。
+	if h < 1689 || h > 1691 {
+		t.Fatalf("unexpected resized height: %d (expected ~1690)", h)
+	}
+}
+
+func TestEnsureWanSizeInvalid(t *testing.T) {
+	if _, err := ensureWanSize([]byte("not-an-image")); err == nil {
+		t.Fatal("expected error for invalid image")
+	}
+}

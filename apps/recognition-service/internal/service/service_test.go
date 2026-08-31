@@ -266,17 +266,68 @@ func TestRetryTaskNotFound(t *testing.T) {
 	}
 }
 
-func TestErasedKeyAndItoa(t *testing.T) {
-	if erasedKey(0) != "erased/task_0.jpg" {
-		t.Fatalf("unexpected key: %s", erasedKey(0))
-	}
-	if erasedKey(42) != "erased/task_42.jpg" {
-		t.Fatalf("unexpected key: %s", erasedKey(42))
-	}
+func TestItoa(t *testing.T) {
 	if itoa(0) != "0" {
 		t.Fatalf("itoa(0) = %s", itoa(0))
 	}
 	if itoa(12345) != "12345" {
 		t.Fatalf("itoa(12345) = %s", itoa(12345))
+	}
+}
+
+// setupEraseService 构造带独立存储的 service（含 db），供擦除流程测试使用。
+func setupEraseService(t *testing.T) (*Service, storage.FileStorage) {
+	t.Helper()
+	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "erase.db"), 1)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := domain.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	svc := New(db, store, provider.NewMockProvider(), logger.NewNop())
+	return svc, store
+}
+
+func TestEraseHandwriting(t *testing.T) {
+	svc, store := setupEraseService(t)
+	ctx := context.Background()
+
+	// 存入一张足够大的几何图（>=512，不触发放大）。
+	srcKey := "geometry/geo.jpg"
+	img := makeTestJPEG(t, 800, 600)
+	if err := store.Put(ctx, srcKey, img); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	newKey, err := svc.EraseHandwriting(ctx, srcKey)
+	if err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+	if newKey == "" || newKey == srcKey {
+		t.Fatalf("unexpected new key: %q", newKey)
+	}
+	// mock provider 返回原图，擦除结果应与原图一致。
+	data, err := store.Get(ctx, newKey)
+	if err != nil {
+		t.Fatalf("get erased: %v", err)
+	}
+	if !bytes.Equal(data, img) {
+		t.Fatal("expected erased image equal to original (mock)")
+	}
+}
+
+func TestEraseHandwritingNotFound(t *testing.T) {
+	svc, _ := setupEraseService(t)
+	_, err := svc.EraseHandwriting(context.Background(), "missing/key.jpg")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.CodeOf(err) != errors.CodeNotFound {
+		t.Fatalf("expected CodeNotFound, got %d", errors.CodeOf(err))
 	}
 }

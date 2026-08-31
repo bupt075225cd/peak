@@ -88,6 +88,17 @@ export async function uploadGeometryImage(file: File): Promise<string> {
   return data.data?.key ?? ''
 }
 
+// 擦除指定几何图子图的手写，返回擦除后图片的 storage key。
+// 后端会调用 AI 擦除（异步任务，最长约 120s），故单独放大超时。
+export async function eraseHandwriting(key: string): Promise<string> {
+  const { data } = await http.post<ApiResponse<{ key: string }>>(
+    '/recognition/erase',
+    { key },
+    { timeout: 120000 },
+  )
+  return data.data?.key ?? ''
+}
+
 // 上传 word/pdf 文档并创建识别任务。
 export async function uploadDocument(file: File): Promise<RecognitionTask> {
   const form = new FormData()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"math"
 
 	// 注册图片解码器（jpeg/png/gif），保证 image.Decode 能识别常见格式。
 	_ "image/gif"
@@ -98,6 +99,66 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// wanx 图像编辑约束：输入图宽高须落在 [minWanxSide, maxWanxSide]。
+const (
+	minWanxSide = 512
+	maxWanxSide = 4096
+)
+
+// ensureWanSize 调整图片尺寸至 wanx 约束范围：
+// 短边 < 512 时等比放大到 512；长边 > 4096 时等比缩小到 4096；
+// 同时满足时原样返回。返回编码后的 JPEG 字节。
+func ensureWanSize(original []byte) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(original))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("invalid image dimensions: %dx%d", w, h)
+	}
+
+	// 已满足 wanx 约束（短边 >= 512 且 长边 <= 4096）则原样返回。
+	minSide := min(w, h)
+	maxSide := max(w, h)
+	if minSide >= minWanxSide && maxSide <= maxWanxSide {
+		return original, nil
+	}
+
+	// 等比缩放，使两边同时落入 [minWanxSide, maxWanxSide]。
+	// 短边 < 512 时 scale 必须 >= 512/minSide；长边 > 4096 时 scale 必须 <= 4096/maxSide。
+	scale := 1.0
+	if float64(minSide) < minWanxSide {
+		scale = math.Max(scale, minWanxSide/float64(minSide))
+	}
+	if float64(maxSide) > maxWanxSide {
+		scale = math.Min(scale, maxWanxSide/float64(maxSide))
+	}
+	nw := int(math.Round(float64(w) * scale))
+	nh := int(math.Round(float64(h) * scale))
+	// 防浮点误差越界做兜底夹紧。
+	nw = max(minWanxSide, min(maxWanxSide, nw))
+	nh = max(minWanxSide, min(maxWanxSide, nh))
+
+	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	// 最近邻缩放：保留原线条清晰度（放大/缩小后由 AI 重绘，无需插值平滑）。
+	for y := 0; y < nh; y++ {
+		for x := 0; x < nw; x++ {
+			sx := x * w / nw
+			sy := y * h / nh
+			dst.Set(x, y, img.At(bounds.Min.X+sx, bounds.Min.Y+sy))
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 90}); err != nil {
+		return nil, fmt.Errorf("encode jpeg: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // cropRect 从 src 中裁剪出矩形子图。若 src 本身是可裁剪的类型则直接 SubImage；

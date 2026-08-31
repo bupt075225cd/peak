@@ -21,3 +21,6 @@ recognition:
     dash_key: "${ALIYUN_DASH_KEY:-${DASHSCOPE_API_KEY:-}}"
     dash_model: "${ALIYUN_DASH_MODEL:-qwen-vl-max}"
     dash_endpoint: "${ALIYUN_DASH_ENDPOINT:-}"  # 留空使用官方 OpenAI 兼容端点
+    # 手写擦除：通义万相图像编辑。
+    wanx_model: "${ALIYUN_WANX_MODEL:-wanx2.1-imageedit}"
+    wanx_endpoint: "${ALIYUN_WANX_ENDPOINT:-}"  # 留空使用官方地址 https://dashscope.aliyuncs.com/api/v1

@@ -41,6 +41,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/tasks/:id/retry", h.retryTask)
 		api.GET("/files/*key", h.getFile)
 		api.POST("/files", h.uploadFile)
+		api.POST("/erase", h.erase)
 	}
 }
 
@@ -91,6 +92,25 @@ func (h *Handler) uploadFile(c *gin.Context) {
 	}
 
 	httpx.OK(c, gin.H{"key": key})
+}
+
+// erase 处理 POST /api/recognition/erase，请求体 {"key":"geometry/xxx.jpg"}，
+// 对指定几何图子图执行 AI 手写擦除，返回擦除后图片的 storage key {"key":"erased/<ts>.jpg"}。
+func (h *Handler) erase(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
+		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "key is required"))
+		return
+	}
+
+	newKey, err := h.svc.EraseHandwriting(c.Request.Context(), req.Key)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{"key": newKey})
 }
 
 // createTask 接收图片或文档上传，保存文件并创建识别任务。

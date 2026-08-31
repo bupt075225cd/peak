@@ -478,4 +478,94 @@ describe('MistakeEntry.vue', () => {
     expect(cropperProps.open).toBe(false)
     expect(cropperProps.error).toBe('')
   })
+
+  it('点击「擦除手写」调用擦除接口并替换几何图 key', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const task: RecognitionTask = {
+      id: 10,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '几何题',
+        formula: { latex: '', raw_text: '' },
+        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
+        geometry_keys: ['geometry/task_10.jpg'],
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    // 擦除按钮存在。
+    const eraseBtn = wrapper.findAll('button').find((b) => b.text().includes('擦除手写'))!
+    expect(eraseBtn).toBeDefined()
+
+    // 点击擦除：POST /recognition/erase 返回新 key。
+    httpMethods.post.mockResolvedValueOnce(ok({ key: 'erased/123.jpg' }))
+    await eraseBtn.trigger('click')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/recognition/erase',
+      { key: 'geometry/task_10.jpg' },
+      { timeout: 120000 },
+    )
+    // 几何图预览更新为擦除后的 key。
+    expect(wrapper.html()).toContain('/api/recognition/files/erased/123.jpg')
+  })
+
+  it('擦除手写失败时展示错误提示', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const task: RecognitionTask = {
+      id: 11,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '几何题',
+        formula: { latex: '', raw_text: '' },
+        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
+        geometry_keys: ['geometry/task_11.jpg'],
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    const eraseBtn = wrapper.findAll('button').find((b) => b.text().includes('擦除手写'))!
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    httpMethods.post.mockRejectedValueOnce(new Error('erase fail'))
+    await eraseBtn.trigger('click')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('擦除失败，请重试')
+    errSpy.mockRestore()
+  })
 })

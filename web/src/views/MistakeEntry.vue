@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import {
-  Camera, Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText,
+  Camera, Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText, Eraser,
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
-  uploadGeometryImage, type RecognitionTask, type RecognitionResult, type QuestionItem,
+  uploadGeometryImage, eraseHandwriting, type RecognitionTask, type RecognitionResult, type QuestionItem,
 } from '../api'
 import LatexRenderer from '../components/LatexRenderer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
@@ -98,6 +98,33 @@ async function onCropperConfirm(file: File) {
     cropperError.value = '几何图上传失败，请重试'
   } finally {
     cropperConfirming.value = false
+  }
+}
+
+// 擦除手写状态：对当前几何图子图调用后端 AI 擦除。
+const erasing = ref(false)
+const eraseError = ref('')
+
+// 擦除当前几何图子图中的手写，成功后用新 key 替换预览。
+async function onEraseHandwriting() {
+  const key = selectedGeometryKeys.value[0]
+  if (!key || erasing.value) return
+  erasing.value = true
+  eraseError.value = ''
+  try {
+    const newKey = await eraseHandwriting(key)
+    if (!newKey) {
+      eraseError.value = '擦除失败，请重试'
+      return
+    }
+    selectedGeometryKeys.value = [newKey]
+  } catch (err: unknown) {
+    console.error('擦除手写失败', err)
+    // 透传后端业务错误消息（如 wanx 的真实原因），便于排查。
+    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+    eraseError.value = msg || '擦除失败，请重试'
+  } finally {
+    erasing.value = false
   }
 }
 
@@ -255,6 +282,8 @@ function reset() {
   errorMsg.value = ''
   saveError.value = ''
   warningMsg.value = ''
+  erasing.value = false
+  eraseError.value = ''
 }
 
 // 选中某道识别出的题，填入下方表单供修正/保存。
@@ -486,15 +515,28 @@ function selectQuestion(idx: number) {
             <div v-if="geometryImageUrls.length" class="rounded-xl bg-surface-tint p-4">
               <div class="flex items-center justify-between mb-2">
                 <label class="block text-sm font-medium text-ink-soft">几何图形</label>
-                <button
-                  v-if="previewUrl"
-                  type="button"
-                  class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-light"
-                  @click="openCropper"
-                >
-                  重新框选
-                </button>
+                <div class="flex items-center gap-3">
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-light disabled:opacity-50 disabled:cursor-not-allowed"
+                    :disabled="erasing"
+                    @click="onEraseHandwriting"
+                  >
+                    <Loader2 v-if="erasing" class="w-3.5 h-3.5 animate-spin" />
+                    <Eraser v-else class="w-3.5 h-3.5" />
+                    {{ erasing ? '擦除中…' : '擦除手写' }}
+                  </button>
+                  <button
+                    v-if="previewUrl"
+                    type="button"
+                    class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-light"
+                    @click="openCropper"
+                  >
+                    重新框选
+                  </button>
+                </div>
               </div>
+              <p v-if="eraseError" class="mb-2 text-xs text-red-500">{{ eraseError }}</p>
               <div class="flex flex-wrap gap-3">
                 <button
                   v-for="(url, i) in geometryImageUrls"

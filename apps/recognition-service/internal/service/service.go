@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,7 +166,8 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	)
 }
 
-// processImage 处理图片：OCR -> 公式 -> 几何 -> 手写擦除。
+// processImage 处理图片：OCR -> 公式 -> 几何。
+// 手写擦除不再在识别时自动执行，改为用户在前端勾选后调用 /api/recognition/erase 按需触发。
 // 几何图部分：根据模型返回的外接矩形（bounding_box）从原图中裁剪出
 // “只有几何图”的子图，存为 geometry/task_<id>.jpg 并写入 GeometryKeys，
 // 供前端录入错题时关联展示，避免把题干文字整图附在题目后面。
@@ -210,18 +212,6 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 		geoBBox = geoRes.BoundingBox
 	}
 	s.updateStatus(taskID, domain.TaskProcessing, 80, "")
-
-	// 手写擦除。
-	if eraseRes, err := s.prov.EraseHandwriting(ctx, imageData); err != nil {
-		s.log.Error("erase failed", zap.String("error", err.Error()))
-	} else if eraseRes != nil && len(eraseRes.ImageData) > 0 {
-		key := erasedKey(taskID)
-		if err := s.storage.Put(ctx, key, eraseRes.ImageData); err != nil {
-			s.log.Error("store erased image failed", zap.String("error", err.Error()))
-		} else {
-			result.ErasedImageKey = key
-		}
-	}
 
 	// 单图场景：根据几何图形外接矩形裁剪出“只有几何图”的子图存储。
 	// 无有效 bbox 时不附加任何图（不再把整张原图当作几何图）。
@@ -286,9 +276,34 @@ func (s *Service) updateStatus(taskID uint64, status string, progress int, errMs
 	})
 }
 
-// erasedKey 生成擦除后图片的存储 key。
-func erasedKey(taskID uint64) string {
-	return "erased/task_" + itoa(taskID) + ".jpg"
+// EraseHandwriting 读取指定 storage key 的几何图子图，调用 provider 擦除手写，
+// 将擦除结果写入 erased/ 前缀新 key 并返回。
+func (s *Service) EraseHandwriting(ctx context.Context, key string) (string, error) {
+	data, err := s.storage.Get(ctx, key)
+	if err != nil {
+		return "", errors.Wrap(errors.CodeNotFound, "image not found", err)
+	}
+
+	// wanx 要求输入图宽高落在 [512, 4096]，几何图子图可能超界，先等比缩放兜底。
+	data, err = ensureWanSize(data)
+	if err != nil {
+		return "", errors.Wrap(errors.CodeInvalidArgument, "invalid image", err)
+	}
+
+	eraseRes, err := s.prov.EraseHandwriting(ctx, data)
+	if err != nil {
+		// 直接透传 wanx 错误 message（如 "wanx submit status 400: ..."），便于前端排查。
+		return "", errors.Wrap(errors.CodeUpstream, err.Error(), err)
+	}
+	if eraseRes == nil || len(eraseRes.ImageData) == 0 {
+		return "", errors.New(errors.CodeUpstream, "erase returned empty image")
+	}
+
+	newKey := "erased/" + strconv.FormatInt(time.Now().UnixNano(), 10) + ".jpg"
+	if err := s.storage.Put(ctx, newKey, eraseRes.ImageData); err != nil {
+		return "", errors.Wrap(errors.CodeStorageFail, "store erased image failed", err)
+	}
+	return newKey, nil
 }
 
 // geometryKey 生成单图场景下几何图（原图或擦除后的图）的存储 key。
