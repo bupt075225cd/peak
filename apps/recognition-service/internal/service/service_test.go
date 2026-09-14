@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -316,6 +317,145 @@ func TestItoa(t *testing.T) {
 	}
 	if itoa(12345) != "12345" {
 		t.Fatalf("itoa(12345) = %s", itoa(12345))
+	}
+}
+
+// scriptedSpecProvider 按脚本顺序返回几何描述（超出后重复最后一个），
+// 用于驱动"校验失败回喂修正"与"渲染失败告警"分支。
+type scriptedSpecProvider struct {
+	provider.Provider
+	specs []string
+	calls int
+}
+
+func (f *scriptedSpecProvider) ExtractGeometrySpec(_ context.Context, _ []byte, _, _ string) (string, error) {
+	i := f.calls
+	if i >= len(f.specs) {
+		i = len(f.specs) - 1
+	}
+	f.calls++
+	return f.specs[i], nil
+}
+
+// runGeometryTask 用给定 provider 跑一次完整图片识别（含几何重绘），返回解析后的结果。
+func runGeometryTask(t *testing.T, prov provider.Provider) RecognitionResult {
+	t.Helper()
+	ctx := context.Background()
+	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "geo.db"), 1)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := domain.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	svc := New(db, store, prov, logger.NewNop(), WithGeometryRender(true, 3))
+
+	key := "original/geo.jpg"
+	if err := store.Put(ctx, key, []byte("fake-image-bytes")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	img := &domain.Image{StorageKey: key, ImageType: domain.ImageTypeOriginal}
+	if err := db.Create(img).Error; err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	task, err := svc.CreateTask(ctx, img.ID, key)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	got := waitTask(t, svc, ctx, task.ID)
+	if got.Status != domain.TaskSuccess {
+		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
+	}
+	var result RecognitionResult
+	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	return result
+}
+
+// TestProcessImageRedrawFeedsValidationIssuesBack 验证结构校验失败时：
+// 把问题清单回喂 VLM 修正后重试，第二轮通过且 attempts 记录实际轮数。
+func TestProcessImageRedrawFeedsValidationIssuesBack(t *testing.T) {
+	// 首轮：线段引用了不存在的点 B（结构校验失败）。
+	bad := `{"title":"图1","canvas":{"width":100,"height":100},` +
+		`"points":[{"name":"A","x":10,"y":10}],"segments":[{"from":"A","to":"B"}]}`
+	// 第二轮：修正为合法的双子图描述。
+	good := `{"panels":[` +
+		`{"title":"图1","canvas":{"width":100,"height":80},` +
+		`"points":[{"name":"A","x":15,"y":60},{"name":"B","x":85,"y":60},{"name":"C","x":50,"y":20}],` +
+		`"segments":[{"from":"A","to":"B"},{"from":"A","to":"C"},{"from":"B","to":"C"}]},` +
+		`{"title":"图2","canvas":{"width":100,"height":80},` +
+		`"points":[{"name":"O","x":50,"y":40},{"name":"P","x":80,"y":40}],` +
+		`"circles":[{"center":"O","through":"P"}]}` +
+		`]}`
+	result := runGeometryTask(t, &scriptedSpecProvider{
+		Provider: provider.NewMockProvider(), specs: []string{bad, good},
+	})
+
+	if len(result.RedrawSVGKeys) != 2 {
+		t.Fatalf("expected 2 redraw svg keys after correction, got %v", result.RedrawSVGKeys)
+	}
+	if result.RedrawReport == nil {
+		t.Fatal("expected redraw report")
+	}
+	if result.RedrawReport.Attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", result.RedrawReport.Attempts)
+	}
+	if !result.RedrawReport.Consistent {
+		t.Fatalf("expected consistent after correction, got %+v", result.RedrawReport)
+	}
+	if result.Warning != "" {
+		t.Fatalf("expected no warning after correction, got %q", result.Warning)
+	}
+}
+
+// TestProcessImageRedrawFailureAddsWarning 验证渲染持续失败时：
+// 不产出重绘 key，降级为 warning，不影响主识别结果。
+func TestProcessImageRedrawFailureAddsWarning(t *testing.T) {
+	result := runGeometryTask(t, &scriptedSpecProvider{
+		Provider: provider.NewMockProvider(), specs: []string{"not-a-json"},
+	})
+	if len(result.RedrawSVGKeys) != 0 {
+		t.Fatalf("expected no redraw keys on persistent failure, got %v", result.RedrawSVGKeys)
+	}
+	if result.RedrawReport != nil {
+		t.Fatalf("expected no redraw report on failure, got %+v", result.RedrawReport)
+	}
+	if !strings.Contains(result.Warning, "几何重绘失败") {
+		t.Fatalf("expected redraw failure warning, got %q", result.Warning)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("abcdef", 4); got != "abcd..." {
+		t.Fatalf("truncate long string = %q", got)
+	}
+	if got := truncate("abc", 4); got != "abc" {
+		t.Fatalf("truncate short string = %q", got)
+	}
+}
+
+func TestFormatValidateIssues(t *testing.T) {
+	out := formatValidateIssues([]string{"图1：点 B 未定义"})
+	if !strings.Contains(out, "结构问题") || !strings.Contains(out, "图1：点 B 未定义") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	// 超过 10 条时截断并提示省略。
+	many := make([]string, 0, 15)
+	for i := 1; i <= 15; i++ {
+		many = append(many, fmt.Sprintf("问题%d", i))
+	}
+	out = formatValidateIssues(many)
+	if !strings.Contains(out, "其余问题省略") {
+		t.Fatalf("expected ellipsis note: %s", out)
+	}
+	if strings.Contains(out, "问题11") {
+		t.Fatalf("issues beyond the 10th should be omitted: %s", out)
 	}
 }
 
