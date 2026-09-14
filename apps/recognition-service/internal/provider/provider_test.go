@@ -38,9 +38,9 @@ func TestMockProvider(t *testing.T) {
 		t.Fatalf("unexpected text result: %+v err=%v", text, err)
 	}
 
-	f, err := m.RecognizeFormula(ctx, []byte("abc"))
-	if err != nil || f.LaTeX == "" {
-		t.Fatalf("unexpected formula: %+v err=%v", f, err)
+	parsed, err := m.ParseQuestion(ctx, []byte("abc"))
+	if err != nil || parsed.Text == "" || parsed.Subject != "数学" {
+		t.Fatalf("unexpected parse result: %+v err=%v", parsed, err)
 	}
 
 	e, err := m.EraseHandwriting(ctx, []byte("abc"))
@@ -106,10 +106,10 @@ func TestAliyunProviderDefaults(t *testing.T) {
 	if a.Name() != "aliyun" {
 		t.Fatalf("expected aliyun, got %s", a.Name())
 	}
-	if a.dash.model != "qwen-vl-max" {
+	if a.dash.model != "qwen3.8-flash" {
 		t.Fatalf("expected default model, got %s", a.dash.model)
 	}
-	if !strings.Contains(a.dash.endpoint, "compatible-mode/v1/chat/completions") {
+	if !strings.Contains(a.dash.endpoint, "token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions") {
 		t.Fatalf("expected default dash endpoint, got %s", a.dash.endpoint)
 	}
 }
@@ -148,16 +148,28 @@ func TestAliyunRecognizeText(t *testing.T) {
 	}
 }
 
-func TestAliyunRecognizeFormula(t *testing.T) {
-	srv := dashTestServer(t, "x^2 + y^2 = r^2")
+func TestAliyunParseQuestion(t *testing.T) {
+	srv := dashTestServer(t, `{"text":"已知 AB//CD","subject":"数学","question_type":"选择题"}`)
 	a := NewAliyunProvider(AliyunConfig{DashKey: "test-key", DashEndpoint: srv.URL})
-
-	res, err := a.RecognizeFormula(context.Background(), []byte("img"))
+	res, err := a.ParseQuestion(context.Background(), []byte("img"))
 	if err != nil {
-		t.Fatalf("recognize formula: %v", err)
+		t.Fatalf("parse question: %v", err)
 	}
-	if res.LaTeX != "x^2 + y^2 = r^2" {
-		t.Fatalf("unexpected latex: %s", res.LaTeX)
+	if res.Text != "已知 AB//CD" || res.Subject != "数学" || res.QuestionType != "选择题" {
+		t.Fatalf("unexpected parse result: %+v", res)
+	}
+}
+
+func TestAliyunParseQuestionFallbackToRawText(t *testing.T) {
+	// 模型未按 JSON 输出时，整段原文作为题干文本，学科/题型留空由规则兜底。
+	srv := dashTestServer(t, "这是一道自由文本题目，未经 JSON 包裹")
+	a := NewAliyunProvider(AliyunConfig{DashKey: "test-key", DashEndpoint: srv.URL})
+	res, err := a.ParseQuestion(context.Background(), []byte("img"))
+	if err != nil {
+		t.Fatalf("parse question: %v", err)
+	}
+	if res.Text != "这是一道自由文本题目，未经 JSON 包裹" {
+		t.Fatalf("unexpected fallback text: %q", res.Text)
 	}
 }
 
@@ -598,20 +610,6 @@ func TestExtractStructuredImageOCRFail(t *testing.T) {
 	}
 	if res == nil || len(res.Items) == 0 {
 		t.Fatal("expected at least 1 item")
-	}
-}
-
-func TestRecognizeFormulaError(t *testing.T) {
-	// dashscope 返回错误时 RecognizeFormula 应透传错误。
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
-	}))
-	defer srv.Close()
-
-	a := NewAliyunProvider(AliyunConfig{DashKey: "k", DashEndpoint: srv.URL})
-	if _, err := a.RecognizeFormula(context.Background(), []byte("img")); err == nil {
-		t.Fatal("expected error")
 	}
 }
 

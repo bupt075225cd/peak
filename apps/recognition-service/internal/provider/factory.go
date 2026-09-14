@@ -20,6 +20,14 @@ func NewFromConfig(cfg *config.Loader) (Provider, error) {
 			WanxModel:    cfg.String("recognition.aliyun.wanx_model", ""),
 			WanxEndpoint: cfg.String("recognition.aliyun.wanx_endpoint", ""),
 		}), nil
+	case "zhipu":
+		return NewZhipuProvider(ZhipuConfig{
+			APIKey:          cfg.String("recognition.zhipu.api_key", ""),
+			Model:           cfg.String("recognition.zhipu.model", ""),
+			Endpoint:        cfg.String("recognition.zhipu.endpoint", ""),
+			MaxTokens:       cfg.Int("recognition.zhipu.max_tokens", 0),
+			ReasoningEffort: cfg.String("recognition.zhipu.reasoning_effort", ""),
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported recognition provider: %s", name)
 	}

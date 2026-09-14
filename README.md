@@ -20,6 +20,12 @@ Peak 是一款面向中学生的错题本软件，核心解决「收集错题 �
       │question-svc  │ │recognition-svc│ │ user-svc(预留)│
       └──────┬───────┘ └──────┬───────┘ └──────────────┘
              │                │
+             │                │  几何重绘（VLM 坐标直出 + Go 渲染）
+             │                ▼
+             │        ┌──────────────────┐
+             │        │ recognition-svc  │
+             │        │ internal/geom    │
+             │        └──────────────────┘
              ▼                ▼
         MySQL (GORM)    文件存储(本地→S3兼容对象存储) + 第三方AI(阿里云)
 ```
@@ -35,7 +41,8 @@ peak/
 ├── apps/                    # 微服务
 │   ├── gateway/             # API 网关 (:8080)
 │   ├── question-service/    # 题目/错题服务 (:8081)
-│   ├── recognition-service/ # 识别服务 (:8082)
+│   ├── recognition-service/ # 识别服务 (:8082，含内置几何渲染 internal/geom)
+│   ├── geometry-sidecar/    # [已停用] 旧几何重绘 sidecar（Python FastAPI :8090，源码保留以便回滚）
 │   └── user-service/        # 用户服务（预留 :8083）
 ├── libs/                    # 公共库
 │   ├── config/              # 配置加载（YAML + 环境变量）
@@ -178,19 +185,75 @@ make stop-sqlite                             # 停止服务并清空 /tmp/peak-r
 识别服务通过能力级接口隔离厂商，通过 `recognition.provider` 配置切换：
 
 - `mock`：无密钥本地跑通（默认）
-- `aliyun`：阿里云（通用 OCR + 公式识别 + 通义千问-VL）
+- `aliyun`：阿里云（通义千问-VL 多模态 + 通义万相手写擦除）
+- `zhipu`：智谱开放平台（GLM 系列多模态，OpenAI 兼容接口；手写擦除暂不支持，原样返回图片）
 
 ```yaml
 recognition:
-  provider: "aliyun"
+  provider: "aliyun"     # mock / aliyun / zhipu
   aliyun:
     access_key_id: ""
     access_secret: ""
     dash_key: ""
-    dash_model: "qwen-vl-max"
+    dash_model: "qwen3.8-flash"
+  zhipu:
+    api_key: ""                      # 或环境变量 ZHIPU_API_KEY / GLM_API_KEY
+    model: "glm-5.3-flash"           # 视觉多模态模型
+    endpoint: ""                     # 留空使用 https://open.bigmodel.cn/api/paas/v4/chat/completions
+    max_tokens: 8192                 # GLM 默认值偏小会截断长题干转录
+    reasoning_effort: "low"          # 思考强度 low/high/max；off 表示不下发该参数
 ```
 
+> 说明：`glm-5.3-flash` 始终开启思考且无法关闭，默认思考强度下单次识别耗时会远超
+> HTTP 超时，因此 `reasoning_effort` 默认取 `low`（实测 low 约 15s，默认强度 >180s）。
+
+各厂商的 VLM 能力（整题解析 / OCR / 几何识别 / 文档解析 / 几何描述提取）共用同一套
+OpenAI 兼容多模态对话客户端（`provider.ChatClient`）与能力集合（`provider.vlmCapabilities`），
+新增厂商只需提供客户端配置并实现厂商特有能力（如阿里云的手写擦除）。
+
 能力接口：`OCRProvider` / `FormulaProvider` / `ErasureProvider` / `GeometryProvider` / `DocumentProvider`。
+
+### 几何重绘（AI 重绘）
+
+识别服务支持对错题图片中的几何图形做 **AI 重绘**：VLM 直接给出各点坐标与图元结构
+（坐标直出），由服务内置的 Go 渲染器（`apps/recognition-service/internal/geom`）
+完成清洗、结构校验、文字避让与 SVG 生成，全程无数值求解、无跨语言调用。
+
+```
+几何子图 + 题干文本 ──► VLM 坐标直出 spec JSON ──► geom.Normalize/Validate
+                                       ▲                    │
+                                       └─ 结构问题清单回喂修正 ─┘（最多 max_attempts 轮）
+                                                            ▼
+                                     geom.RenderSVG（含文字避让）存 geometry/task_<id>.svg
+```
+
+- **渲染为纯 Go 实现**（`internal/geom`：手写 SVG 字符串、零第三方依赖、零 CGO），
+  覆盖线段/直线/射线（`extend`）、多边形（可填充）、圆、圆弧、直角标记、角弧标记、
+  等长标记（ticks）、平行标记（parallels）、点与字母标签、自由文字标注
+- **文字避让**：点标签与文字标注自动避开线段、圆、弧与彼此，做到不压线、不重叠、不出画布；
+  文字宽度用启发式字符类估算（CJK≈1em、ASCII≈0.55em），无需内嵌字体
+- **结构校验替代残差判据**：校验 JSON 合法性、点引用完整性、坐标有限性、图元字段完备性，
+  问题清单回喂 VLM 修正后重试（`geometry.max_attempts`，默认 3 轮）
+- **题干独立输入**：角度/长度等已知量从题干文本读取，不采信示意图目测值
+- **精度说明**：坐标直出方案不再做数值求解，图形度量以"比例协调、不违背题意"为准，
+  不再保证数学精确（这是换取部署简单与链路缩短的明确取舍）
+- **多子图**：一张原图含多个子图（图1/图2/图3）时，每个子图各自渲染一张独立 SVG
+- **服务端 SVG 安全清洗**：渲染产物（含模型兜底 `svg` 字段）经白名单清洗后才落库，
+  剥离 script/foreignObject/事件属性/外部引用，避免存储型 XSS
+- 前端在识别结果中展示重绘 SVG（矢量缩放，走既有 files 端点）；
+  `redraw_report.consistent` 表示全部子图是否通过结构校验
+
+配置（`apps/recognition-service/config.yaml`）：
+
+```yaml
+geometry:
+  enabled: true      # 启用内置几何重绘（默认 false）
+  max_attempts: 3    # 结构校验失败回喂修正最大轮数
+```
+
+旧方案（Python sidecar：`apps/geometry-sidecar`，FastAPI + scipy 最小二乘 + matplotlib）
+**已停用**：不再接线、不再部署，源码保留在仓库以便回滚；如需回滚，恢复
+`geometry.sidecar_url` 接线与 `docker-compose.prod.yml` 中的 `geometry-sidecar` 服务即可。
 
 ### 文档识别（word/pdf）
 

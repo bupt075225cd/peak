@@ -64,8 +64,19 @@ func main() {
 	}
 	appLog.Info("recognition provider loaded", zap.String("provider", prov.Name()))
 
+	// 几何重绘（可选）：geometry.enabled 为 true 时启用内置 Go 渲染器
+	// （internal/geom：坐标直出 + 文字避让 + 手写 SVG），不再依赖外部渲染服务。
+	var svcOpts []service.Option
+	if cfg.Bool("geometry.enabled", false) {
+		maxAttempts := cfg.Int("geometry.max_attempts", 3)
+		svcOpts = append(svcOpts, service.WithGeometryRender(true, maxAttempts))
+		appLog.Info("geometry redraw enabled", zap.Int("max_attempts", maxAttempts))
+	} else {
+		appLog.Info("geometry redraw disabled (geometry.enabled is false)")
+	}
+
 	// 组装依赖。
-	svc := service.New(db, store, prov, appLog)
+	svc := service.New(db, store, prov, appLog, svcOpts...)
 	h := handler.New(svc, db, store)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))

@@ -31,6 +31,10 @@ coverage/
 # 日志
 *.log
 
+# 编译产物（无扩展名的 Go 二进制）
+apps/gateway/gateway
+apps/user-service/user-service
+
 # 本地配置（含密钥）
 *.local.yaml
 .env

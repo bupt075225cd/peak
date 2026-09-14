@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// envPattern 匹配 ${VAR} 或 ${VAR:-default} 形式的环境变量占位。
-var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
+
 
 // Loader 配置加载器。
 type Loader struct {
@@ -80,7 +80,7 @@ func (l *Loader) String(key string, def string) string {
 	return def
 }
 
-// Int 读取整数配置。
+// Int 读取整数配置。字符串值（含经 ${VAR:-default} 展开后的数字）会被解析。
 func (l *Loader) Int(key string, def int) int {
 	v := l.Get(key)
 	switch n := v.(type) {
@@ -90,34 +90,78 @@ func (l *Loader) Int(key string, def int) int {
 		return int(n)
 	case float64:
 		return int(n)
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+			return int(f)
+		}
 	}
 	return def
 }
 
-// Bool 读取布尔配置。
+// Bool 读取布尔配置。字符串值（含经 ${VAR:-default} 展开后的布尔字面量）会被解析。
 func (l *Loader) Bool(key string, def bool) bool {
 	v := l.Get(key)
-	if b, ok := v.(bool); ok {
+	switch b := v.(type) {
+	case bool:
 		return b
+	case string:
+		switch strings.ToLower(strings.TrimSpace(b)) {
+		case "true", "1", "yes", "on", "y":
+			return true
+		case "false", "0", "no", "off", "n", "":
+			return false
+		}
 	}
 	return def
 }
+
+// envNameRe 校验环境变量名（${...} 占位符内）。
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // expandEnv 展开 ${VAR} 或 ${VAR:-default} 形式的环境变量。
 // 若环境变量未设置：
 //   - ${VAR}           → 空字符串
 //   - ${VAR:-default}  → default
+//
+// default 中支持再嵌套占位符（如 "${A:-${B:-}}"：A 未设置时回退到 B）。
 func expandEnv(s string) string {
-	return envPattern.ReplaceAllStringFunc(s, func(m string) string {
-		sub := envPattern.FindStringSubmatch(m)
-		name := sub[1]
-		if v, ok := os.LookupEnv(name); ok {
-			return v
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '$' && i+1 < len(s) && s[i+1] == '{' {
+			if end, ok := matchPlaceholder(s, i); ok {
+				inner := s[i+2 : end]
+				if name, def, hasDef := strings.Cut(inner, ":-"); envNameRe.MatchString(name) {
+					if v, ok := os.LookupEnv(name); ok {
+						sb.WriteString(v)
+					} else if hasDef {
+						sb.WriteString(expandEnv(def))
+					}
+					i = end + 1
+					continue
+				}
+			}
 		}
-		// 未设置时，若有默认值则返回默认值，否则返回空字符串
-		if len(sub) >= 3 {
-			return sub[2]
+		sb.WriteByte(s[i])
+		i++
+	}
+	return sb.String()
+}
+
+// matchPlaceholder 返回与 start（指向 '$'）处 "${" 配对的 '}' 下标，
+// 按 {} 配对计数，因此 default 中可嵌套 "${...}"。找不到返回 false。
+func matchPlaceholder(s string, start int) (int, bool) {
+	depth := 0
+	for j := start + 1; j < len(s); j++ {
+		switch s[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return j, true
+			}
 		}
-		return ""
-	})
+	}
+	return 0, false
 }

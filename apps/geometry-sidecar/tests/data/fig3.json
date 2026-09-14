@@ -1,0 +1,36 @@
+{
+  "title": "图 3",
+  "points": ["P","Q","M","N","A","B","C","D"],
+  "anchors": {
+    "P": [0.0, 1.5], "A": [1.2, 1.5], "Q": [3.0, 1.5],
+    "M": [0.0, 0.0], "N": [3.0, 0.0],
+    "B": [0.35, 0.0], "C": [2.2, 0.55], "D": [1.5, 1.2]
+  },
+  "constraints": [
+    {"type": "horizontal", "points": ["P","A","Q"]},
+    {"type": "horizontal", "points": ["M","B","N"]},
+    {"type": "point_on_line", "point": "A", "line": ["P","Q"]},
+    {"type": "point_on_line", "point": "B", "line": ["M","N"]},
+    {"type": "between", "point": "B", "a": "M", "b": "N"},
+    {"type": "distance", "a": "P", "b": "M", "val": 1.5},
+    {"type": "angle", "vertex": "B", "a": "N", "b": "A", "deg": 40}
+  ],
+  "elements": [
+    {"type": "line", "pts": ["P","Q"], "style": "solid"},
+    {"type": "line", "pts": ["M","N"], "style": "solid"},
+    {"type": "segment", "pts": ["A","B"]},
+    {"type": "ray", "pts": ["A","C"], "style": "dashed", "color": "gray"},
+    {"type": "ray", "pts": ["B","D"], "style": "dashed", "color": "gray"},
+    {"type": "point", "name": "P", "label_offset": [-0.05, 0.1]},
+    {"type": "point", "name": "A", "label_offset": [0.0, 0.12]},
+    {"type": "point", "name": "Q", "label_offset": [0.0, 0.1]},
+    {"type": "point", "name": "M", "label_offset": [-0.05, -0.13]},
+    {"type": "point", "name": "N", "label_offset": [0.0, -0.13]},
+    {"type": "point", "name": "B", "label_offset": [-0.06, -0.13]},
+    {"type": "point", "name": "C", "label_offset": [0.08, 0.05], "color": "gray"},
+    {"type": "point", "name": "D", "label_offset": [0.07, 0.08], "color": "gray"}
+  ],
+  "annotations": [
+    {"type": "angle_mark", "vertex": "B", "from": "N", "to": "A", "label": "40°", "color": "blue"}
+  ]
+}

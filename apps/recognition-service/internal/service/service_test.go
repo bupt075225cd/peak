@@ -1,13 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/jpeg"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,22 +17,6 @@ import (
 
 	"peak/apps/recognition-service/internal/provider"
 )
-
-// makeTestJPEG 生成一张指定尺寸的纯色 JPEG 图片，便于裁剪测试。
-func makeTestJPEG(t *testing.T, w, h int) []byte {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
-		}
-	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, nil); err != nil {
-		t.Fatalf("encode jpeg: %v", err)
-	}
-	return buf.Bytes()
-}
 
 func setupService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
@@ -115,70 +96,133 @@ func TestProcessTaskSuccess(t *testing.T) {
 	t.Fatal("timeout waiting for task success")
 }
 
-// TestProcessImageStoresGeometryKey 验证单图上传场景下，
-// 识别结果中应携带一张“裁剪后的几何图” storage key（而非整张原图）。
-// mock provider 返回的 bbox 为右下角 1/4 区域，裁剪结果应能正常解码且尺寸约为原图一半。
-func TestProcessImageStoresGeometryKey(t *testing.T) {
-	svc, db := setupService(t)
+// waitTask 轮询任务到成功/失败。
+func waitTask(t *testing.T, svc *Service, ctx context.Context, id uint64) *domain.RecognitionTask {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := svc.GetTask(ctx, id)
+		if got.Status == domain.TaskSuccess || got.Status == domain.TaskFailed {
+			return got
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for task")
+	return nil
+}
+
+// fakeMultiPanelSpecProvider 在 mock 基础上返回双子图几何描述，
+// 用于验证多子图（图1/图2）各自独立渲染与存储。
+type fakeMultiPanelSpecProvider struct {
+	provider.Provider
+}
+
+func (f *fakeMultiPanelSpecProvider) ExtractGeometrySpec(_ context.Context, _ []byte, _, _ string) (string, error) {
+	return `{"panels":[` +
+		`{"title":"图1","canvas":{"width":100,"height":80},` +
+		`"points":[{"name":"A","x":15,"y":60},{"name":"B","x":85,"y":60},{"name":"C","x":50,"y":20}],` +
+		`"segments":[{"from":"A","to":"B"},{"from":"A","to":"C"},{"from":"B","to":"C"}],` +
+		`"polygons":[{"points":["A","B","C"]}]},` +
+		`{"title":"图2","canvas":{"width":100,"height":80},` +
+		`"points":[{"name":"O","x":50,"y":40},{"name":"P","x":80,"y":40},{"name":"Q","x":50,"y":70}],` +
+		`"segments":[{"from":"O","to":"P"},{"from":"O","to":"Q"}],` +
+		`"circles":[{"center":"O","through":"P"}]}` +
+		`]}`, nil
+}
+
+// TestProcessImageMathRedrawProducesMultiSVG 验证单图识别时：
+// 数学题 + 含几何图（mock 返回 bbox）且启用了内置几何渲染时，
+// VLM 返回的每个子图各自存储为独立 SVG key 并写入 redraw_svg_keys。
+func TestProcessImageMathRedrawProducesMultiSVG(t *testing.T) {
 	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "redraw.db")
+	db, err := domain.OpenDB(domain.DialectSQLite, dsn, 1)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := domain.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	svc := New(db, store, &fakeMultiPanelSpecProvider{Provider: provider.NewMockProvider()},
+		logger.NewNop(), WithGeometryRender(true, 3))
 
 	key := "original/geo.jpg"
-	original := makeTestJPEG(t, 200, 200)
-	if err := svc.storage.Put(ctx, key, original); err != nil {
+	if err := store.Put(ctx, key, []byte("fake-image-bytes")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	img := &domain.Image{StorageKey: key, ImageType: domain.ImageTypeOriginal}
 	if err := db.Create(img).Error; err != nil {
 		t.Fatalf("create image: %v", err)
 	}
-
 	task, err := svc.CreateTask(ctx, img.ID, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	var got *domain.RecognitionTask
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		got, _ = svc.GetTask(ctx, task.ID)
-		if got.Status == domain.TaskSuccess {
-			break
-		}
-		if got.Status == domain.TaskFailed {
-			t.Fatalf("unexpected failure: %s", got.ErrorMessage)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if got == nil || got.Status != domain.TaskSuccess {
-		t.Fatal("timeout waiting for task success")
-	}
-	if got.ResultJSON == "" {
-		t.Fatal("expected result json")
+	got := waitTask(t, svc, ctx, task.ID)
+	if got.Status != domain.TaskSuccess {
+		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
 	}
 	var result RecognitionResult
 	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if len(result.GeometryKeys) == 0 {
-		t.Fatalf("expected at least one geometry key, got none (result=%+v)", result)
+	if len(result.RedrawSVGKeys) != 2 {
+		t.Fatalf("expected 2 redraw svg keys, got %v", result.RedrawSVGKeys)
 	}
-	geoKey := result.GeometryKeys[0]
-	// 验证存储里确有这张图，且是裁剪后的子图（尺寸约为原图一半），而非整张原图。
-	data, err := svc.storage.Get(ctx, geoKey)
+	// 每个子图独立存储且可读回，内容为合法 SVG 文档。
+	for _, k := range result.RedrawSVGKeys {
+		data, err := store.Get(ctx, k)
+		if err != nil {
+			t.Fatalf("svg key not stored %s: %v", k, err)
+		}
+		if !strings.HasPrefix(string(data), "<svg ") {
+			t.Fatalf("unexpected stored content for %s: %q", k, data)
+		}
+		if !strings.Contains(string(data), "viewBox") {
+			t.Fatalf("expected viewBox in %s: %q", k, data)
+		}
+	}
+	if result.RedrawReport == nil || !result.RedrawReport.Consistent {
+		t.Fatalf("expected consistent redraw report, got %+v", result.RedrawReport)
+	}
+	if result.RedrawReport.Attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", result.RedrawReport.Attempts)
+	}
+}
+
+// TestProcessImageNoRedrawEngineSkips 验证未启用几何重绘（默认 mock 服务）时，
+// 流程正常完成、不产出重绘 key，也不产生裁剪子图存储。
+func TestProcessImageNoRedrawEngineSkips(t *testing.T) {
+	svc, db := setupService(t)
+	ctx := context.Background()
+
+	key := "original/no.svg"
+	if err := svc.storage.Put(ctx, key, []byte("fake-image-bytes")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	img := &domain.Image{StorageKey: key, ImageType: domain.ImageTypeOriginal}
+	if err := db.Create(img).Error; err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	task, err := svc.CreateTask(ctx, img.ID, key)
 	if err != nil {
-		t.Fatalf("geometry key not stored: %v", err)
+		t.Fatalf("create task: %v", err)
 	}
-	cropped, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("stored geometry image is not decodable: %v", err)
+	got := waitTask(t, svc, ctx, task.ID)
+	if got.Status != domain.TaskSuccess {
+		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
 	}
-	// mock bbox 为右下 1/4（x=0.5,y=0.5,w=0.5,h=0.5），外扩 10% 后被 clamp：
-	// x = 0.5 - 0.1 = 0.4，w = min(0.7, 1-0.4) = 0.6，裁剪结果约 120x120。
-	if w := cropped.Bounds().Dx(); w < 115 || w > 125 {
-		t.Fatalf("unexpected cropped width: %d (expected ~120 after padding)", w)
+	var result RecognitionResult
+	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
 	}
-	if h := cropped.Bounds().Dy(); h < 115 || h > 125 {
-		t.Fatalf("unexpected cropped height: %d (expected ~120 after padding)", h)
+	if len(result.RedrawSVGKeys) != 0 {
+		t.Fatalf("expected no redraw keys without engine, got %v", result.RedrawSVGKeys)
 	}
 }
 
@@ -275,59 +319,4 @@ func TestItoa(t *testing.T) {
 	}
 }
 
-// setupEraseService 构造带独立存储的 service（含 db），供擦除流程测试使用。
-func setupEraseService(t *testing.T) (*Service, storage.FileStorage) {
-	t.Helper()
-	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "erase.db"), 1)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := domain.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	store, err := storage.NewLocalStorage(t.TempDir())
-	if err != nil {
-		t.Fatalf("storage: %v", err)
-	}
-	svc := New(db, store, provider.NewMockProvider(), logger.NewNop())
-	return svc, store
-}
 
-func TestEraseHandwriting(t *testing.T) {
-	svc, store := setupEraseService(t)
-	ctx := context.Background()
-
-	// 存入一张足够大的几何图（>=512，不触发放大）。
-	srcKey := "geometry/geo.jpg"
-	img := makeTestJPEG(t, 800, 600)
-	if err := store.Put(ctx, srcKey, img); err != nil {
-		t.Fatalf("put: %v", err)
-	}
-
-	newKey, err := svc.EraseHandwriting(ctx, srcKey)
-	if err != nil {
-		t.Fatalf("erase: %v", err)
-	}
-	if newKey == "" || newKey == srcKey {
-		t.Fatalf("unexpected new key: %q", newKey)
-	}
-	// mock provider 返回原图，擦除结果应与原图一致。
-	data, err := store.Get(ctx, newKey)
-	if err != nil {
-		t.Fatalf("get erased: %v", err)
-	}
-	if !bytes.Equal(data, img) {
-		t.Fatal("expected erased image equal to original (mock)")
-	}
-}
-
-func TestEraseHandwritingNotFound(t *testing.T) {
-	svc, _ := setupEraseService(t)
-	_, err := svc.EraseHandwriting(context.Background(), "missing/key.jpg")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if errors.CodeOf(err) != errors.CodeNotFound {
-		t.Fatalf("expected CodeNotFound, got %d", errors.CodeOf(err))
-	}
-}

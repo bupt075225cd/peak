@@ -4,8 +4,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +17,7 @@ import (
 	"peak/libs/logger"
 	"peak/libs/storage"
 
+	"peak/apps/recognition-service/internal/geom"
 	"peak/apps/recognition-service/internal/provider"
 )
 
@@ -28,12 +29,12 @@ type RecognitionResult struct {
 	Answer         string                  `json:"answer"`
 	Subject        string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
 	QuestionType   string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
-	Formula        provider.FormulaResult  `json:"formula"`
 	Geometry       provider.GeometryResult `json:"geometry"`
-	ErasedImageKey string                  `json:"erased_image_key"`
-	// GeometryKeys 单图上传场景下，与该题关联的几何图存储 key 列表。
-	// （文档上传场景下，几何图分散在各子问的 GeometryKeys 中。）
-	GeometryKeys []string `json:"geometry_keys,omitempty"`
+	// RedrawSVGKeys 几何重绘输出的存储 key 列表：一个 key 对应一张独立 SVG
+	// （一张原图含多个几何子图时，每个子图一张，配置了 geometry sidecar 才填充）。
+	RedrawSVGKeys []string `json:"redraw_svg_keys,omitempty"`
+	// RedrawReport 几何重绘求解报告（残差、重试次数、是否几何自洽）。
+	RedrawReport *RedrawReport `json:"redraw_report,omitempty"`
 	// Questions 文档识别出的多道题（仅文档上传时填充）。
 	Questions []QuestionItem `json:"questions,omitempty"`
 	// Warning 非致命错误提示（如公式/几何识别失败），供前端展示。
@@ -46,7 +47,6 @@ type QuestionItem struct {
 	Answer       string                  `json:"answer"`
 	Subject      string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
 	QuestionType string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
-	Formula      provider.FormulaResult  `json:"formula"`
 	Geometry     provider.GeometryResult `json:"geometry"`
 	// SubQuestions 子问列表，如 (1)(2)(3)（方案 B 结构化拆题时填充）。
 	SubQuestions []QuestionSubQuestion `json:"sub_questions,omitempty"`
@@ -61,17 +61,51 @@ type QuestionSubQuestion struct {
 	GeometryKeys []string `json:"geometry_keys,omitempty"`
 }
 
+// RedrawReport 几何重绘报告。
+//
+// 坐标直出方案不再有约束残差，max_hard/max_soft 仅为兼容前端契约保留（恒为 0）；
+// consistent 表示全部子图通过结构校验。
+type RedrawReport struct {
+	MaxHard    float64 `json:"max_hard"`   // Deprecated: 残差语义已废弃，恒为 0
+	MaxSoft    float64 `json:"max_soft"`   // Deprecated: 残差语义已废弃，恒为 0
+	Attempts   int     `json:"attempts"`   // 实际执行的"提取→渲染"轮数
+	Consistent bool    `json:"consistent"` // 是否全部子图通过结构校验
+}
+
 // Service 识别服务业务逻辑。
 type Service struct {
 	db      *gorm.DB
 	storage storage.FileStorage
 	prov    provider.Provider
 	log     *logger.Logger
+	// geometryRender 是否启用几何重绘（内置 Go 渲染器）。
+	geometryRender bool
+	// geometryMaxAttempts 结构校验失败回喂修正的最大轮数（提取→渲染→修正）。
+	geometryMaxAttempts int
+}
+
+// Option 服务可选依赖。
+type Option func(*Service)
+
+// WithGeometryRender 启用几何重绘（内置 Go 渲染器）：enabled 控制开关，
+// maxAttempts 为结构校验失败回喂修正的最大轮数。
+func WithGeometryRender(enabled bool, maxAttempts int) Option {
+	return func(s *Service) {
+		s.geometryRender = enabled
+		if maxAttempts < 1 {
+			maxAttempts = 1
+		}
+		s.geometryMaxAttempts = maxAttempts
+	}
 }
 
 // New 创建识别服务实例。
-func New(db *gorm.DB, store storage.FileStorage, prov provider.Provider, log *logger.Logger) *Service {
-	return &Service{db: db, storage: store, prov: prov, log: log}
+func New(db *gorm.DB, store storage.FileStorage, prov provider.Provider, log *logger.Logger, opts ...Option) *Service {
+	s := &Service{db: db, storage: store, prov: prov, log: log, geometryMaxAttempts: 3}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // CreateTask 创建识别任务并异步执行。
@@ -107,6 +141,7 @@ func (s *Service) RetryTask(ctx context.Context, id uint64) error {
 	}
 	task.Status = domain.TaskPending
 	task.Progress = 0
+	task.ProgressText = ""
 	task.ErrorMessage = ""
 	task.RetryCount++
 	if err := s.db.WithContext(ctx).Save(&task).Error; err != nil {
@@ -156,9 +191,10 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	// 序列化结果并标记成功。
 	resultJSON, _ := json.Marshal(result)
 	s.db.Model(&domain.RecognitionTask{}).Where("id = ?", taskID).Updates(map[string]any{
-		"status":      domain.TaskSuccess,
-		"progress":    100,
-		"result_json": string(resultJSON),
+		"status":        domain.TaskSuccess,
+		"progress":      100,
+		"progress_text": "",
+		"result_json":   string(resultJSON),
 	})
 	s.log.Info("recognition task done",
 		zap.Uint64("task_id", taskID),
@@ -166,11 +202,13 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	)
 }
 
-// processImage 处理图片：OCR -> 公式 -> 几何。
-// 手写擦除不再在识别时自动执行，改为用户在前端勾选后调用 /api/recognition/erase 按需触发。
-// 几何图部分：根据模型返回的外接矩形（bounding_box）从原图中裁剪出
-// “只有几何图”的子图，存为 geometry/task_<id>.jpg 并写入 GeometryKeys，
-// 供前端录入错题时关联展示，避免把题干文字整图附在题目后面。
+// processImage 处理图片：整题解析（题干+学科+题型一次 VLM）∥ 几何识别（并发）→ 几何重绘。
+// 优化点：
+//   - 合并原 OCR + 学科/题型分类两次调用为一次 ParseQuestion；
+//   - 几何识别与整题解析并行发起，重叠耗时；
+//   - 每个阶段实时更新 progress_text 并记录耗时日志（便于定位慢点）。
+// 几何重绘直接用原始图片（不再裁剪子图）：数学题且图中含几何图形时，
+// 把题干文本交给 VLM 坐标直出各子图的几何描述，内置渲染器每个子图渲染一张独立 SVG。
 func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey string) (*RecognitionResult, error) {
 	imageData, err := s.storage.Get(ctx, storageKey)
 	if err != nil {
@@ -178,61 +216,209 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	}
 
 	result := &RecognitionResult{}
+	s.updateProgress(taskID, 10, "正在识别题干…")
 
-	// 文本 OCR（关键步骤，失败则任务失败）。
-	textRes, err := s.prov.RecognizeText(ctx, imageData)
-	if err != nil {
-		s.log.Error("ocr failed", zap.String("error", err.Error()))
-		return nil, err
+	// 几何识别与整题解析相互独立 → 并行发起，二者耗时重叠。
+	type geomOut struct {
+		res *provider.GeometryResult
+		err error
 	}
-	result.StemText = textRes.Text
-	// 学科/题型：优先模型识别，失败降级规则。
-	result.Subject, result.QuestionType = s.classifyQuestion(ctx, imageData, result.StemText)
-	s.updateStatus(taskID, domain.TaskProcessing, 40, "")
+	geoCh := make(chan geomOut, 1)
+	go func() {
+		gstart := time.Now()
+		g, gerr := s.prov.RecognizeGeometry(ctx, imageData)
+		s.logStage("geometry-recognize", gstart)
+		geoCh <- geomOut{res: g, err: gerr}
+	}()
 
-	// 公式识别（增强步骤，失败仅记录 warning）。
-	if formulaRes, ferr := s.prov.RecognizeFormula(ctx, imageData); ferr != nil {
-		s.log.Error("formula failed", zap.String("error", ferr.Error()))
-		result.Warning = "公式识别失败：" + ferr.Error()
-	} else {
-		result.Formula = *formulaRes
+	// 整题解析：题干文本 + 学科 + 题型，一次 VLM 调用（关键步骤，失败则任务失败）。
+	parseStart := time.Now()
+	parse, perr := s.prov.ParseQuestion(ctx, imageData)
+	if perr != nil {
+		s.log.Error("parse question failed", zap.String("error", perr.Error()))
+		return nil, perr
 	}
-	s.updateStatus(taskID, domain.TaskProcessing, 60, "")
+	s.logStage("parse-question", parseStart)
 
-	// 几何图形识别（增强步骤，失败仅记录 warning）。
-	var geoBBox *provider.BoundingBox
-	if geoRes, gerr := s.prov.RecognizeGeometry(ctx, imageData); gerr != nil {
-		s.log.Error("geometry failed", zap.String("error", gerr.Error()))
+	result.StemText = parse.Text
+	result.Subject = parse.Subject
+	result.QuestionType = parse.QuestionType
+	// 模型未给出学科/题型时降级为规则判断（不再额外调 VLM）。
+	if result.Subject == "" {
+		result.Subject = detectSubject(result.StemText)
+	}
+	if result.QuestionType == "" {
+		result.QuestionType = detectQuestionType(result.StemText)
+	}
+	s.updateProgress(taskID, 40, "正在识别几何图形…")
+
+	// 接收并发几何识别的结果（增强步骤，失败仅记录 warning）。
+	// 模型返回 bounding_box 即认为图中含几何图形，用于决定是否触发重绘。
+	hasGeometry := false
+	var geomBBox *provider.BoundingBox
+	if gout := <-geoCh; gout.err != nil {
+		s.log.Error("geometry failed", zap.String("error", gout.err.Error()))
 		if result.Warning != "" {
 			result.Warning += "；"
 		}
-		result.Warning += "几何识别失败：" + gerr.Error()
+		result.Warning += "几何识别失败：" + gout.err.Error()
 	} else {
-		result.Geometry = *geoRes
-		geoBBox = geoRes.BoundingBox
+		result.Geometry = *gout.res
+		geomBBox = gout.res.BoundingBox
+		hasGeometry = geomBBox != nil
 	}
-	s.updateStatus(taskID, domain.TaskProcessing, 80, "")
+	s.updateProgress(taskID, 60, "识别完成")
 
-	// 单图场景：根据几何图形外接矩形裁剪出“只有几何图”的子图存储。
-	// 无有效 bbox 时不附加任何图（不再把整张原图当作几何图）。
-	if geoBBox != nil {
-		if cropped, err := cropGeometryImage(imageData, geoBBox); err != nil {
-			s.log.Error("crop geometry image failed", zap.String("error", err.Error()))
+	// 几何重绘（增强步骤，失败仅记录 warning）：
+	// 数学题 + 图中含几何图形时，对原始图片按 bbox 裁出几何区域并下采样成小图，
+	// 作为 VLM 几何描述提取的输入（不落库），以大幅减少 vision token、缩短耗时。
+	if s.geometryRender && result.Subject == "数学" && hasGeometry {
+		redrawStart := time.Now()
+		if rerr := s.redrawGeometry(ctx, taskID, imageData, geomBBox, result); rerr != nil {
+			s.log.Error("geometry redraw failed", zap.String("error", rerr.Error()))
 			if result.Warning != "" {
 				result.Warning += "；"
 			}
-			result.Warning += "几何图裁剪失败：" + err.Error()
+			result.Warning += "几何重绘失败：" + rerr.Error()
 		} else {
-			key := geometryKey(taskID)
-			if err := s.storage.Put(ctx, key, cropped); err != nil {
-				s.log.Error("store geometry image failed", zap.String("error", err.Error()))
-			} else {
-				result.GeometryKeys = []string{key}
-			}
+			s.logStage("geometry-redraw", redrawStart)
 		}
 	}
 
 	return result, nil
+}
+
+// updateProgress 更新任务进度与当前阶段文案（前端展示"正在做什么"）。
+func (s *Service) updateProgress(taskID uint64, progress int, text string) {
+	s.db.Model(&domain.RecognitionTask{}).Where("id = ?", taskID).Updates(map[string]any{
+		"status":        domain.TaskProcessing,
+		"progress":      progress,
+		"progress_text": text,
+		"error_message": "",
+	})
+}
+
+// logStage 记录单个 VLM 阶段的耗时（用于定位慢点）。
+func (s *Service) logStage(stage string, start time.Time) {
+	s.log.Info("recognition stage",
+		zap.String("stage", stage), zap.Int64("ms", time.Since(start).Milliseconds()))
+}
+
+// redrawGeometry 执行几何重绘：几何描述提取（含结构校验失败回喂修正回路）
+// → 内置 Go 渲染器逐子图渲染 SVG → 存储。
+// imageData 为原始图片字节；bbox 为几何识别返回的图形区域，用于把 VLM 提取的
+// 输入从整张原图裁成几何区域小图（不落库、不改产物），显著降低 vision token。
+// result.StemText 为题干文本；每个子图（panel）各自存储独立 key。
+func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData []byte, bbox *provider.BoundingBox, result *RecognitionResult) error {
+	// provider 需支持几何描述提取能力（mock/aliyun 均已实现）。
+	extractor, ok := s.prov.(provider.GeometrySpecExtractor)
+	if !ok {
+		return nil
+	}
+
+	// 提取的 VLM 输入：优先使用几何区域小图（输入瘦身）；失败则回退整张原图。
+	extractImage := imageData
+	if bbox != nil {
+		if small, cerr := cropAndScaleRegion(imageData, bbox, geometryRegionMaxDim); cerr == nil {
+			extractImage = small
+			s.log.Info("geometry extract input shrunk",
+				zap.Uint64("task_id", taskID),
+				zap.Int("src_bytes", len(imageData)), zap.Int("region_bytes", len(small)))
+		} else {
+			s.log.Warn("geometry region prep failed, fallback to full image",
+				zap.Uint64("task_id", taskID), zap.String("error", cerr.Error()))
+		}
+	}
+
+	var panels []geom.PanelResult
+	var lastErr error
+	correction := ""
+	attempts := 0
+	for attempt := 1; attempt <= s.geometryMaxAttempts; attempt++ {
+		attempts = attempt
+		// 重绘轮次可能较久（VLM 提取几何描述），实时更新进度文案让用户感知。
+		p := 80 + (attempt-1)*8
+		if p > 94 {
+			p = 94
+		}
+		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘几何图形（第 %d 次尝试）…", attempt))
+		spec, eerr := extractor.ExtractGeometrySpec(ctx, extractImage, result.StemText, correction)
+		if eerr != nil {
+			lastErr = eerr
+			s.log.Warn("geometry spec extract failed", zap.Int("attempt", attempt), zap.String("error", eerr.Error()))
+			continue
+		}
+		panels, lastErr = geom.RenderPanels(spec)
+		if lastErr != nil {
+			s.log.Warn("geometry render failed", zap.Int("attempt", attempt),
+				zap.String("error", lastErr.Error()), zap.String("spec", truncate(spec, 512)))
+			correction = fmt.Sprintf("上一轮输出的 JSON 无法解析或渲染（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", lastErr)
+			continue
+		}
+		// 结构校验（点引用完整性、坐标有限性、图元字段完备性等）替代原残差判据。
+		issues := geom.CollectIssues(panels)
+		if len(issues) == 0 {
+			break // 结构完整，提前结束。
+		}
+		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempt), zap.Strings("issues", issues))
+		correction = formatValidateIssues(issues)
+	}
+
+	if panels == nil {
+		if lastErr != nil {
+			return lastErr
+		}
+		return errors.New(errors.CodeUpstream, "geometry redraw produced no result")
+	}
+
+	// 逐子图存储独立 SVG。即使仍有少量结构问题也输出已渲染结果，同时提示告警。
+	keys := make([]string, 0, len(panels))
+	for i, panel := range panels {
+		key := geometrySVGKey(taskID, i, len(panels))
+		if err := s.storage.Put(ctx, key, panel.SVG); err != nil {
+			return errors.Wrap(errors.CodeStorageFail, "store redraw svg failed", err)
+		}
+		keys = append(keys, key)
+	}
+	result.RedrawSVGKeys = keys
+
+	consistent := geom.AllConsistent(panels)
+	result.RedrawReport = &RedrawReport{Attempts: attempts, Consistent: consistent}
+	if !consistent {
+		if result.Warning != "" {
+			result.Warning += "；"
+		}
+		result.Warning += "几何重绘描述存在结构问题（已输出可渲染部分），图形仅供参考"
+	}
+	s.log.Info("geometry redraw done", zap.Uint64("task_id", taskID),
+		zap.Int("svg_count", len(keys)), zap.Int("attempts", attempts), zap.Bool("consistent", consistent))
+	return nil
+}
+
+// truncate 截断字符串用于日志。
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// formatValidateIssues 把几何描述的结构校验问题清单格式化为回喂 VLM 的修正提示。
+func formatValidateIssues(issues []string) string {
+	var sb strings.Builder
+	sb.WriteString("上一轮输出的几何描述 JSON 存在以下结构问题：\n")
+	for i, issue := range issues {
+		if i >= 10 {
+			sb.WriteString("-（其余问题省略）\n")
+			break
+		}
+		sb.WriteString("- ")
+		sb.WriteString(issue)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("常见原因：引用了 points 中不存在的点、线段起止点相同、多边形有效顶点不足 3 个、")
+	sb.WriteString("圆/弧缺少有效半径、canvas 尺寸非法。请修正后重新输出完整 JSON。")
+	return sb.String()
 }
 
 // processDocument 处理 word/pdf 文档：解析文本+图片，拆分多道题，图片走 OCR。
@@ -276,39 +462,13 @@ func (s *Service) updateStatus(taskID uint64, status string, progress int, errMs
 	})
 }
 
-// EraseHandwriting 读取指定 storage key 的几何图子图，调用 provider 擦除手写，
-// 将擦除结果写入 erased/ 前缀新 key 并返回。
-func (s *Service) EraseHandwriting(ctx context.Context, key string) (string, error) {
-	data, err := s.storage.Get(ctx, key)
-	if err != nil {
-		return "", errors.Wrap(errors.CodeNotFound, "image not found", err)
+// geometrySVGKey 生成几何重绘 SVG 的存储 key。
+// 单张原图只含一个子图时用 task_<id>.svg；含多个子图时用 task_<id>_<i>.svg（i 从 1 开始）。
+func geometrySVGKey(taskID uint64, index, total int) string {
+	if total <= 1 {
+		return "geometry/task_" + itoa(taskID) + ".svg"
 	}
-
-	// wanx 要求输入图宽高落在 [512, 4096]，几何图子图可能超界，先等比缩放兜底。
-	data, err = ensureWanSize(data)
-	if err != nil {
-		return "", errors.Wrap(errors.CodeInvalidArgument, "invalid image", err)
-	}
-
-	eraseRes, err := s.prov.EraseHandwriting(ctx, data)
-	if err != nil {
-		// 直接透传 wanx 错误 message（如 "wanx submit status 400: ..."），便于前端排查。
-		return "", errors.Wrap(errors.CodeUpstream, err.Error(), err)
-	}
-	if eraseRes == nil || len(eraseRes.ImageData) == 0 {
-		return "", errors.New(errors.CodeUpstream, "erase returned empty image")
-	}
-
-	newKey := "erased/" + strconv.FormatInt(time.Now().UnixNano(), 10) + ".jpg"
-	if err := s.storage.Put(ctx, newKey, eraseRes.ImageData); err != nil {
-		return "", errors.Wrap(errors.CodeStorageFail, "store erased image failed", err)
-	}
-	return newKey, nil
-}
-
-// geometryKey 生成单图场景下几何图（原图或擦除后的图）的存储 key。
-func geometryKey(taskID uint64) string {
-	return "geometry/task_" + itoa(taskID) + ".jpg"
+	return "geometry/task_" + itoa(taskID) + "_" + itoa(uint64(index+1)) + ".svg"
 }
 
 func itoa(n uint64) string {
@@ -383,11 +543,6 @@ func detectSubject(stem string) string {
 }
 
 // classifyQuestion 判断题目学科与题型：优先调用识别模型，失败时降级为规则判断。
-func (s *Service) classifyQuestion(ctx context.Context, image []byte, stem string) (string, string) {
-	if cls, err := s.prov.ClassifyQuestion(ctx, image); err == nil && cls != nil {
-		if cls.Subject != "" && cls.QuestionType != "" {
-			return cls.Subject, cls.QuestionType
-		}
-	}
-	return detectSubject(stem), detectQuestionType(stem)
-}
+// fillClassify 学科/题型降级规则：模型整题解析未给出时按题干文本启发式判断。
+// （合并进单次 ParseQuestion 后不再单独调 VLM 做分类。）
+

@@ -15,12 +15,28 @@ storage:
   root: "${STORAGE_ROOT:-./data}"  # 本地存储根目录
 
 recognition:
-  provider: "${RECOGNITION_PROVIDER:-mock}"  # mock / aliyun
+  provider: "${RECOGNITION_PROVIDER:-mock}"  # mock / aliyun / zhipu
   aliyun:
     # 方案 B：识别统一使用通义千问-VL（DashScope），只需 API Key。
     dash_key: "${ALIYUN_DASH_KEY:-${DASHSCOPE_API_KEY:-}}"
-    dash_model: "${ALIYUN_DASH_MODEL:-qwen-vl-max}"
-    dash_endpoint: "${ALIYUN_DASH_ENDPOINT:-}"  # 留空使用官方 OpenAI 兼容端点
+    dash_model: "${ALIYUN_DASH_MODEL:-qwen3.8-flash}"  # token-plan 套餐可用：qwen3.8-flash/qwen3.8-max/glm-5.2/qwen3.7-max 等
+    dash_endpoint: "${ALIYUN_DASH_ENDPOINT:-}"  # 留空使用 token-plan 地址 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
     # 手写擦除：通义万相图像编辑。
     wanx_model: "${ALIYUN_WANX_MODEL:-wanx2.1-imageedit}"
     wanx_endpoint: "${ALIYUN_WANX_ENDPOINT:-}"  # 留空使用官方地址 https://dashscope.aliyuncs.com/api/v1
+  zhipu:
+    # 智谱开放平台（GLM 系列，OpenAI 兼容接口）。
+    api_key: "${ZHIPU_API_KEY:-${GLM_API_KEY:-}}"
+    model: "${ZHIPU_MODEL:-glm-5.3-flash}"
+    endpoint: "${ZHIPU_ENDPOINT:-}"  # 留空使用 https://open.bigmodel.cn/api/paas/v4/chat/completions
+    max_tokens: "${ZHIPU_MAX_TOKENS:-8192}"
+    # 思考强度 low/high/max；off 表示不下发该参数（用于不支持该参数的模型）。
+    reasoning_effort: "${ZHIPU_REASONING_EFFORT:-low}"
+
+geometry:
+  # 几何重绘开关：启用时由服务内置的 Go 渲染器（internal/geom）完成
+  # "VLM 坐标直出 + 文字避让 + 手写 SVG"，不依赖外部渲染服务。
+  # 旧的 Python sidecar（apps/geometry-sidecar）已停用，源码保留以便回滚。
+  enabled: "${GEOMETRY_ENABLED:-false}"
+  # 结构校验失败回喂 VLM 修正的最大轮数（提取→渲染→修正）。
+  max_attempts: "${GEOMETRY_MAX_ATTEMPTS:-3}"

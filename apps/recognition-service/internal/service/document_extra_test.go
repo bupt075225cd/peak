@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"image"
-	"image/color"
 	"testing"
 	"time"
 
@@ -161,34 +159,4 @@ func TestStoreDocumentImages(t *testing.T) {
 	}
 }
 
-// nonSubImage 不实现 SubImage 的 image 类型，用于覆盖 cropRect 兜底分支。
-type nonSubImage struct {
-	img *image.RGBA
-}
 
-func (n *nonSubImage) ColorModel() color.Model { return n.img.ColorModel() }
-func (n *nonSubImage) Bounds() image.Rectangle { return n.img.Bounds() }
-func (n *nonSubImage) At(x, y int) color.Color { return n.img.At(x, y) }
-
-func TestCropRectFallback(t *testing.T) {
-	src := &nonSubImage{img: image.NewRGBA(image.Rect(0, 0, 10, 10))}
-	out := cropRect(src, image.Rect(2, 2, 5, 5))
-	if out == nil {
-		t.Fatal("expected non-nil crop")
-	}
-	if w, h := out.Bounds().Dx(), out.Bounds().Dy(); w != 3 || h != 3 {
-		t.Fatalf("unexpected crop size: %dx%d", w, h)
-	}
-}
-
-func TestClampInt(t *testing.T) {
-	if clampInt(5, 0, 10) != 5 {
-		t.Fatal("expected 5")
-	}
-	if clampInt(-1, 0, 10) != 0 {
-		t.Fatal("expected lower clamp 0")
-	}
-	if clampInt(11, 0, 10) != 10 {
-		t.Fatal("expected upper clamp 10")
-	}
-}

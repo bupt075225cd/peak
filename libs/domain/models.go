@@ -93,6 +93,7 @@ type RecognitionTask struct {
 	ImageID      uint64         `gorm:"index" json:"image_id"`
 	Status       string         `gorm:"size:32;index" json:"status"` // pending/processing/success/failed
 	Progress     int            `gorm:"default:0" json:"progress"`   // 0-100
+	ProgressText string         `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
 	ResultJSON   string         `gorm:"type:json" json:"result_json"`
 	ErrorMessage string         `gorm:"size:512" json:"error_message"`
 	Provider     string         `gorm:"size:32" json:"provider"`

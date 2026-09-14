@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/jpeg"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -87,68 +84,6 @@ func TestCreateTask(t *testing.T) {
 	}
 	if resp.Data.Provider != "mock" {
 		t.Fatalf("expected provider mock, got %s", resp.Data.Provider)
-	}
-}
-
-// uploadFileRequest 以 file 字段上传任意图片（手动裁剪几何图后上传）。
-func uploadFileRequest(t *testing.T, r *gin.Engine, filename string, content []byte) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, err := mw.CreateFormFile("file", filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fw.Write(content); err != nil {
-		t.Fatal(err)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/files", &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
-}
-
-func TestUploadFile(t *testing.T) {
-	r, _, store := setupHandler(t)
-	w := uploadFileRequest(t, r, "geo.jpg", []byte("fake-geometry-bytes"))
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Data struct {
-			Key string `json:"key"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.Data.Key == "" {
-		t.Fatal("expected storage key")
-	}
-	// 验证存储中确有该文件。
-	data, err := store.Get(context.Background(), resp.Data.Key)
-	if err != nil {
-		t.Fatalf("get uploaded file: %v", err)
-	}
-	if string(data) != "fake-geometry-bytes" {
-		t.Fatalf("unexpected stored content: %q", string(data))
-	}
-}
-
-func TestUploadFileMissing(t *testing.T) {
-	r, _, _ := setupHandler(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/files", bytes.NewBufferString(""))
-	req.Header.Set("Content-Type", "multipart/form-data")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -315,96 +250,4 @@ func TestGetFileNotFound(t *testing.T) {
 	}
 }
 
-func TestUploadFileEmpty(t *testing.T) {
-	r, _, _ := setupHandler(t)
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, err := mw.CreateFormFile("file", "empty.jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 写入 0 字节内容。
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_ = fw
 
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/files", &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for empty file, got %d", w.Code)
-	}
-}
-
-// makeJPEG 生成一张 800x600 的纯色 JPEG，供擦除端点测试（ensureMinSize 需要合法图片）。
-func makeJPEG(t *testing.T) []byte {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, 800, 600))
-	for y := 0; y < 600; y++ {
-		for x := 0; x < 800; x++ {
-			img.Set(x, y, color.RGBA{R: 200, G: 200, B: 200, A: 255})
-		}
-	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, nil); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
-func TestErase(t *testing.T) {
-	r, _, store := setupHandler(t)
-	ctx := context.Background()
-
-	key := "geometry/geo.jpg"
-	if err := store.Put(ctx, key, makeJPEG(t)); err != nil {
-		t.Fatalf("put: %v", err)
-	}
-
-	body, _ := json.Marshal(map[string]string{"key": key})
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Data struct {
-			Key string `json:"key"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.Data.Key == "" {
-		t.Fatal("expected erased key")
-	}
-}
-
-func TestEraseEmptyKey(t *testing.T) {
-	r, _, _ := setupHandler(t)
-	body, _ := json.Marshal(map[string]string{"key": ""})
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestEraseMissingImage(t *testing.T) {
-	r, _, _ := setupHandler(t)
-	body, _ := json.Marshal(map[string]string{"key": "missing/key.jpg"})
-	req := httptest.NewRequest(http.MethodPost, "/api/recognition/erase", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d body=%s", w.Code, w.Body.String())
-	}
-}

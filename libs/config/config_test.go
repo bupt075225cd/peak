@@ -224,3 +224,67 @@ func TestGetNonMapPath(t *testing.T) {
 		t.Fatalf("expected nil, got %v", got)
 	}
 }
+
+func TestExpandEnvNested(t *testing.T) {
+	// 嵌套回退写法：A 未设置时回退到 B。
+	// 注意占位符在 Load 时即展开，因此先设置环境变量再加载配置（与真实启动顺序一致）。
+	t.Setenv("NESTED_B", "from-b")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested.yaml")
+	content := "key: \"${NESTED_A:-${NESTED_B:-}}\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.String("key", ""); got != "from-b" {
+		t.Fatalf("expected fallback to NESTED_B, got %q", got)
+	}
+
+	// A 与 B 同时设置时 A 优先（占位符在 Load 时展开，需重新加载）。
+	t.Setenv("NESTED_A", "from-a")
+	cfg2, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg2.String("key", ""); got != "from-a" {
+		t.Fatalf("expected NESTED_A to take precedence, got %q", got)
+	}
+}
+
+func TestStringCoercedIntAndBool(t *testing.T) {
+	// 形如 "${VAR:-true}" 的占位符展开后是字符串，Int/Bool 必须能解析字符串值，
+	// 否则环境变量形式的数字/布尔配置（如 GEOMETRY_ENABLED）不生效。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "coerce.yaml")
+	content := "enabled: \"${FLAG:-true}\"\n" +
+		"attempts: \"${COUNT:-3}\"\n" +
+		"native_bool: true\n" +
+		"native_int: 42\n" +
+		"bad_bool: \"not-a-bool\"\n" +
+		"bad_int: \"abc\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Bool("enabled", false) {
+		t.Fatal("expected string \"true\" to coerce to true")
+	}
+	if got := cfg.Int("attempts", 0); got != 3 {
+		t.Fatalf("expected string \"3\" to coerce to 3, got %d", got)
+	}
+	if !cfg.Bool("native_bool", false) || cfg.Int("native_int", 0) != 42 {
+		t.Fatal("native yaml types should keep working")
+	}
+	if cfg.Bool("bad_bool", true) != true {
+		t.Fatal("unparsable bool should fall back to default")
+	}
+	if got := cfg.Int("bad_int", 7); got != 7 {
+		t.Fatalf("unparsable int should fall back to default, got %d", got)
+	}
+}

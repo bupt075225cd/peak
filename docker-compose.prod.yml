@@ -87,7 +87,15 @@ services:
       ALIYUN_ACCESS_SECRET: ${ALIYUN_ACCESS_SECRET:-}
       ALIYUN_OCR_ENDPOINT: ${ALIYUN_OCR_ENDPOINT:-}
       ALIYUN_DASH_KEY: ${ALIYUN_DASH_KEY:-}
-      ALIYUN_DASH_MODEL: ${ALIYUN_DASH_MODEL:-qwen-vl-max}
+      ALIYUN_DASH_MODEL: ${ALIYUN_DASH_MODEL:-qwen3.8-flash}
+      # 智谱开放平台（RECOGNITION_PROVIDER=zhipu 时使用）。
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+      ZHIPU_MODEL: ${ZHIPU_MODEL:-glm-5.3-flash}
+      ZHIPU_REASONING_EFFORT: ${ZHIPU_REASONING_EFFORT:-low}
+      # 几何重绘由服务内置的 Go 渲染器完成（VLM 坐标直出 + 文字避让 + 手写 SVG），
+      # 不再依赖外部渲染服务；旧 Python sidecar（apps/geometry-sidecar）已停用。
+      GEOMETRY_ENABLED: "true"
+      GEOMETRY_MAX_ATTEMPTS: ${GEOMETRY_MAX_ATTEMPTS:-3}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     volumes:
       - recognition-data:/data

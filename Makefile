@@ -30,6 +30,8 @@ RECOGNITION_DIR := $(CURDIR)/apps/recognition-service
 GATEWAY_DIR := $(CURDIR)/apps/gateway
 # recognition-service 默认用 aliyun provider，可覆盖：make run-sqlite RECOGNITION_PROVIDER=mock
 RECOGNITION_PROVIDER ?= aliyun
+# 几何重绘开关（内置 Go 渲染器，置空禁用：make run-sqlite GEOMETRY_ENABLED=false）
+GEOMETRY_ENABLED ?= true
 
 ## 静态检查：Go vet + 前端 vue-tsc 类型检查
 check:
@@ -124,7 +126,7 @@ run-sqlite:
 	go build -o $(PEAK_BIN)/recognition-service ./apps/recognition-service
 	@echo "==> 启动服务（sqlite 空库）"
 	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
-	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
+	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
 	cd $(GATEWAY_DIR) && exec nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
 	@sleep 2
 	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082"

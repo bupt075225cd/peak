@@ -74,9 +74,9 @@ const structuredPrompt = `你是数学试卷结构化解析器。请将下面的
 
 // ExtractStructured 三步走实现：
 //  1. docparse.Parse 抽取文本与内嵌图片；
-//  2. 逐张内嵌图片调用千问-VL 做 OCR（提取文字 + 几何描述）；
-//  3. 将文本项与图片 OCR 结果按顺序拼接成索引化文本，再调用一次千问-VL 做结构化拆题。
-func (a *AliyunProvider) ExtractStructured(ctx context.Context, data []byte, filename string) (*StructuredResult, error) {
+//  2. 逐张内嵌图片调用多模态大模型做 OCR（提取文字 + 几何描述）；
+//  3. 将文本项与图片 OCR 结果按顺序拼接成索引化文本，再调用一次大模型做结构化拆题。
+func (v *vlmCapabilities) ExtractStructured(ctx context.Context, data []byte, filename string) (*StructuredResult, error) {
 	res, err := docparse.Parse(data, filename)
 	if err != nil {
 		return nil, err
@@ -95,7 +95,7 @@ func (a *AliyunProvider) ExtractStructured(ctx context.Context, data []byte, fil
 			imgIndex++
 			images = append(images, it.Image)
 			// 对图片 OCR，提取文字 + 几何描述。
-			ocrText, geoText := a.ocrImageWithGeometry(ctx, it.Image)
+			ocrText, geoText := v.ocrImageWithGeometry(ctx, it.Image)
 			// 始终写入 [图N] 标记（即使 OCR 为空），便于模型定位图片位置。
 			sb.WriteString(fmt.Sprintf("[图%d]\n", imgIndex))
 			if ocrText != "" {
@@ -112,8 +112,8 @@ func (a *AliyunProvider) ExtractStructured(ctx context.Context, data []byte, fil
 		return nil, fmt.Errorf("document contains no extractable content")
 	}
 
-	// 第三步：调用千问-VL 做结构化拆题。
-	out, err := a.dash.chatTextOnly(ctx, structuredPrompt+"\n\n文档内容：\n"+rawText)
+	// 第三步：调用多模态大模型做结构化拆题。
+	out, err := v.dash.chatTextOnly(ctx, structuredPrompt+"\n\n文档内容：\n"+rawText)
 	if err != nil {
 		return nil, fmt.Errorf("structured split: %w", err)
 	}
@@ -134,14 +134,14 @@ func (a *AliyunProvider) ExtractStructured(ctx context.Context, data []byte, fil
 	return &StructuredResult{Items: items, PageCount: res.PageCount, Images: images}, nil
 }
 
-// ocrImageWithGeometry 对单张图片调用千问-VL，返回图片内文字与该图几何描述。
-func (a *AliyunProvider) ocrImageWithGeometry(ctx context.Context, image []byte) (string, string) {
+// ocrImageWithGeometry 对单张图片调用多模态大模型，返回图片内文字与该图几何描述。
+func (v *vlmCapabilities) ocrImageWithGeometry(ctx context.Context, image []byte) (string, string) {
 	prompt := `请识别图片中的全部文字，并判断是否包含几何图形。
 若包含几何图形，简要描述图形结构（如“三角形ABC，AB//CD，∠EOF=100°”）。
 按如下两行输出（无则留空）：
 文字：<图片中的文字>
 几何：<几何图形描述，无则留空>`
-	out, err := a.dash.chat(ctx, prompt, image)
+	out, err := v.dash.chat(ctx, prompt, image)
 	if err != nil {
 		return "", ""
 	}
@@ -185,12 +185,6 @@ func parseStructured(out string) ([]StructuredItem, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-// chatTextOnly 纯文本调用千问-VL（无图片），复用 DashScope 客户端。
-func (d *DashScopeClient) chatTextOnly(ctx context.Context, prompt string) (string, error) {
-	// 复用现有 chat 能力：无图片时传 nil，由 chat 内部跳过 image part。
-	return d.chat(ctx, prompt, nil)
 }
 
 // questionNoRe 题号前缀正则（provider 包内 mock 与兜底使用）。

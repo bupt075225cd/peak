@@ -40,12 +40,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/tasks/:id", h.getTask)
 		api.POST("/tasks/:id/retry", h.retryTask)
 		api.GET("/files/*key", h.getFile)
-		api.POST("/files", h.uploadFile)
-		api.POST("/erase", h.erase)
 	}
 }
 
-// getFile 按存储 key 读取文件（擦除图、文档内嵌图等），返回原始字节。
+// getFile 按存储 key 读取文件（几何重绘 SVG、文档内嵌图等），返回原始字节。
 func (h *Handler) getFile(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" {
@@ -57,60 +55,21 @@ func (h *Handler) getFile(c *gin.Context) {
 		httpx.Fail(c, errors.Wrap(errors.CodeNotFound, "file not found", err))
 		return
 	}
-	c.Data(200, "image/jpeg", data)
+	c.Data(200, mimeByExt(key), data)
 }
 
-// uploadFile 上传任意图片字节（供前端手动裁剪几何图后上传），返回 storage key。
-// 不创建识别任务，仅存储文件，便于录入错题时关联。
-func (h *Handler) uploadFile(c *gin.Context) {
-	file, err := c.FormFile("file")
-	if err != nil {
-		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "file is required"))
-		return
+// mimeByExt 按扩展名返回响应 Content-Type（几何重绘产物为 SVG）。
+func mimeByExt(key string) string {
+	switch strings.ToLower(filepath.Ext(key)) {
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		return "image/jpeg"
 	}
-	src, err := file.Open()
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	defer src.Close()
-
-	data, err := io.ReadAll(src)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	if len(data) == 0 {
-		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "empty file"))
-		return
-	}
-
-	key := "geometry/" + strconv.FormatInt(time.Now().UnixNano(), 10) + "_" + filepath.Base(file.Filename)
-	if err := h.storage.Put(c.Request.Context(), key, data); err != nil {
-		httpx.Fail(c, errors.Wrap(errors.CodeStorageFail, "store file failed", err))
-		return
-	}
-
-	httpx.OK(c, gin.H{"key": key})
-}
-
-// erase 处理 POST /api/recognition/erase，请求体 {"key":"geometry/xxx.jpg"}，
-// 对指定几何图子图执行 AI 手写擦除，返回擦除后图片的 storage key {"key":"erased/<ts>.jpg"}。
-func (h *Handler) erase(c *gin.Context) {
-	var req struct {
-		Key string `json:"key"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
-		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "key is required"))
-		return
-	}
-
-	newKey, err := h.svc.EraseHandwriting(c.Request.Context(), req.Key)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, gin.H{"key": newKey})
 }
 
 // createTask 接收图片或文档上传，保存文件并创建识别任务。

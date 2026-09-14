@@ -25,10 +25,11 @@ func (m *MockProvider) RecognizeText(_ context.Context, image []byte) (*TextResu
 	}, nil
 }
 
-func (m *MockProvider) RecognizeFormula(_ context.Context, image []byte) (*FormulaResult, error) {
-	return &FormulaResult{
-		LaTeX:   "x^2 + y^2 = r^2",
-		RawText: fmt.Sprintf("mock formula (%d bytes)", len(image)),
+func (m *MockProvider) ParseQuestion(_ context.Context, image []byte) (*QuestionParseResult, error) {
+	return &QuestionParseResult{
+		Text:         fmt.Sprintf("mock stem text (%d bytes)", len(image)),
+		Subject:      "数学",
+		QuestionType: "解答题",
 	}, nil
 }
 
@@ -47,9 +48,39 @@ func (m *MockProvider) RecognizeGeometry(_ context.Context, image []byte) (*Geom
 	}, nil
 }
 
-// ClassifyQuestion mock 实现：返回固定分类，便于流程测试。
-func (m *MockProvider) ClassifyQuestion(_ context.Context, image []byte) (*QuestionClassifyResult, error) {
-	return &QuestionClassifyResult{Subject: "数学", QuestionType: "解答题"}, nil
+// mockGeometrySpec 无外部依赖的完整坐标直出 spec（直角三角形 + 圆），
+// 覆盖 segments/polygons/circles/arcs/right_angles/angle_marks/ticks/parallels/labels
+// 全部图元，配合内置 Go 渲染器可端到端跑通"提取 → 校验 → SVG 渲染"链路。
+const mockGeometrySpec = `{
+  "title": "mock 几何重绘",
+  "canvas": {"width": 100, "height": 80},
+  "points": [
+    {"name": "A", "x": 12, "y": 62},
+    {"name": "B", "x": 88, "y": 62},
+    {"name": "C", "x": 50, "y": 20},
+    {"name": "O", "x": 50, "y": 62},
+    {"name": "P", "x": 50, "y": 10}
+  ],
+  "segments": [
+    {"from": "A", "to": "B"},
+    {"from": "A", "to": "C"},
+    {"from": "B", "to": "C"},
+    {"from": "C", "to": "P", "extend": true, "dashed": true}
+  ],
+  "polygons": [{"points": ["A", "B", "C"], "fill": false}],
+  "circles": [{"center": "O", "through": "A"}],
+  "arcs": [{"center": "C", "radius": 10, "start_angle": 200, "end_angle": 340}],
+  "right_angles": [{"vertex": "C", "a": "A", "b": "B"}],
+  "angle_marks": [{"vertex": "A", "a": "B", "b": "C", "count": 1}],
+  "ticks": [{"from": "A", "to": "C", "count": 1}],
+  "parallels": [{"from": "A", "to": "B", "count": 1}],
+  "labels": [{"x": 50, "y": 74, "text": "AB=AC", "anchor": "middle"}]
+}`
+
+// ExtractGeometrySpec mock 实现：返回固定的合法几何描述 spec，
+// 使无密钥环境也能端到端验证几何重绘链路。
+func (m *MockProvider) ExtractGeometrySpec(_ context.Context, _ []byte, _, _ string) (string, error) {
+	return mockGeometrySpec, nil
 }
 
 // ExtractDocument mock 实现：本地解析文档（无需第三方），返回文本与内嵌图片。
