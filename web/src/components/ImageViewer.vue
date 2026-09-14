@@ -177,8 +177,11 @@ function onBackdropClick(e: MouseEvent) {
   text-align: center;
 }
 .image-viewer-img {
-  max-width: 90vw;
-  max-height: 90vh;
+  /* 适配屏幕：等比缩放到可视区内（contain）。
+     小图（如几何 SVG，固有尺寸仅约 100x70）会被放大铺满可视区，
+     大图（如原题照片）等比缩小，均无需手动多次缩放。 */
+  width: 90vw;
+  height: 90vh;
   object-fit: contain;
   transition: transform 0.05s linear;
   transform-origin: center center;

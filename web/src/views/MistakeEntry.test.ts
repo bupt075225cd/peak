@@ -107,8 +107,8 @@ describe('MistakeEntry.vue', () => {
     // 题干在 textarea 内，需用 .value 读取
     const ta = wrapper.find('textarea')
     expect((ta.element as HTMLTextAreaElement).value).toBe('已知函数 f(x)=x')
-    // 公式由 KaTeX 渲染为 HTML，断言渲染产物的 class 存在即可（无需依赖具体文本节点）。
-    expect(wrapper.html()).toContain('katex')
+    // 页面不再展示"识别公式"区块。
+    expect(wrapper.text()).not.toContain('识别公式')
     // 学科、题型由识别结果自动回填并只读展示
     expect(wrapper.text()).toContain('物理')
     expect(wrapper.text()).toContain('选择题')
@@ -369,166 +369,121 @@ describe('MistakeEntry.vue', () => {
     expect(httpMethods.post).toHaveBeenCalledWith('/recognition/tasks/4/retry')
   })
 
-  it('裁剪上传失败时弹窗保持打开并显示错误，不静默关闭', async () => {
-    const router = buildRouter()
-    router.push('/entry')
-    await router.isReady()
-    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
-    await flushPromises()
-
-    // 先完成一次识别，让 previewUrl 有值（"重新框选"按钮才会显示）。
-    const task: RecognitionTask = {
-      id: 5,
-      image_id: 1,
-      status: 'success',
-      progress: 100,
-      provider: 'mock',
-      result_json: JSON.stringify({
-        stem_text: '几何题',
-        formula: { latex: '', raw_text: '' },
-        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
-        geometry_keys: ['geometry/task_5.jpg'],
-      }),
-    }
+  // 识别上传的公共准备：先返回 pending，随后轮询到给定 success 结果。
+  async function recognizeWithResult(wrapper: ReturnType<typeof mount>, task: RecognitionTask) {
     httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
     httpMethods.get.mockResolvedValue(ok(task))
-
     const file = new File(['x'], 'a.png', { type: 'image/png' })
     const input = wrapper.find('input[type="file"]')
     Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
     await input.trigger('change')
     await vi.runAllTimersAsync()
     await flushPromises()
-    // 初始几何图是识别自动带出的旧值。
-    expect(wrapper.text()).toContain('几何图形')
+  }
 
-    // 点击「重新框选」打开裁剪弹窗。
-    const recropBtn = wrapper.findAll('button').find((b) => b.text().includes('重新框选'))!
-    await recropBtn.trigger('click')
+  function mathGeoResult(id: number, extra: Record<string, unknown> = {}): RecognitionTask {
+    return {
+      id,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '几何题',
+        subject: '数学',
+        question_type: '解答题',
+        formula: { latex: '', raw_text: '' },
+        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
+        geometry_keys: [`geometry/task_${id}.jpg`],
+        ...extra,
+      }),
+    }
+  }
+
+  it('数学题含多个几何子图时逐张展示重绘 SVG（每子图一张，无手动操作入口）', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    // 裁剪上传失败：POST /recognition/files 拒绝。
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    httpMethods.post.mockRejectedValueOnce(new Error('upload crop fail'))
+    const task = mathGeoResult(5, {
+      redraw_svg_keys: ['geometry/task_5.svg', 'geometry/task_5_2.svg'],
+      redraw_report: { max_hard: 0.0001, max_soft: 0.01, attempts: 1, consistent: true },
+    })
+    await recognizeWithResult(wrapper, task)
 
-    // 触发 GeometryCropper 的 confirm 事件（模拟用户点击确认裁剪）。
-    const cropper = wrapper.findComponent({ name: 'GeometryCropper' })
-    expect(cropper.exists()).toBe(true)
-    cropper.vm.$emit('confirm', new File(['crop'], 'geometry.jpg', { type: 'image/jpeg' }))
-    await flushPromises()
-    await vi.runAllTimersAsync()
-    await flushPromises()
-
-    // 弹窗保持打开（未 close）。
-    const cropperProps = wrapper.findComponent({ name: 'GeometryCropper' }).props()
-    expect(cropperProps.open).toBe(true)
-    // 错误信息显示在弹窗内。
-    expect(cropperProps.error).toContain('几何图上传失败')
-    // 几何图 key 未被替换（仍是识别自动带出的旧值）。
-    expect(httpMethods.post).not.toHaveBeenCalledWith('/questions', expect.objectContaining({
-      geometry_refs: JSON.stringify(['geometry/task_5.jpg']),
-    }))
-    errSpy.mockRestore()
+    // 每张子图都单独展示。
+    await vi.waitFor(() => {
+      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5.svg')
+      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5_2.svg')
+    })
+    expect(wrapper.text()).toContain('2 张')
+    // 页面不再有手动框选/擦除入口，也不展示原始裁剪图预览。
+    expect(wrapper.text()).not.toContain('重新框选')
+    expect(wrapper.text()).not.toContain('擦除手写')
   })
 
-  it('裁剪上传成功后替换几何图 key 并关闭弹窗', async () => {
+  it('识别结果无重绘 key 时不展示重绘区域，保存 geometry_refs 为空数组', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    const task: RecognitionTask = {
-      id: 6,
-      image_id: 1,
-      status: 'success',
-      progress: 100,
-      provider: 'mock',
-      result_json: JSON.stringify({
-        stem_text: '几何题',
-        formula: { latex: '', raw_text: '' },
-        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
-        geometry_keys: ['geometry/task_6.jpg'],
-      }),
-    }
-    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
-    httpMethods.get.mockResolvedValue(ok(task))
-
-    const file = new File(['x'], 'a.png', { type: 'image/png' })
-    const input = wrapper.find('input[type="file"]')
-    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
-    await input.trigger('change')
-    await vi.runAllTimersAsync()
+    // 未产出重绘（无侧车/非几何）：不含 redraw_svg_keys。
+    const task = mathGeoResult(6)
+    await recognizeWithResult(wrapper, task)
     await flushPromises()
 
-    const recropBtn = wrapper.findAll('button').find((b) => b.text().includes('重新框选'))!
-    await recropBtn.trigger('click')
-    await flushPromises()
+    expect(wrapper.text()).not.toContain('几何图形')
 
-    // 上传成功，返回新 key。
-    httpMethods.post.mockResolvedValueOnce(ok({ key: 'geometry/cropped_123.jpg' }))
-    const cropper = wrapper.findComponent({ name: 'GeometryCropper' })
-    cropper.vm.$emit('confirm', new File(['crop'], 'geometry.jpg', { type: 'image/jpeg' }))
+    const gradeSelect = wrapper.findAll('select')[0]
+    await gradeSelect.setValue('七年级上')
     await flushPromises()
-    await vi.runAllTimersAsync()
-    await flushPromises()
+    httpMethods.post.mockResolvedValueOnce(ok({ id: 42 }))
+    httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 1 } } })
 
-    // 弹窗关闭 + 错误清空。
-    const cropperProps = wrapper.findComponent({ name: 'GeometryCropper' }).props()
-    expect(cropperProps.open).toBe(false)
-    expect(cropperProps.error).toBe('')
+    await getSaveBtn(wrapper).trigger('click')
+    await vi.waitFor(() => {
+      expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
+        geometry_refs: JSON.stringify([]),
+      }))
+    })
   })
 
-  it('点击「擦除手写」调用擦除接口并替换几何图 key', async () => {
+  it('数学题含几何图保存时 geometry_refs 存全部重绘 SVG key', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    const task: RecognitionTask = {
-      id: 10,
-      image_id: 1,
-      status: 'success',
-      progress: 100,
-      provider: 'mock',
-      result_json: JSON.stringify({
-        stem_text: '几何题',
-        formula: { latex: '', raw_text: '' },
-        geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
-        geometry_keys: ['geometry/task_10.jpg'],
-      }),
-    }
-    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
-    httpMethods.get.mockResolvedValue(ok(task))
+    const task = mathGeoResult(7, {
+      redraw_svg_keys: ['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg'],
+      redraw_report: { max_hard: 0.0001, max_soft: 0.01, attempts: 1, consistent: true },
+    })
+    await recognizeWithResult(wrapper, task)
+    await vi.waitFor(() => {
+      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_7_3.svg')
+    })
 
-    const file = new File(['x'], 'a.png', { type: 'image/png' })
-    const input = wrapper.find('input[type="file"]')
-    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
-    await input.trigger('change')
-    await vi.runAllTimersAsync()
+    // 选年级 → 保存。
+    const gradeSelect = wrapper.findAll('select')[0]
+    await gradeSelect.setValue('七年级上')
     await flushPromises()
+    httpMethods.post.mockResolvedValueOnce(ok({ id: 42 }))
+    httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 1 } } })
 
-    // 擦除按钮存在。
-    const eraseBtn = wrapper.findAll('button').find((b) => b.text().includes('擦除手写'))!
-    expect(eraseBtn).toBeDefined()
-
-    // 点击擦除：POST /recognition/erase 返回新 key。
-    httpMethods.post.mockResolvedValueOnce(ok({ key: 'erased/123.jpg' }))
-    await eraseBtn.trigger('click')
-    await vi.runAllTimersAsync()
-    await flushPromises()
-
-    expect(httpMethods.post).toHaveBeenCalledWith(
-      '/recognition/erase',
-      { key: 'geometry/task_10.jpg' },
-      { timeout: 120000 },
-    )
-    // 几何图预览更新为擦除后的 key。
-    expect(wrapper.html()).toContain('/api/recognition/files/erased/123.jpg')
+    await getSaveBtn(wrapper).trigger('click')
+    await vi.waitFor(() => {
+      expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
+        geometry_refs: JSON.stringify(['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg']),
+      }))
+    })
   })
 
-  it('擦除手写失败时展示错误提示', async () => {
+  it('非数学题不会产出重绘 key，页面不展示重绘区域', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -536,36 +491,23 @@ describe('MistakeEntry.vue', () => {
     await flushPromises()
 
     const task: RecognitionTask = {
-      id: 11,
+      id: 9,
       image_id: 1,
       status: 'success',
       progress: 100,
       provider: 'mock',
       result_json: JSON.stringify({
-        stem_text: '几何题',
+        stem_text: '物理几何题',
+        subject: '物理',
+        question_type: '解答题',
         formula: { latex: '', raw_text: '' },
         geometry: { shape_type: 'triangle', properties: {}, description: '三角形' },
-        geometry_keys: ['geometry/task_11.jpg'],
       }),
     }
-    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
-    httpMethods.get.mockResolvedValue(ok(task))
-
-    const file = new File(['x'], 'a.png', { type: 'image/png' })
-    const input = wrapper.find('input[type="file"]')
-    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
-    await input.trigger('change')
-    await vi.runAllTimersAsync()
+    await recognizeWithResult(wrapper, task)
     await flushPromises()
 
-    const eraseBtn = wrapper.findAll('button').find((b) => b.text().includes('擦除手写'))!
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    httpMethods.post.mockRejectedValueOnce(new Error('erase fail'))
-    await eraseBtn.trigger('click')
-    await vi.runAllTimersAsync()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('擦除失败，请重试')
-    errSpy.mockRestore()
+    expect(wrapper.text()).not.toContain('几何图形')
+    expect(wrapper.text()).not.toContain('重绘')
   })
 })

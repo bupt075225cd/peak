@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import {
-  Camera, Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText, Eraser,
+  Camera, Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText,
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
-  uploadGeometryImage, eraseHandwriting, type RecognitionTask, type RecognitionResult, type QuestionItem,
+  type RecognitionTask, type RecognitionResult, type QuestionItem,
 } from '../api'
-import LatexRenderer from '../components/LatexRenderer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
-import GeometryCropper from '../components/GeometryCropper.vue'
 
 // 上传与识别状态。
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -26,9 +24,16 @@ const questions = ref<QuestionItem[]>([])
 
 // 识别结果（可手动修正）。
 const stemText = ref('')
-const formula = ref('')
-const geometry = ref('')
+// 文档拆题场景：子问几何图的存储 key（保存到题目记录，不自动重绘）。
 const selectedGeometryKeys = ref<string[]>([])
+
+// 几何重绘结果：识别流水线对数学题含几何图的原图进行重绘，
+// 一张原图可含多个子图（图1/图2/图3），每个子图一张独立 SVG，逐张展示。
+const redrawSvgKeys = ref<string[]>([])
+const redrawConsistent = ref(true)
+const redrawSvgUrls = computed(() =>
+  redrawSvgKeys.value.map((k) => `/api/recognition/files/${k}`),
+)
 
 // 年级（学科、题型由识别自动回填，见 applyResult/selectQuestion）。
 const grade = ref('')
@@ -38,23 +43,25 @@ const subject = ref('')
 // 备注（错题出处、易错点等，选填）。
 const remark = ref('')
 
+// 识别进度文案：processing 阶段优先展示后端上报的阶段说明（如"正在几何重绘…"），
+// 让用户能感知当前正在执行哪一步，而不是长时间只看到百分比。
 const progressText = computed(() => {
   if (!task.value) return ''
+  if (task.value.status === 'processing') {
+    if (task.value.progress_text) {
+      return `${task.value.progress_text}（${task.value.progress}%）`
+    }
+    return `识别中 ${task.value.progress}%`
+  }
   const map: Record<string, string> = {
     pending: '排队中…',
-    processing: `识别中 ${task.value.progress}%`,
     success: '识别完成',
     failed: '识别失败',
   }
   return map[task.value.status] ?? ''
 })
 
-// 已选几何图（裁剪后的子图）的完整 URL 列表，供保存前预览。
-const geometryImageUrls = computed(() =>
-  selectedGeometryKeys.value.map((k) => `/api/recognition/files/${k}`),
-)
-
-// ImageViewer 状态：点击几何图时打开放大查看。
+// ImageViewer 状态：点击重绘图时打开放大查看。
 const viewerOpen = ref(false)
 const viewerSrc = ref('')
 function openViewer(url: string) {
@@ -63,69 +70,6 @@ function openViewer(url: string) {
 }
 function closeViewer() {
   viewerOpen.value = false
-}
-
-// GeometryCropper 状态：手动重选几何图区域。
-const cropperOpen = ref(false)
-// 裁剪弹窗内的错误提示与上传中状态。
-const cropperError = ref('')
-const cropperConfirming = ref(false)
-function openCropper() {
-  cropperError.value = ''
-  cropperOpen.value = true
-}
-function closeCropper() {
-  cropperOpen.value = false
-  cropperError.value = ''
-  cropperConfirming.value = false
-}
-// 手动裁剪完成后：上传裁剪图得到新 key，替换原几何图 key。
-// 上传失败时保持弹窗打开并显示错误，避免用户误以为已保存裁剪图。
-async function onCropperConfirm(file: File) {
-  cropperConfirming.value = true
-  cropperError.value = ''
-  try {
-    const key = await uploadGeometryImage(file)
-    if (!key) {
-      // 返回空 key 视为失败，保持弹窗打开。
-      cropperError.value = '几何图上传失败，请重试'
-      return
-    }
-    selectedGeometryKeys.value = [key]
-    closeCropper()
-  } catch (err) {
-    console.error('上传裁剪几何图失败', err)
-    cropperError.value = '几何图上传失败，请重试'
-  } finally {
-    cropperConfirming.value = false
-  }
-}
-
-// 擦除手写状态：对当前几何图子图调用后端 AI 擦除。
-const erasing = ref(false)
-const eraseError = ref('')
-
-// 擦除当前几何图子图中的手写，成功后用新 key 替换预览。
-async function onEraseHandwriting() {
-  const key = selectedGeometryKeys.value[0]
-  if (!key || erasing.value) return
-  erasing.value = true
-  eraseError.value = ''
-  try {
-    const newKey = await eraseHandwriting(key)
-    if (!newKey) {
-      eraseError.value = '擦除失败，请重试'
-      return
-    }
-    selectedGeometryKeys.value = [newKey]
-  } catch (err: unknown) {
-    console.error('擦除手写失败', err)
-    // 透传后端业务错误消息（如 wanx 的真实原因），便于排查。
-    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-    eraseError.value = msg || '擦除失败，请重试'
-  } finally {
-    erasing.value = false
-  }
 }
 
 function pickImage() {
@@ -190,7 +134,7 @@ async function pollTask(id: number) {
       return
     }
   }
-  // 180s 仍无结果时提示用户去手动查询/刷新，而不是显示“超时失败”，避免误判。
+  // 180s 仍无结果时提示用户去手动查询/刷新，而不是显示"超时失败"，避免误判。
   errorMsg.value = '识别耗时较长，刷新页面查看结果，或点击重试'
 }
 
@@ -205,12 +149,11 @@ function applyResult(t: RecognitionTask) {
     stemText.value = result.stem_text || ''
     subject.value = result.subject || '数学'
     questionType.value = result.question_type || '解答题'
-    formula.value = result.formula?.latex || ''
-    geometry.value = result.geometry?.description || ''
-    // 单图场景默认携带裁剪出的几何图 key。
-    selectedGeometryKeys.value = Array.isArray(result.geometry_keys)
-      ? result.geometry_keys.filter((k) => typeof k === 'string' && k.length > 0)
+    // 几何重绘结果：数学题含几何图时由识别流水线对原图重绘，每个子图一张独立 SVG。
+    redrawSvgKeys.value = Array.isArray(result.redraw_svg_keys)
+      ? result.redraw_svg_keys.filter((k) => typeof k === 'string' && k.length > 0)
       : []
+    redrawConsistent.value = result.redraw_report ? result.redraw_report.consistent !== false : true
   }
   warningMsg.value = result.warning || ''
 }
@@ -227,6 +170,15 @@ async function handleRetry() {
   } finally {
     recognizing.value = false
   }
+}
+
+// 保存到题目的几何引用：数学题含几何图时存 AI 重绘的多张 SVG key；
+// 其余（如文档拆题的子问图）沿用裁剪/内嵌子图 key。
+function geometryRefsValue(): string[] {
+  if (redrawSvgKeys.value.length > 0) {
+    return redrawSvgKeys.value
+  }
+  return selectedGeometryKeys.value
 }
 
 async function handleSave() {
@@ -246,8 +198,7 @@ async function handleSave() {
       subject: subject.value || '数学',
       grade: grade.value,
       stem_text: stemText.value,
-      stem_formula: JSON.stringify({ latex: formula.value }),
-      geometry_refs: JSON.stringify(selectedGeometryKeys.value),
+      geometry_refs: JSON.stringify(geometryRefsValue()),
       question_type: questionType.value || '解答题',
     })
     // 第二步：创建错题记录，关联刚创建的题目。
@@ -274,16 +225,14 @@ function reset() {
   isDoc.value = false
   questions.value = []
   stemText.value = ''
-  formula.value = ''
-  geometry.value = ''
   selectedGeometryKeys.value = []
+  redrawSvgKeys.value = []
+  redrawConsistent.value = true
   grade.value = ''
   remark.value = ''
   errorMsg.value = ''
   saveError.value = ''
   warningMsg.value = ''
-  erasing.value = false
-  eraseError.value = ''
 }
 
 // 选中某道识别出的题，填入下方表单供修正/保存。
@@ -309,11 +258,11 @@ function selectQuestion(idx: number) {
   stemText.value = stem
   subject.value = q.subject || '数学'
   questionType.value = q.question_type || '解答题'
-  formula.value = q.formula?.latex || ''
-  geometry.value = q.geometry?.description || ''
-  // 收集该题所有子问的几何图片 key，用于保存到题目记录。
+  // 文档拆题的几何图沿用裁剪子图引用（不自动重绘）。
   selectedGeometryKeys.value = (q.sub_questions || [])
     .flatMap((sq) => sq.geometry_keys || [])
+  redrawSvgKeys.value = []
+  redrawConsistent.value = true
 }
 </script>
 
@@ -413,8 +362,6 @@ function selectQuestion(idx: number) {
           <p v-if="errorMsg" class="mt-3 text-sm text-red-500">{{ errorMsg }}</p>
           <p v-if="warningMsg" class="mt-3 text-sm text-amber-600">{{ warningMsg }}</p>
         </div>
-
-        <!-- 擦除后图片预览 -->
       </div>
 
       <!-- 右侧：识别结果 + 手动修正表单 -->
@@ -506,50 +453,32 @@ function selectQuestion(idx: number) {
               />
             </div>
 
-            <div v-if="formula.trim()" class="rounded-xl bg-surface-tint p-4">
-              <label class="block text-sm font-medium text-ink-soft mb-1.5">识别公式</label>
-              <LatexRenderer :expr="formula" />
-            </div>
-
-            <!-- 裁剪出的几何图预览（题图一起展示效果） -->
-            <div v-if="geometryImageUrls.length" class="rounded-xl bg-surface-tint p-4">
+            <!-- 数学题含几何图 → AI 重绘图（VLM 坐标直出 → Go 渲染 SVG） -->
+            <div v-if="redrawSvgUrls.length" class="rounded-xl bg-surface-tint p-4">
               <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium text-ink-soft">几何图形</label>
-                <div class="flex items-center gap-3">
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-light disabled:opacity-50 disabled:cursor-not-allowed"
-                    :disabled="erasing"
-                    @click="onEraseHandwriting"
-                  >
-                    <Loader2 v-if="erasing" class="w-3.5 h-3.5 animate-spin" />
-                    <Eraser v-else class="w-3.5 h-3.5" />
-                    {{ erasing ? '擦除中…' : '擦除手写' }}
-                  </button>
-                  <button
-                    v-if="previewUrl"
-                    type="button"
-                    class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-light"
-                    @click="openCropper"
-                  >
-                    重新框选
-                  </button>
-                </div>
+                <label class="block text-sm font-medium text-ink-soft">
+                  几何图形（AI 精确重绘）<span v-if="redrawSvgUrls.length > 1"> · {{ redrawSvgUrls.length }} 张</span>
+                </label>
+                <span
+                  v-if="!redrawConsistent"
+                  class="text-xs text-amber-600"
+                  title="结构校验未全部通过，图形可能存在偏差"
+                >结构校验未通过，仅供参考</span>
               </div>
-              <p v-if="eraseError" class="mb-2 text-xs text-red-500">{{ eraseError }}</p>
+              <!-- 每个几何子图一张独立 SVG，逐张展示，点击可放大查看 -->
               <div class="flex flex-wrap gap-3">
                 <button
-                  v-for="(url, i) in geometryImageUrls"
+                  v-for="(url, i) in redrawSvgUrls"
                   :key="i"
                   type="button"
-                  class="block group focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg"
+                  class="block focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg bg-white"
                   title="点击放大查看"
                   @click="openViewer(url)"
                 >
                   <img
                     :src="url"
-                    class="h-32 rounded-lg border border-slate-200 object-contain bg-white cursor-zoom-in transition-transform group-hover:scale-[1.02]"
-                    alt="几何图"
+                    class="h-40 w-auto rounded-lg border border-slate-200 bg-white object-contain cursor-zoom-in transition-transform hover:scale-[1.02]"
+                    alt="AI 重绘几何图"
                   />
                 </button>
               </div>
@@ -585,15 +514,5 @@ function selectQuestion(idx: number) {
 
     <!-- 几何图放大查看器 -->
     <ImageViewer :src="viewerSrc" :open="viewerOpen" @close="closeViewer" />
-
-    <!-- 几何图重新框选弹窗 -->
-    <GeometryCropper
-      :open="cropperOpen"
-      :src="previewUrl"
-      :error="cropperError"
-      :confirming="cropperConfirming"
-      @close="closeCropper"
-      @confirm="onCropperConfirm"
-    />
   </div>
 </template>

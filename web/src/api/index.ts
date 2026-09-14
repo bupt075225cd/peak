@@ -22,6 +22,7 @@ export interface RecognitionTask {
   image_id: number
   status: 'pending' | 'processing' | 'success' | 'failed'
   progress: number
+  progress_text?: string
   result_json?: string
   error_message?: string
   provider: string
@@ -33,11 +34,17 @@ export interface RecognitionResult {
   answer: string
   subject?: string
   question_type?: string
-  formula: { latex: string; raw_text: string }
   geometry: { shape_type: string; properties: Record<string, string>; description: string }
-  erased_image_key: string
-  // 单图上传场景下，与该题关联的几何图存储 key 列表（从原图裁剪出的几何图子图）。
-  geometry_keys?: string[]
+  // 几何重绘 SVG 的存储 key 列表：一个 key 对应一张独立 SVG
+  //（一张原图含多个几何子图时，每个子图一张）。
+  redraw_svg_keys?: string[]
+  // 几何重绘求解报告。
+  redraw_report?: {
+    max_hard: number
+    max_soft: number
+    attempts: number
+    consistent: boolean
+  }
   // 文档识别出的多道题。
   questions?: QuestionItem[]
   // 非致命错误提示（如公式/几何识别失败）。
@@ -58,7 +65,6 @@ export interface QuestionItem {
   answer: string
   subject?: string
   question_type?: string
-  formula: { latex: string; raw_text: string }
   geometry: { shape_type: string; properties: Record<string, string>; description: string }
   sub_questions?: SubQuestion[]
 }
@@ -78,25 +84,6 @@ export async function uploadImage(file: File): Promise<RecognitionTask> {
   form.append('image', file)
   const { data } = await http.post<ApiResponse<RecognitionTask>>('/recognition/tasks', form)
   return data.data as RecognitionTask
-}
-
-// 上传任意图片（手动裁剪的几何图），返回 storage key。
-export async function uploadGeometryImage(file: File): Promise<string> {
-  const form = new FormData()
-  form.append('file', file)
-  const { data } = await http.post<ApiResponse<{ key: string }>>('/recognition/files', form)
-  return data.data?.key ?? ''
-}
-
-// 擦除指定几何图子图的手写，返回擦除后图片的 storage key。
-// 后端会调用 AI 擦除（异步任务，最长约 120s），故单独放大超时。
-export async function eraseHandwriting(key: string): Promise<string> {
-  const { data } = await http.post<ApiResponse<{ key: string }>>(
-    '/recognition/erase',
-    { key },
-    { timeout: 120000 },
-  )
-  return data.data?.key ?? ''
 }
 
 // 上传 word/pdf 文档并创建识别任务。
