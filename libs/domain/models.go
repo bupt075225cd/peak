@@ -21,37 +21,41 @@ type User struct {
 
 // Question 题目（规范化后的题目本体，可被多道错题复用）。
 type Question struct {
-	ID           uint64         `gorm:"primaryKey" json:"id"`
-	Subject      string         `gorm:"size:32;index" json:"subject"`
-	Grade        string         `gorm:"size:32;index" json:"grade"` // 年级，如"七年级上"
-	StemText     string         `gorm:"type:text" json:"stem_text"`
-	StemFormula  string         `gorm:"type:json" json:"stem_formula"`   // LaTeX 公式结构 JSON
-	GeometryRefs string         `gorm:"type:json" json:"geometry_refs"`  // 几何图形引用（image key 列表）
-	Answer       string         `gorm:"type:text" json:"answer"`
-	Analysis     string         `gorm:"type:text" json:"analysis"`
-	Difficulty   int            `gorm:"default:1" json:"difficulty"` // 1-5
-	QuestionType string         `gorm:"size:32" json:"question_type"` // 选择/填空/解答
-	SourcePaper  string         `gorm:"size:128" json:"source_paper"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID              uint64         `gorm:"primaryKey" json:"id"`
+	Subject         string         `gorm:"size:32;index" json:"subject"`
+	Grade           string         `gorm:"size:32;index" json:"grade"` // 年级，如"七年级上"
+	StemText        string         `gorm:"type:text" json:"stem_text"`
+	Answer          string         `gorm:"type:text" json:"answer"`
+	Analysis        string         `gorm:"type:text" json:"analysis"`
+	QuestionType    string         `gorm:"size:32" json:"question_type"`      // 选择/填空/解答
+	Image           string         `gorm:"type:json" json:"image"`            // 图片引用（image key 列表，含几何图与其它科目插图）
+	KnowledgePoints string         `gorm:"type:json" json:"knowledge_points"` // 知识点标签数组
+	Source          string         `gorm:"size:128" json:"source"`            // 题目来源（试卷/练习册等）
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Categories []Category `gorm:"many2many:question_categories;" json:"categories,omitempty"`
 }
 
+// ReviewRecord 单条复习记录。
+type ReviewRecord struct {
+	ReviewedAt time.Time `json:"reviewed_at"` // 复习时间
+	Result     string    `json:"result"`      // 复习结果
+}
+
 // Mistake 错题（用户维度对某道题的错题记录）。
 type Mistake struct {
-	ID           uint64         `gorm:"primaryKey" json:"id"`
-	UserID       uint64         `gorm:"index" json:"user_id"`
-	QuestionID   uint64         `gorm:"index" json:"question_id"`
-	WrongReason  string         `gorm:"size:255" json:"wrong_reason"`
-	MasteryLevel int            `gorm:"default:0" json:"mastery_level"` // 0-未掌握 1-部分掌握 2-已掌握
-	SourcePaper  string         `gorm:"size:128" json:"source_paper"`
-	Remark       string         `gorm:"type:text" json:"remark"` // 备注（错题出处、易错点等，选填）
-	RecordedAt   time.Time      `json:"recorded_at"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID            uint64         `gorm:"primaryKey" json:"id"`
+	UserID        uint64         `gorm:"index" json:"user_id"`
+	QuestionID    uint64         `gorm:"index" json:"question_id"`
+	WrongReason   string         `gorm:"size:255" json:"wrong_reason"`
+	Source        string         `gorm:"size:128" json:"source"`                          // 该次错题的来源
+	ReviewRecords []ReviewRecord `gorm:"type:json;serializer:json" json:"review_records"` // 复习记录
+	RecordedAt    time.Time      `json:"recorded_at"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Question *Question `gorm:"foreignKey:QuestionID" json:"question,omitempty"`
 	Images   []Image   `gorm:"foreignKey:MistakeID" json:"images,omitempty"`
@@ -91,8 +95,8 @@ type QuestionCategory struct {
 type RecognitionTask struct {
 	ID           uint64         `gorm:"primaryKey" json:"id"`
 	ImageID      uint64         `gorm:"index" json:"image_id"`
-	Status       string         `gorm:"size:32;index" json:"status"` // pending/processing/success/failed
-	Progress     int            `gorm:"default:0" json:"progress"`   // 0-100
+	Status       string         `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
+	Progress     int            `gorm:"default:0" json:"progress"`     // 0-100
 	ProgressText string         `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
 	ResultJSON   string         `gorm:"type:json" json:"result_json"`
 	ErrorMessage string         `gorm:"size:512" json:"error_message"`

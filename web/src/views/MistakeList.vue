@@ -38,8 +38,8 @@ const filteredItems = computed(() => {
     if (activeSubject.value !== '全部' && subject !== activeSubject.value) return false
     if (!kw) return true
     const stem = m.question?.stem_text ?? ''
-    const remark = m.remark ?? ''
-    return subject.includes(kw) || stem.includes(kw) || remark.includes(kw)
+    const kps = knowledgePoints(m.question).join(' ')
+    return subject.includes(kw) || stem.includes(kw) || kps.includes(kw)
   })
 })
 
@@ -73,11 +73,22 @@ function goEntry() {
   router.push('/entry')
 }
 
-// 解析题目的 geometry_refs（JSON 字符串数组）为 image key 列表。
-function geometryKeys(q: Mistake['question']): string[] {
-  if (!q?.geometry_refs) return []
+// 解析题目的 image（JSON 字符串数组）为 image key 列表。
+function imageKeys(q: Mistake['question']): string[] {
+  if (!q?.image) return []
   try {
-    const arr = JSON.parse(q.geometry_refs)
+    const arr = JSON.parse(q.image)
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+// 解析题目的 knowledge_points（JSON 字符串数组）为知识点标签列表。
+function knowledgePoints(q: Mistake['question']): string[] {
+  if (!q?.knowledge_points) return []
+  try {
+    const arr = JSON.parse(q.knowledge_points)
     return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
   } catch {
     return []
@@ -182,12 +193,18 @@ function closeViewer() {
                     <span class="text-xs text-ink-faint">{{ item.recorded_at?.slice(0, 10) }}</span>
                   </div>
                   <p class="text-sm text-ink leading-relaxed">{{ item.question?.stem_text }}</p>
-                  <!-- 备注 -->
-                  <p v-if="item.remark" class="mt-2 text-xs text-ink-soft">备注：{{ item.remark }}</p>
-                  <!-- 几何图形：点击放大查看 -->
-                  <div v-if="geometryKeys(item.question)" class="mt-2 flex gap-2 flex-wrap">
+                  <!-- 知识点标签 -->
+                  <div v-if="knowledgePoints(item.question).length" class="mt-2 flex gap-1.5 flex-wrap">
+                    <span
+                      v-for="(kp, i) in knowledgePoints(item.question)"
+                      :key="i"
+                      class="rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs font-medium"
+                    >{{ kp }}</span>
+                  </div>
+                  <!-- 题目配图：点击放大查看 -->
+                  <div v-if="imageKeys(item.question)" class="mt-2 flex gap-2 flex-wrap">
                     <button
-                      v-for="(gk, i) in geometryKeys(item.question)"
+                      v-for="(gk, i) in imageKeys(item.question)"
                       :key="i"
                       type="button"
                       class="block group focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg"
@@ -197,7 +214,7 @@ function closeViewer() {
                       <img
                         :src="`/api/recognition/files/${gk}`"
                         class="h-20 rounded-lg border border-slate-200 object-contain bg-white cursor-zoom-in transition-transform group-hover:scale-[1.03]"
-                        alt="几何图"
+                        alt="题目配图"
                       />
                     </button>
                   </div>
@@ -209,7 +226,7 @@ function closeViewer() {
       </div>
     </div>
 
-    <!-- 几何图放大查看器 -->
+    <!-- 题目配图放大查看器 -->
     <ImageViewer :src="viewerSrc" :open="viewerOpen" @close="closeViewer" />
   </div>
 </template>

@@ -424,7 +424,7 @@ describe('MistakeEntry.vue', () => {
     expect(wrapper.text()).not.toContain('擦除手写')
   })
 
-  it('识别结果无重绘 key 时不展示重绘区域，保存 geometry_refs 为空数组', async () => {
+  it('识别结果无重绘 key 时不展示重绘区域，保存 image 为空数组', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -447,12 +447,12 @@ describe('MistakeEntry.vue', () => {
     await getSaveBtn(wrapper).trigger('click')
     await vi.waitFor(() => {
       expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
-        geometry_refs: JSON.stringify([]),
+        image: JSON.stringify([]),
       }))
     })
   })
 
-  it('数学题含几何图保存时 geometry_refs 存全部重绘 SVG key', async () => {
+  it('数学题含几何图保存时 image 存全部重绘 SVG key', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -478,7 +478,7 @@ describe('MistakeEntry.vue', () => {
     await getSaveBtn(wrapper).trigger('click')
     await vi.waitFor(() => {
       expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
-        geometry_refs: JSON.stringify(['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg']),
+        image: JSON.stringify(['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg']),
       }))
     })
   })

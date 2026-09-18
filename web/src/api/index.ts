@@ -127,9 +127,16 @@ export interface Question {
   stem_text: string
   answer: string
   analysis: string
-  difficulty: number
   question_type: string
-  geometry_refs?: string // JSON 字符串：几何图形 image key 列表
+  image?: string // JSON 字符串：图片 image key 列表（几何图或其它科目插图）
+  knowledge_points?: string // JSON 字符串：知识点标签数组
+  source?: string // 题目来源（试卷/练习册等）
+}
+
+// 单条复习记录。
+export interface ReviewRecord {
+  reviewed_at: string // 复习时间
+  result: string // 复习结果
 }
 
 // 错题（含关联题目）。
@@ -138,9 +145,8 @@ export interface Mistake {
   user_id: number
   question_id: number
   wrong_reason: string
-  mastery_level: number
-  source_paper: string
-  remark?: string
+  source: string // 该次错题的来源
+  review_records?: ReviewRecord[] // 复习记录
   recorded_at: string
   question?: Question
 }

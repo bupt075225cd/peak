@@ -40,8 +40,6 @@ const grade = ref('')
 const gradeOptions = ['七年级上', '七年级下', '八年级上', '八年级下', '九年级上', '九年级下']
 const questionType = ref('')
 const subject = ref('')
-// 备注（错题出处、易错点等，选填）。
-const remark = ref('')
 
 // 识别进度文案：processing 阶段优先展示后端上报的阶段说明（如"正在几何重绘…"），
 // 让用户能感知当前正在执行哪一步，而不是长时间只看到百分比。
@@ -174,7 +172,7 @@ async function handleRetry() {
 
 // 保存到题目的几何引用：数学题含几何图时存 AI 重绘的多张 SVG key；
 // 其余（如文档拆题的子问图）沿用裁剪/内嵌子图 key。
-function geometryRefsValue(): string[] {
+function imageKeysValue(): string[] {
   if (redrawSvgKeys.value.length > 0) {
     return redrawSvgKeys.value
   }
@@ -198,15 +196,14 @@ async function handleSave() {
       subject: subject.value || '数学',
       grade: grade.value,
       stem_text: stemText.value,
-      geometry_refs: JSON.stringify(geometryRefsValue()),
+      image: JSON.stringify(imageKeysValue()),
       question_type: questionType.value || '解答题',
     })
     // 第二步：创建错题记录，关联刚创建的题目。
     await createMistake({
       user_id: 1,
       question_id: question.id,
-      source_paper: '',
-      remark: remark.value,
+      source: '',
     })
     alert('错题已保存')
     reset()
@@ -229,7 +226,6 @@ function reset() {
   redrawSvgKeys.value = []
   redrawConsistent.value = true
   grade.value = ''
-  remark.value = ''
   errorMsg.value = ''
   saveError.value = ''
   warningMsg.value = ''
@@ -441,16 +437,6 @@ function selectQuestion(idx: number) {
                 <span class="text-ink-soft shrink-0">题型</span>
                 <span class="inline-flex items-center rounded-md bg-surface-tint px-2 py-0.5 text-xs font-medium text-primary">{{ questionType }}</span>
               </div>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-ink-soft mb-1.5">备注（选填）</label>
-              <textarea
-                v-model="remark"
-                rows="2"
-                class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow resize-none"
-                placeholder="可填写错题出处、易错点等补充信息"
-              />
             </div>
 
             <!-- 数学题含几何图 → AI 重绘图（VLM 坐标直出 → Go 渲染 SVG） -->

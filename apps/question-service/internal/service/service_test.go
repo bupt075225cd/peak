@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"peak/libs/domain"
 	"peak/libs/errors"
@@ -31,10 +32,8 @@ func TestCreateAndGetQuestion(t *testing.T) {
 	q := &domain.Question{
 		Subject:      "数学",
 		StemText:     "已知二次函数 y = x^2 - 2x - 3，求顶点坐标。",
-		StemFormula:  `{"latex":"y = x^2 - 2x - 3"}`,
 		Answer:       "顶点 (1, -4)",
 		Analysis:     "配方：y = (x-1)^2 - 4",
-		Difficulty:   3,
 		QuestionType: "解答题",
 	}
 	if err := svc.CreateQuestion(ctx, q); err != nil {
@@ -191,6 +190,43 @@ func TestMistakeCRUD(t *testing.T) {
 
 	if err := svc.DeleteMistake(ctx, m.ID); err != nil {
 		t.Fatalf("delete mistake: %v", err)
+	}
+}
+
+func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
+	svc := setupService(t)
+	ctx := context.Background()
+
+	q := &domain.Question{Subject: "math"}
+	if err := svc.CreateQuestion(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+
+	reviewedAt := time.Date(2026, 9, 17, 10, 30, 0, 0, time.UTC)
+	m := &domain.Mistake{
+		UserID:     1,
+		QuestionID: q.ID,
+		ReviewRecords: []domain.ReviewRecord{
+			{ReviewedAt: reviewedAt, Result: "correct"},
+			{ReviewedAt: reviewedAt.Add(24 * time.Hour), Result: "wrong"},
+		},
+	}
+	if err := svc.CreateMistake(ctx, m); err != nil {
+		t.Fatalf("create mistake: %v", err)
+	}
+
+	got, err := svc.GetMistake(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("get mistake: %v", err)
+	}
+	if len(got.ReviewRecords) != 2 {
+		t.Fatalf("expected 2 review records, got %d", len(got.ReviewRecords))
+	}
+	if !got.ReviewRecords[0].ReviewedAt.Equal(reviewedAt) {
+		t.Fatalf("unexpected reviewed_at: %s", got.ReviewRecords[0].ReviewedAt)
+	}
+	if got.ReviewRecords[0].Result != "correct" || got.ReviewRecords[1].Result != "wrong" {
+		t.Fatalf("unexpected results: %+v", got.ReviewRecords)
 	}
 }
 
