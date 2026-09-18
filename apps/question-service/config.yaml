@@ -10,3 +10,13 @@ tracing:
 database:
   dialect: "${DB_DIALECT:-mysql}"  # mysql / postgres / sqlite
   dsn: "${DB_DSN:-root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local}"
+
+# 错题导出依赖识别服务的图片接口读取题目配图（本地目录与对象存储均可）。
+recognition:
+  base_url: "${RECOGNITION_SERVICE_URL:-http://localhost:8082}"
+
+export:
+  max_items: "${EXPORT_MAX_ITEMS:-200}"               # 单次导出题数上限
+  max_image_width: "${EXPORT_MAX_IMAGE_WIDTH:-1200}"  # 配图最大像素宽度，0 表示不限制
+  fetch_timeout: "${EXPORT_FETCH_TIMEOUT:-10s}"       # 单张配图拉取超时
+  font_path: "${EXPORT_FONT_PATH:-}"                  # 外部字体路径，留空使用内置中文字体

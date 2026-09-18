@@ -118,3 +118,140 @@ describe('MistakeList.vue', () => {
     expect(router.currentRoute.value.fullPath).toBe('/entry')
   })
 })
+
+describe('MistakeList.vue 导出', () => {
+  beforeEach(() => {
+    httpMethods.post.mockReset()
+
+    // jsdom 未实现 object URL 与真实下载，需要打桩。
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: vi.fn(() => 'blob:mock'),
+      writable: true,
+      configurable: true,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: vi.fn(),
+      writable: true,
+      configurable: true,
+    })
+  })
+
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, { global: { plugins: [router] } })
+  }
+
+  function buttonByText(wrapper: ReturnType<typeof mountList>, text: string) {
+    const btn = wrapper.findAll('button').find((b) => b.text().includes(text))
+    expect(btn, `button containing ${text}`).toBeDefined()
+    return btn!
+  }
+
+  it('未勾选时导出当前筛选结果，并触发浏览器下载', async () => {
+    httpMethods.post.mockResolvedValueOnce({
+      data: new Blob(['pdf-bytes']),
+      headers: {
+        'content-disposition': `filename*=UTF-8''${encodeURIComponent('我的错题本 2026-09-17.pdf')}`,
+      },
+    })
+    let downloadedName = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloadedName = this.download
+    })
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '导出').trigger('click')
+    await buttonByText(wrapper, '导出为 PDF').trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/mistakes/export',
+      { ids: [1, 2, 3], format: 'pdf' },
+      { responseType: 'blob', timeout: 120000 },
+    )
+    expect(URL.createObjectURL).toHaveBeenCalled()
+    expect(URL.revokeObjectURL).toHaveBeenCalled()
+    expect(downloadedName).toBe('我的错题本 2026-09-17.pdf')
+  })
+
+  it('勾选后只导出勾选的题目', async () => {
+    httpMethods.post.mockResolvedValueOnce({ data: new Blob(['x']), headers: {} })
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    // 第 0 个复选框是「全选当前筛选」，其后依次为各错题卡片。
+    await wrapper.findAll('input[type="checkbox"]')[1].setValue(true)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已选 1 题')
+
+    await buttonByText(wrapper, '导出').trigger('click')
+    await buttonByText(wrapper, '导出为 Word').trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/mistakes/export',
+      { ids: [1], format: 'docx' },
+      { responseType: 'blob', timeout: 120000 },
+    )
+  })
+
+  it('全选只作用于当前筛选结果', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    // 切到物理学科：仅有 1 道题。
+    await buttonByText(wrapper, '物理').trigger('click')
+    await flushPromises()
+
+    await wrapper.findAll('input[type="checkbox"]')[0].setValue(true)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 1 题')
+  })
+
+  it('切换筛选后保留勾选，并提示被排除的题目不会被导出', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    // 勾选一道数学题后切到物理学科。
+    await wrapper.findAll('input[type="checkbox"]')[1].setValue(true)
+    await flushPromises()
+    await buttonByText(wrapper, '物理').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 1 题')
+    expect(wrapper.text()).toContain('不会被导出')
+  })
+
+  it('导出失败时展示服务端返回的错误信息', async () => {
+    // 出错时服务端返回 JSON，但 axios 按 blob 读取，这里模拟可读文本的响应体。
+    const payload = {
+      text: async () => JSON.stringify({ code: 1004, message: '没有可导出的错题' }),
+    }
+    httpMethods.post.mockRejectedValueOnce({ response: { data: payload } })
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '导出').trigger('click')
+    await buttonByText(wrapper, '导出为 PDF').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('没有可导出的错题')
+  })
+
+  it('列表为空时导出按钮禁用', async () => {
+    httpMethods.get.mockResolvedValue(ok({ items: [], total: 0 }))
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    expect(buttonByText(wrapper, '导出').attributes('disabled')).toBeDefined()
+  })
+})

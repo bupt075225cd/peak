@@ -168,3 +168,40 @@ export async function listMistakes(): Promise<Mistake[]> {
   const { data } = await http.get<ApiResponse<{ items: Mistake[]; total: number }>>('/mistakes')
   return data.data?.items ?? []
 }
+
+// 导出格式。
+export type ExportFormat = 'pdf' | 'docx'
+
+// 导出错题：服务端直接返回文件流，文件名由 Content-Disposition 给出。
+//
+// 导出耗时明显高于普通接口（需取图与排版），这里单独放宽超时，不影响列表等请求。
+export async function exportMistakes(
+  ids: number[],
+  format: ExportFormat,
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await http.post(
+    '/mistakes/export',
+    { ids, format },
+    { responseType: 'blob', timeout: 120000 },
+  )
+  const filename =
+    parseContentDisposition(response.headers['content-disposition']) ?? `我的错题本.${format}`
+  return { blob: response.data as Blob, filename }
+}
+
+// parseContentDisposition 解析响应头中的文件名，优先 RFC 5987 的 filename*（UTF-8）。
+export function parseContentDisposition(disposition?: string): string | null {
+  if (!disposition) return null
+
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch {
+      return null
+    }
+  }
+
+  const asciiMatch = /filename="?([^";]+)"?/i.exec(disposition)
+  return asciiMatch?.[1] ?? null
+}

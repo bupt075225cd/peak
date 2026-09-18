@@ -22,7 +22,7 @@ func setupService(t *testing.T) *Service {
 	if err := domain.Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return New(repository.NewGormRepositories(db))
+	return New(repository.NewGormRepositories(db), nil)
 }
 
 func TestCreateAndGetQuestion(t *testing.T) {

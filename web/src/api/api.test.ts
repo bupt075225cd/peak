@@ -9,6 +9,8 @@ import {
   createQuestion,
   createMistake,
   listMistakes,
+  exportMistakes,
+  parseContentDisposition,
   type ApiResponse,
   type RecognitionTask,
   type Category,
@@ -150,5 +152,43 @@ describe('api/index.ts', () => {
     httpMethods.get.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: null } })
     const empty = await listMistakes()
     expect(empty).toEqual([])
+  })
+
+  it('exportMistakes 以 blob 方式请求并解析服务端文件名', async () => {
+    const blob = new Blob(['pdf-bytes'], { type: 'application/pdf' })
+    httpMethods.post.mockResolvedValueOnce({
+      data: blob,
+      headers: {
+        'content-disposition': `attachment; filename="mistakes.pdf"; filename*=UTF-8''${encodeURIComponent(
+          '我的错题本 2026-09-17.pdf',
+        )}`,
+      },
+    })
+
+    const res = await exportMistakes([1, 2], 'pdf')
+
+    expect(httpMethods.post).toHaveBeenCalledWith(
+      '/mistakes/export',
+      { ids: [1, 2], format: 'pdf' },
+      { responseType: 'blob', timeout: 120000 },
+    )
+    expect(res.blob).toBe(blob)
+    expect(res.filename).toBe('我的错题本 2026-09-17.pdf')
+  })
+
+  it('exportMistakes 缺少响应头时回退默认文件名', async () => {
+    httpMethods.post.mockResolvedValueOnce({ data: new Blob(['x']), headers: {} })
+
+    const res = await exportMistakes([1], 'docx')
+    expect(res.filename).toBe('我的错题本.docx')
+  })
+
+  it('parseContentDisposition 优先 UTF-8 文件名，兼容 ASCII 与异常输入', () => {
+    const utf8 = `attachment; filename="m.pdf"; filename*=UTF-8''${encodeURIComponent('错题本.pdf')}`
+    expect(parseContentDisposition(utf8)).toBe('错题本.pdf')
+    expect(parseContentDisposition('attachment; filename="m.pdf"')).toBe('m.pdf')
+    expect(parseContentDisposition(undefined)).toBeNull()
+    // 非法百分号编码不应抛出异常。
+    expect(parseContentDisposition("attachment; filename*=UTF-8''%E4%B8")).toBeNull()
   })
 })

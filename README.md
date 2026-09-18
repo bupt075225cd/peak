@@ -278,6 +278,28 @@ geometry:
 
 > `S3Storage` 已通过 AWS SDK Go v2 统一实现，后续迁移到阿里云 OSS、AWS S3、MinIO 等只需修改 `Endpoint` 与 `PathStyle` 配置，无需改动代码。
 
+## 错题导出（PDF / Word）
+
+错题列表页支持勾选导出，未勾选时导出当前筛选（学科 + 关键词）结果。
+
+- **接口**：`POST /api/mistakes/export`，请求体 `{"ids":[1,2,3],"format":"pdf"}`（或 `docx`）；按 `X-User-Id` 过滤归属，直接返回文件流（`Content-Disposition` 带 UTF-8 文件名）。
+- **PDF**：每题先渲染为位图再按 A4 排布（截图式排版，打印效果与页面一致），页面超出自动分页，单题过高时等比缩放避免跨页断裂。
+- **Word**：手写最小 OOXML 生成 `.docx`，标题、元信息与题干为可编辑文本，配图以图片形式内嵌。
+- **配图**：经 recognition-service 的 `GET /api/recognition/files/*key` 拉取；几何重绘产出的 SVG 在本地光栅化为 PNG；单张配图失败只跳过该图，不影响整次导出。
+- **中文字体**：随二进制 `go:embed` 打包（Noto Sans SC 子集，覆盖 GB2312 与常用符号），容器内无需安装系统字体。
+
+配置（`apps/question-service/config.yaml`）：
+
+```yaml
+recognition:
+  base_url: "http://localhost:8082"   # 图片服务地址（可用 RECOGNITION_SERVICE_URL 覆盖）
+export:
+  max_items: 200                      # 单次导出题数上限
+  max_image_width: 1200               # 配图最大像素宽度，0 表示不限制
+  fetch_timeout: 10s                  # 单张配图拉取超时
+  font_path: ""                       # 外部字体路径，留空使用内置字体
+```
+
 ## 可观测性
 
 - **日志**：zap 结构化日志，统一 traceID

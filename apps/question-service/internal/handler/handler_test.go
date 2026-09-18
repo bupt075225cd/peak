@@ -14,11 +14,18 @@ import (
 
 	"peak/libs/domain"
 
+	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/repository"
 	"peak/apps/question-service/internal/service"
 )
 
 func setupHandler(t *testing.T) *gin.Engine {
+	t.Helper()
+	return setupHandlerWithExporter(t, nil)
+}
+
+// setupHandlerWithExporter 构造带指定导出能力的处理器，exporter 为 nil 表示不启用导出。
+func setupHandlerWithExporter(t *testing.T, exporter export.Service) *gin.Engine {
 	t.Helper()
 	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "h.db"), logger.Silent)
 	if err != nil {
@@ -28,7 +35,7 @@ func setupHandler(t *testing.T) *gin.Engine {
 		t.Fatalf("migrate: %v", err)
 	}
 	repos := repository.NewGormRepositories(db)
-	svc := service.New(repos)
+	svc := service.New(repos, exporter)
 	h := New(svc)
 
 	gin.SetMode(gin.TestMode)
@@ -153,8 +160,8 @@ func TestMistakeHandlerFlow(t *testing.T) {
 
 	// 正常创建错题。
 	w = doRequest(t, r, http.MethodPost, "/api/mistakes", map[string]any{
-		"user_id":     1,
-		"question_id": qid,
+		"user_id":      1,
+		"question_id":  qid,
 		"wrong_reason": "careless",
 	})
 	if w.Code != http.StatusOK {

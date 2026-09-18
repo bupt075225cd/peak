@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	gormlogger "gorm.io/gorm/logger"
@@ -14,6 +15,7 @@ import (
 	"peak/libs/logger"
 	"peak/libs/observability"
 
+	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/handler"
 	"peak/apps/question-service/internal/repository"
 	"peak/apps/question-service/internal/service"
@@ -52,7 +54,13 @@ func main() {
 
 	// 组装依赖：repository -> service -> handler。
 	repos := repository.NewGormRepositories(db)
-	svc := service.New(repos)
+
+	// 导出能力在启动阶段初始化：字体加载等问题会立即暴露，而不是等用户点导出。
+	exporter, err := export.NewDefault(exportConfig(cfg))
+	if err != nil {
+		panic(err)
+	}
+	svc := service.New(repos, exporter)
 	h := handler.New(svc)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
@@ -72,4 +80,20 @@ func gormLogLevel(dev bool) gormlogger.LogLevel {
 		return gormlogger.Info
 	}
 	return gormlogger.Warn
+}
+
+// exportConfig 从配置构建导出配置，未配置项沿用默认值。
+func exportConfig(cfg *config.Loader) export.Config {
+	ec := export.DefaultConfig()
+	ec.RecognitionBaseURL = cfg.String("recognition.base_url", ec.RecognitionBaseURL)
+	ec.FontPath = cfg.String("export.font_path", ec.FontPath)
+	ec.MaxItems = cfg.Int("export.max_items", ec.MaxItems)
+	ec.MaxImageWidth = cfg.Int("export.max_image_width", ec.MaxImageWidth)
+
+	if raw := cfg.String("export.fetch_timeout", ""); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			ec.FetchTimeout = d
+		}
+	}
+	return ec
 }

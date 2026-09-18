@@ -8,17 +8,19 @@ import (
 	"peak/libs/domain"
 	"peak/libs/errors"
 
+	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/repository"
 )
 
 // Service 业务服务聚合。
 type Service struct {
-	repos *repository.GormRepositories
+	repos    *repository.GormRepositories
+	exporter export.Service
 }
 
-// New 创建业务服务实例。
-func New(repos *repository.GormRepositories) *Service {
-	return &Service{repos: repos}
+// New 创建业务服务实例。exporter 为 nil 时导出能力不可用。
+func New(repos *repository.GormRepositories, exporter export.Service) *Service {
+	return &Service{repos: repos, exporter: exporter}
 }
 
 // CreateQuestion 创建题目（含分类关联）。

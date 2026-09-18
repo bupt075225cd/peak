@@ -39,6 +39,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		mistake.POST("", h.createMistake)
 		mistake.GET("/:id", h.getMistake)
 		mistake.GET("", h.listMistakes)
+		mistake.POST("/export", h.exportMistakes)
 		mistake.PUT("/:id", h.updateMistake)
 		mistake.DELETE("/:id", h.deleteMistake)
 	}

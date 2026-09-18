@@ -89,6 +89,19 @@ func (r *gormMistakeRepo) ListByUser(ctx context.Context, userID uint64, offset,
 	return list, total, err
 }
 
+func (r *gormMistakeRepo) ListByIDs(ctx context.Context, userID uint64, ids []uint64) ([]domain.Mistake, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var list []domain.Mistake
+	// 必须带 user_id 过滤，避免越权导出他人错题。
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND id IN ?", userID, ids).
+		Preload("Question").
+		Find(&list).Error
+	return list, err
+}
+
 func (r *gormMistakeRepo) Update(ctx context.Context, m *domain.Mistake) error {
 	return r.db.WithContext(ctx).Save(m).Error
 }

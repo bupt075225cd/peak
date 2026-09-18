@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { BookOpen, Plus, Search, Loader2 } from 'lucide-vue-next'
+import { BookOpen, Plus, Search, Loader2, Download } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
-import { listMistakes, type Mistake } from '../api'
+import { listMistakes, exportMistakes, type Mistake, type ExportFormat } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
 
 const router = useRouter()
@@ -105,6 +105,112 @@ function openViewer(url: string) {
 function closeViewer() {
   viewerOpen.value = false
 }
+
+// ---- 导出 ----
+
+// 选中集合：切换学科/关键词时保留勾选，避免误操作丢失已选题目。
+const selectedIds = ref<Set<number>>(new Set())
+const exporting = ref(false)
+const exportError = ref('')
+const exportMenuOpen = ref(false)
+
+// 当前筛选结果中的已勾选项。
+const selectedVisible = computed(() =>
+  filteredItems.value.filter((m) => selectedIds.value.has(m.id)),
+)
+
+// 已勾选但被当前筛选排除的题目数量（导出时不会被包含）。
+const hiddenSelectedCount = computed(() =>
+  Math.max(0, selectedIds.value.size - selectedVisible.value.length),
+)
+
+// 导出目标：有勾选时只导出勾选项，否则导出当前筛选结果。
+const exportTargets = computed(() =>
+  selectedVisible.value.length > 0 ? selectedVisible.value : filteredItems.value,
+)
+
+const canExport = computed(() => !exporting.value && exportTargets.value.length > 0)
+
+// 全选只作用于当前筛选结果，不跨筛选累加。
+const allVisibleSelected = computed(
+  () =>
+    filteredItems.value.length > 0 &&
+    filteredItems.value.every((m) => selectedIds.value.has(m.id)),
+)
+
+function isSelected(id: number): boolean {
+  return selectedIds.value.has(id)
+}
+
+function toggleSelect(id: number) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  selectedIds.value = next
+}
+
+function toggleSelectAllVisible() {
+  const next = new Set(selectedIds.value)
+  if (allVisibleSelected.value) {
+    for (const m of filteredItems.value) next.delete(m.id)
+  } else {
+    for (const m of filteredItems.value) next.add(m.id)
+  }
+  selectedIds.value = next
+}
+
+async function handleExport(format: ExportFormat) {
+  exportMenuOpen.value = false
+  exportError.value = ''
+
+  const ids = exportTargets.value.map((m) => m.id)
+  if (!ids.length) {
+    exportError.value = '没有可导出的错题'
+    return
+  }
+
+  exporting.value = true
+  try {
+    const { blob, filename } = await exportMistakes(ids, format)
+    downloadBlob(blob, filename)
+  } catch (err) {
+    exportError.value = await resolveExportError(err)
+  } finally {
+    exporting.value = false
+  }
+}
+
+// downloadBlob 通过临时 <a> 触发浏览器下载，并释放 object URL。
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+// resolveExportError 解析导出失败原因：blob 请求出错时响应体实际是 JSON。
+//
+// 用鸭子类型判断而非 instanceof Blob：跨 realm 与测试替身下 instanceof 不可靠。
+async function resolveExportError(err: unknown): Promise<string> {
+  const data = (err as { response?: { data?: unknown } })?.response?.data
+  const readText = (data as { text?: () => Promise<string> } | undefined)?.text
+  if (typeof readText === 'function') {
+    try {
+      const parsed = JSON.parse(await readText.call(data)) as { message?: string }
+      if (parsed?.message) return parsed.message
+    } catch {
+      // 解析失败时回落到通用提示。
+    }
+  }
+  return '导出失败，请重试'
+}
 </script>
 
 <template>
@@ -114,13 +220,48 @@ function closeViewer() {
         <h1 class="text-2xl font-semibold text-ink">我的错题本</h1>
         <p class="text-sm text-ink-soft mt-1">共 {{ items.length }} 道错题</p>
       </div>
-      <button
-        type="button"
-        class="inline-flex items-center gap-2 rounded-xl bg-primary text-white px-4 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors"
-        @click="goEntry"
-      >
-        <Plus class="w-4 h-4" /> 录入错题
-      </button>
+      <div class="flex items-center gap-2">
+        <!-- 导出：未勾选时导出当前筛选结果 -->
+        <div class="relative">
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-ink-soft shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="!canExport"
+            @click="exportMenuOpen = !exportMenuOpen"
+          >
+            <Loader2 v-if="exporting" class="w-4 h-4 animate-spin" />
+            <Download v-else class="w-4 h-4" />
+            {{ exporting ? '导出中…' : '导出' }}
+          </button>
+          <div
+            v-if="exportMenuOpen"
+            class="absolute right-0 mt-2 w-40 rounded-xl border border-slate-200 bg-white shadow-lg py-1 z-10"
+          >
+            <button
+              type="button"
+              class="w-full text-left px-3 py-2 text-sm text-ink-soft hover:bg-slate-50"
+              @click="handleExport('pdf')"
+            >
+              导出为 PDF
+            </button>
+            <button
+              type="button"
+              class="w-full text-left px-3 py-2 text-sm text-ink-soft hover:bg-slate-50"
+              @click="handleExport('docx')"
+            >
+              导出为 Word
+            </button>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="inline-flex items-center gap-2 rounded-xl bg-primary text-white px-4 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors"
+          @click="goEntry"
+        >
+          <Plus class="w-4 h-4" /> 录入错题
+        </button>
+      </div>
     </div>
 
     <!-- 搜索 -->
@@ -131,6 +272,31 @@ function closeViewer() {
         class="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
         placeholder="搜索错题、知识点"
       />
+    </div>
+
+    <!-- 选择与导出状态 -->
+    <div
+      v-if="items.length"
+      class="flex flex-wrap items-center gap-3 mb-4 text-sm text-ink-soft animate-fade-up"
+    >
+      <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          class="rounded border-slate-300 text-primary focus:ring-primary/30 cursor-pointer disabled:cursor-not-allowed"
+          :checked="allVisibleSelected"
+          :disabled="!filteredItems.length"
+          @change="toggleSelectAllVisible"
+        />
+        全选当前筛选
+      </label>
+      <span v-if="selectedIds.size" class="text-xs text-ink-faint">
+        已选 {{ selectedIds.size }} 题
+        <template v-if="hiddenSelectedCount">
+          （其中 {{ hiddenSelectedCount }} 题不在当前筛选结果中，不会被导出）
+        </template>
+      </span>
+      <span v-else class="text-xs text-ink-faint">未勾选时导出当前筛选结果</span>
+      <span v-if="exportError" class="text-xs text-red-500">{{ exportError }}</span>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
@@ -183,6 +349,13 @@ function closeViewer() {
               class="rounded-2xl bg-white p-5 shadow-sm border border-slate-200/60 hover:shadow-md transition-shadow"
             >
               <div class="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  class="mt-1 rounded border-slate-300 text-primary focus:ring-primary/30 cursor-pointer shrink-0"
+                  :checked="isSelected(item.id)"
+                  :aria-label="`选择第 ${item.id} 道错题`"
+                  @change="toggleSelect(item.id)"
+                />
                 <div class="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
                   <BookOpen class="w-5 h-5 text-primary" />
                 </div>

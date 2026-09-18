@@ -21,6 +21,8 @@ type MistakeRepository interface {
 	Create(ctx context.Context, m *domain.Mistake) error
 	Get(ctx context.Context, id uint64) (*domain.Mistake, error)
 	ListByUser(ctx context.Context, userID uint64, offset, limit int) ([]domain.Mistake, int64, error)
+	// ListByIDs 按 id 批量查询指定用户的错题（含题目关联），用于导出场景。
+	ListByIDs(ctx context.Context, userID uint64, ids []uint64) ([]domain.Mistake, error)
 	Update(ctx context.Context, m *domain.Mistake) error
 	Delete(ctx context.Context, id uint64) error
 }

@@ -27,6 +27,55 @@ func setupRepos(t *testing.T) (*GormRepositories, uint64) {
 	return NewGormRepositories(db), u.ID
 }
 
+func TestMistakeRepoListByIDs(t *testing.T) {
+	repos, userID := setupRepos(t)
+	ctx := context.Background()
+
+	var mistakeIDs []uint64
+	for _, stem := range []string{"a", "b", "c"} {
+		q := &domain.Question{Subject: "math", StemText: stem}
+		if err := repos.Question.Create(ctx, q); err != nil {
+			t.Fatalf("create question: %v", err)
+		}
+		m := &domain.Mistake{UserID: userID, QuestionID: q.ID}
+		if err := repos.Mistake.Create(ctx, m); err != nil {
+			t.Fatalf("create mistake: %v", err)
+		}
+		mistakeIDs = append(mistakeIDs, m.ID)
+	}
+
+	// 其他用户的错题不应被查出。
+	otherQuestion := &domain.Question{Subject: "math", StemText: "other"}
+	if err := repos.Question.Create(ctx, otherQuestion); err != nil {
+		t.Fatalf("create other question: %v", err)
+	}
+	foreign := &domain.Mistake{UserID: userID + 1, QuestionID: otherQuestion.ID}
+	if err := repos.Mistake.Create(ctx, foreign); err != nil {
+		t.Fatalf("create foreign mistake: %v", err)
+	}
+
+	list, err := repos.Mistake.ListByIDs(ctx, userID, []uint64{mistakeIDs[0], mistakeIDs[2], foreign.ID})
+	if err != nil {
+		t.Fatalf("ListByIDs: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 own mistakes, got %d", len(list))
+	}
+	for i := range list {
+		if list[i].Question == nil {
+			t.Fatal("expected question to be preloaded")
+		}
+	}
+
+	empty, err := repos.Mistake.ListByIDs(ctx, userID, nil)
+	if err != nil {
+		t.Fatalf("ListByIDs with empty ids: %v", err)
+	}
+	if empty != nil {
+		t.Fatalf("expected nil result for empty ids, got %v", empty)
+	}
+}
+
 func TestQuestionRepoCRUD(t *testing.T) {
 	repos, _ := setupRepos(t)
 	ctx := context.Background()
