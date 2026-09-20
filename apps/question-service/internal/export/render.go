@@ -42,6 +42,12 @@ func defaultRenderConfig() renderConfig {
 	}
 }
 
+// imageMaxWidthRatio 配图在正文中的最大宽度占比。
+//
+// 几何图原始画布往往很小，若一律铺满正文宽度会显得过大且与题干比例失衡，
+// 这里限制为正文宽度的 3/4 并居中，接近试卷的实际版式。
+const imageMaxWidthRatio = 0.75
+
 // 渲染配色。
 var (
 	colorInk     = color.RGBA{R: 0x11, G: 0x18, B: 0x27, A: 0xff} // 题干
@@ -130,7 +136,9 @@ func renderItemImage(rc renderConfig, fonts *FontProvider, index int, it renderI
 		}
 		scaled := image.NewRGBA(image.Rect(0, 0, dw, dh))
 		draw.CatmullRom.Scale(scaled, scaled.Bounds(), p.src, p.src.Bounds(), draw.Over, nil)
-		dc.DrawImage(scaled, rc.padding, int(math.Round(y)))
+		// 配图宽度受限，水平居中摆放。
+		x := float64(rc.padding) + (contentWidth-p.w)/2
+		dc.DrawImage(scaled, int(math.Round(x)), int(math.Round(y)))
 		y += p.h
 	}
 
@@ -150,6 +158,8 @@ type placedImage struct {
 // decodeImages 解码配图并按内容宽度等比计算显示尺寸，解码失败的图片直接跳过。
 func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, error) {
 	out := make([]placedImage, 0, len(assets))
+	maxWidth := contentWidth * imageMaxWidthRatio
+
 	for _, asset := range assets {
 		if asset.Width <= 0 || asset.Height <= 0 {
 			continue
@@ -158,7 +168,7 @@ func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, err
 		if err != nil {
 			continue
 		}
-		w := contentWidth
+		w := maxWidth
 		h := w * float64(asset.Height) / float64(asset.Width)
 		out = append(out, placedImage{src: src, w: w, h: h})
 	}

@@ -132,6 +132,29 @@ func TestRenderItemImageHeightGrowsWithLongerStem(t *testing.T) {
 	}
 }
 
+func TestDecodeImagesLimitsWidth(t *testing.T) {
+	rc := defaultRenderConfig()
+	contentWidth := float64(rc.width - 2*rc.padding)
+
+	assets := []ImageAsset{{Data: encodePNG(t, 400, 100), Format: "png", Width: 400, Height: 100}}
+	placed, err := decodeImages(assets, contentWidth)
+	if err != nil {
+		t.Fatalf("decodeImages: %v", err)
+	}
+	if len(placed) != 1 {
+		t.Fatalf("placed %d images, want 1", len(placed))
+	}
+
+	want := contentWidth * imageMaxWidthRatio
+	if placed[0].w != want {
+		t.Fatalf("image width = %.1f, want %.1f", placed[0].w, want)
+	}
+	// 高度按原始比例换算。
+	if got, wantH := placed[0].h, want*100/400; got != wantH {
+		t.Fatalf("image height = %.1f, want %.1f", got, wantH)
+	}
+}
+
 func TestRenderItemImageHeightGrowsWithImage(t *testing.T) {
 	fonts := testFonts(t)
 	rc := defaultRenderConfig()

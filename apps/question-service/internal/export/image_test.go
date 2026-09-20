@@ -65,7 +65,7 @@ func (f *fakeFetcher) callCount(key string) int {
 
 func TestNormalizeImageKeepsSmallJPEGBytes(t *testing.T) {
 	raw := encodeJPEG(t, 100, 50)
-	asset, err := normalizeImage(raw, "a.jpg", 1200)
+	asset, err := normalizeImage(raw, "a.jpg", 1200, nil)
 	if err != nil {
 		t.Fatalf("normalizeImage: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestNormalizeImageKeepsSmallJPEGBytes(t *testing.T) {
 
 func TestNormalizeImageScalesOversizedBitmap(t *testing.T) {
 	raw := encodePNG(t, 2000, 1000)
-	asset, err := normalizeImage(raw, "a.png", 1000)
+	asset, err := normalizeImage(raw, "a.png", 1000, nil)
 	if err != nil {
 		t.Fatalf("normalizeImage: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestNormalizeImageScalesOversizedBitmap(t *testing.T) {
 }
 
 func TestNormalizeImageRasterizesSVG(t *testing.T) {
-	asset, err := normalizeImage([]byte(simpleSVG), "geometry/task_1.svg", 0)
+	asset, err := normalizeImage([]byte(simpleSVG), "geometry/task_1.svg", 0, nil)
 	if err != nil {
 		t.Fatalf("normalizeImage: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestNormalizeImageRasterizesSVG(t *testing.T) {
 
 func TestNormalizeImageKeepsJPEGFormatWhenScaling(t *testing.T) {
 	raw := encodeJPEG(t, 2000, 1000)
-	asset, err := normalizeImage(raw, "a.jpg", 1000)
+	asset, err := normalizeImage(raw, "a.jpg", 1000, nil)
 	if err != nil {
 		t.Fatalf("normalizeImage: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestNormalizeImageKeepsJPEGFormatWhenScaling(t *testing.T) {
 }
 
 func TestNormalizeImageRejectsInvalidData(t *testing.T) {
-	if _, err := normalizeImage([]byte("not an image"), "a.png", 0); err == nil {
+	if _, err := normalizeImage([]byte("not an image"), "a.png", 0, nil); err == nil {
 		t.Fatal("expected decode error")
 	}
 }
@@ -175,7 +175,7 @@ func TestImageLoaderLoadsAndDeduplicates(t *testing.T) {
 		"b.png": encodePNG(t, 20, 20),
 	})
 
-	loader := NewImageLoader(ff, 0)
+	loader := NewImageLoader(ff, 0, nil)
 	assets, warnings := loader.Load(context.Background(), []string{"a.png", "b.png", "a.png"})
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
@@ -198,7 +198,7 @@ func TestImageLoaderDegradesOnFailure(t *testing.T) {
 	ff := newFakeFetcher(map[string][]byte{"ok.png": encodePNG(t, 10, 10)})
 	ff.errs["bad.png"] = errors.New("boom")
 
-	loader := NewImageLoader(ff, 0)
+	loader := NewImageLoader(ff, 0, nil)
 	assets, warnings := loader.Load(context.Background(), []string{"ok.png", "bad.png"})
 	if len(assets) != 1 || assets["ok.png"] == nil || assets["ok.png"].Width != 10 {
 		t.Fatalf("unexpected assets: %+v", assets)
@@ -212,7 +212,7 @@ func TestImageLoaderDegradesOnFailure(t *testing.T) {
 }
 
 func TestImageLoaderWithoutKeys(t *testing.T) {
-	loader := NewImageLoader(newFakeFetcher(nil), 0)
+	loader := NewImageLoader(newFakeFetcher(nil), 0, nil)
 	assets, warnings := loader.Load(context.Background(), nil)
 	if assets != nil || warnings != nil {
 		t.Fatalf("expected nil results, got assets=%v warnings=%v", assets, warnings)

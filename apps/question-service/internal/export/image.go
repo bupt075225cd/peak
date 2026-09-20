@@ -34,6 +34,7 @@ var errUnexpectedAsset = errors.New("unexpected image asset type")
 type ImageLoader struct {
 	fetcher  Fetcher
 	maxWidth int
+	fonts    *FontProvider
 
 	mu    sync.Mutex
 	cache map[string]*ImageAsset
@@ -42,10 +43,13 @@ type ImageLoader struct {
 }
 
 // NewImageLoader 创建图片加载器。maxWidth <= 0 表示不做宽度限制。
-func NewImageLoader(fetcher Fetcher, maxWidth int) *ImageLoader {
+//
+// fonts 用于 SVG 光栅化时补绘 oksvg 不支持的文字标注，可为 nil。
+func NewImageLoader(fetcher Fetcher, maxWidth int, fonts *FontProvider) *ImageLoader {
 	return &ImageLoader{
 		fetcher:  fetcher,
 		maxWidth: maxWidth,
+		fonts:    fonts,
 		cache:    make(map[string]*ImageAsset),
 		fail:     make(map[string]error),
 	}
@@ -120,7 +124,7 @@ func (l *ImageLoader) loadOne(ctx context.Context, key string) (*ImageAsset, err
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
-		return normalizeImage(raw, key, l.maxWidth)
+		return normalizeImage(raw, key, l.maxWidth, l.fonts)
 	})
 
 	l.mu.Lock()
@@ -143,9 +147,9 @@ func (l *ImageLoader) loadOne(ctx context.Context, key string) (*ImageAsset, err
 //
 // SVG 走光栅化；位图超过宽度上限时等比缩放并统一编码为 PNG，
 // 未超限的 JPEG/PNG 直接复用原始字节，避免重新编码导致体积膨胀。
-func normalizeImage(raw []byte, key string, maxWidth int) (*ImageAsset, error) {
+func normalizeImage(raw []byte, key string, maxWidth int, fonts *FontProvider) (*ImageAsset, error) {
 	if isSVG(key) {
-		return rasterizeSVG(raw, maxWidth)
+		return rasterizeSVG(raw, maxWidth, fonts)
 	}
 
 	img, format, err := image.Decode(bytes.NewReader(raw))

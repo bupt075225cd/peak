@@ -97,7 +97,7 @@ func (s *service) Export(ctx context.Context, items []ExportItem, format Format)
 // 一次性收集所有 key 再加载，跨题目的同一张图只会拉取一次，
 // 并发度也不受题目数量限制。
 func (s *service) loadImages(ctx context.Context, items []ExportItem) ([]renderItem, []string) {
-	loader := NewImageLoader(s.fetcher, s.cfg.MaxImageWidth)
+	loader := NewImageLoader(s.fetcher, s.cfg.MaxImageWidth, s.fonts)
 
 	allKeys := make([]string, 0, len(items))
 	for _, it := range items {
