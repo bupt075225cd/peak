@@ -102,8 +102,26 @@ func TestNormalizeImageRasterizesSVG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeImage: %v", err)
 	}
-	if asset.Format != "png" || asset.Width != 100 || asset.Height != 50 {
+	if asset.Format != "png" || asset.Width != svgRenderWidth {
 		t.Fatalf("unexpected asset: %+v", asset)
+	}
+}
+
+func TestNormalizeImageKeepsJPEGFormatWhenScaling(t *testing.T) {
+	raw := encodeJPEG(t, 2000, 1000)
+	asset, err := normalizeImage(raw, "a.jpg", 1000)
+	if err != nil {
+		t.Fatalf("normalizeImage: %v", err)
+	}
+	// 缩放后的照片仍应为 JPEG，避免转 PNG 造成体积膨胀。
+	if asset.Format != "jpeg" {
+		t.Fatalf("format = %q, want jpeg", asset.Format)
+	}
+	if asset.Width != 1000 || asset.Height != 500 {
+		t.Fatalf("size = %dx%d, want 1000x500", asset.Width, asset.Height)
+	}
+	if _, err := jpeg.Decode(bytes.NewReader(asset.Data)); err != nil {
+		t.Fatalf("scaled bytes are not a valid jpeg: %v", err)
 	}
 }
 

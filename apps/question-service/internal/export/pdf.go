@@ -16,6 +16,11 @@ const (
 	pdfMarginMM = 15.0
 	// pdfItemGapMM 相邻题目位图之间的间距（毫米）。
 	pdfItemGapMM = 6.0
+	// pdfRenderWidth 题目位图渲染宽度（像素）。
+	//
+	// 位图最终按 A4 正文宽度（约 180mm）展示，该宽度决定打印清晰度：
+	// 1600px 对应约 209 DPI，高于 150 DPI 的常规打印要求。
+	pdfRenderWidth = 1600
 )
 
 // buildPDF 生成截图式 PDF：每道题先渲染为位图，再按 A4 等比排布。
@@ -40,6 +45,10 @@ func buildPDF(title string, items []renderItem, fonts *FontProvider) ([]byte, er
 	contentHeight := pdfPageHeightMM - 2*pdfMarginMM
 	opts := fpdf.ImageOptions{ImageType: "PNG"}
 
+	// 正文可用区域的上下边界（绝对坐标）。
+	top := pdfMarginMM
+	bottom := pdfMarginMM + contentHeight
+
 	rc := defaultRenderConfig()
 
 	for i := range items {
@@ -62,13 +71,14 @@ func buildPDF(title string, items []renderItem, fonts *FontProvider) ([]byte, er
 			dispW = dispH * float64(pxW) / float64(pxH)
 		}
 
-		// fpdf 的 y 坐标相对上边距，ImageOptions 的 y 为绝对坐标。
+		// fpdf 的 GetY/SetY 与 ImageOptions 的 y 均为绝对坐标（已含上边距），
+		// 因此统一按绝对坐标判断与绘制，避免边距被重复计入。
 		y := pdf.GetY()
-		if y > 0 && y+dispH > contentHeight {
+		if y+dispH > bottom {
 			pdf.AddPage()
-			y = 0
+			y = top
 		}
-		pdf.ImageOptions(name, pdfMarginMM, pdfMarginMM+y, dispW, dispH, false, opts, 0, "")
+		pdf.ImageOptions(name, pdfMarginMM, y, dispW, dispH, false, opts, 0, "")
 		pdf.SetY(y + dispH + pdfItemGapMM)
 	}
 

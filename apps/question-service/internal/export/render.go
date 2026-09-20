@@ -23,14 +23,21 @@ type renderConfig struct {
 	lineSpacing float64 // 行高倍数
 }
 
+// renderBaseWidth 排版基准宽度：字号与间距按该宽度设计，实际整体等比放大。
+const renderBaseWidth = 1000
+
 // defaultRenderConfig 返回默认渲染参数。
+//
+// 画布宽度直接决定 PDF 中的打印清晰度（见 pdfRenderWidth），这里所有尺寸按
+// 同一比例放大，保证字号、间距与配图的相对比例与基准设计一致。
 func defaultRenderConfig() renderConfig {
+	scale := float64(pdfRenderWidth) / renderBaseWidth
 	return renderConfig{
-		width:       1000,
-		padding:     36,
-		gap:         20,
-		metaSize:    20,
-		stemSize:    22,
+		width:       pdfRenderWidth,
+		padding:     int(math.Round(36 * scale)),
+		gap:         int(math.Round(20 * scale)),
+		metaSize:    20 * scale,
+		stemSize:    22 * scale,
 		lineSpacing: 1.6,
 	}
 }

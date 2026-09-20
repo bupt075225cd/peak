@@ -11,9 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	// 注册解码器，供 image.Decode 使用。
 	_ "image/gif"
-	_ "image/jpeg"
+	"image/jpeg"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/sync/errgroup"
@@ -22,6 +21,9 @@ import (
 
 // imageFetchConcurrency 单次导出内的图片并发拉取上限。
 const imageFetchConcurrency = 4
+
+// jpegQuality 缩放后重新编码 JPEG 的质量，兼顾清晰度与体积。
+const jpegQuality = 88
 
 // errUnexpectedAsset 图片加载内部类型断言失败，属于不应出现的编程错误。
 var errUnexpectedAsset = errors.New("unexpected image asset type")
@@ -171,7 +173,15 @@ func normalizeImage(raw []byte, key string, maxWidth int) (*ImageAsset, error) {
 		pic = dst
 	}
 
+	// 照片类图片缩放后仍编码为 JPEG：转 PNG 会让体积膨胀数倍。
 	var buf bytes.Buffer
+	if strings.EqualFold(format, "jpeg") {
+		if err := jpeg.Encode(&buf, pic, &jpeg.Options{Quality: jpegQuality}); err != nil {
+			return nil, fmt.Errorf("encode jpeg: %w", err)
+		}
+		return &ImageAsset{Data: buf.Bytes(), Format: "jpeg", Width: nw, Height: nh}, nil
+	}
+
 	if err := png.Encode(&buf, pic); err != nil {
 		return nil, fmt.Errorf("encode image: %w", err)
 	}
