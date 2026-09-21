@@ -41,6 +41,9 @@ const gradeOptions = ['七年级上', '七年级下', '八年级上', '八年级
 const questionType = ref('')
 const subject = ref('')
 
+// 来源：这道错题的出处（如"期中考试""练习册 P32"），录入时必填。
+const source = ref('')
+
 // 识别进度文案：processing 阶段优先展示后端上报的阶段说明（如"正在几何重绘…"），
 // 让用户能感知当前正在执行哪一步，而不是长时间只看到百分比。
 const progressText = computed(() => {
@@ -189,6 +192,10 @@ async function handleSave() {
     saveError.value = '请选择年级'
     return
   }
+  if (!source.value.trim()) {
+    saveError.value = '请填写来源'
+    return
+  }
   loading.value = true
   try {
     // 第一步：创建题目本体。
@@ -203,7 +210,7 @@ async function handleSave() {
     await createMistake({
       user_id: 1,
       question_id: question.id,
-      source: '',
+      source: source.value.trim(),
     })
     alert('错题已保存')
     reset()
@@ -226,6 +233,7 @@ function reset() {
   redrawSvgKeys.value = []
   redrawConsistent.value = true
   grade.value = ''
+  source.value = ''
   errorMsg.value = ''
   saveError.value = ''
   warningMsg.value = ''
@@ -419,12 +427,26 @@ function selectQuestion(idx: number) {
               />
             </div>
 
-            <div>
-              <label class="block text-sm font-medium text-ink-soft mb-1.5">年级 <span class="text-red-500">*</span></label>
-              <select v-model="grade" class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
-                <option disabled value="">请选择年级</option>
-                <option v-for="g in gradeOptions" :key="g" :value="g">{{ g }}</option>
-              </select>
+            <!-- 年级与来源并排：两项都是必填，放一行更紧凑 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-ink-soft mb-1.5">年级 <span class="text-red-500">*</span></label>
+                <select v-model="grade" class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
+                  <option disabled value="">请选择年级</option>
+                  <option v-for="g in gradeOptions" :key="g" :value="g">{{ g }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-ink-soft mb-1.5">来源 <span class="text-red-500">*</span></label>
+                <input
+                  v-model="source"
+                  type="text"
+                  maxlength="128"
+                  data-testid="source-input"
+                  class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
+                  placeholder="如：期中考试 / 练习册 P32"
+                />
+              </div>
             </div>
 
             <!-- 学科、题型由识别自动回填，识别后才展示 -->
@@ -486,7 +508,7 @@ function selectQuestion(idx: number) {
             <button
               type="button"
               class="inline-flex items-center gap-2 rounded-xl bg-primary text-white px-6 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="loading || !stemText.trim() || !grade"
+              :disabled="loading || !stemText.trim() || !grade || !source.trim()"
               @click="handleSave"
             >
               <Loader2 v-if="loading" class="w-4 h-4 animate-spin" />

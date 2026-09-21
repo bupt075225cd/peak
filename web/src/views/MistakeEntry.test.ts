@@ -117,6 +117,8 @@ describe('MistakeEntry.vue', () => {
     // 选择年级后保存按钮可用
     const gradeSelect = wrapper.findAll('select')[0]
     await gradeSelect.setValue('七年级上')
+    // 来源必填：一起填上，否则保存按钮保持禁用。
+    await wrapper.find('[data-testid="source-input"]').setValue('期中考试')
     await flushPromises()
     expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
@@ -193,6 +195,8 @@ describe('MistakeEntry.vue', () => {
     // 选择年级后保存按钮可用
     const gradeSelect = wrapper.findAll('select')[0]
     await gradeSelect.setValue('七年级上')
+    // 来源必填：一起填上，否则保存按钮保持禁用。
+    await wrapper.find('[data-testid="source-input"]').setValue('期中考试')
     await flushPromises()
     saveBtn = getSaveBtn(wrapper)
     expect((saveBtn.element as HTMLButtonElement).disabled).toBe(false)
@@ -213,6 +217,7 @@ describe('MistakeEntry.vue', () => {
       expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', expect.objectContaining({
         user_id: 1,
         question_id: 42,
+        source: '期中考试',
       }))
     })
     // 保存成功后 reset() 清空题干，题目信息随之隐藏
@@ -250,6 +255,8 @@ describe('MistakeEntry.vue', () => {
     // 选择年级
     const gradeSelect = wrapper.findAll('select')[0]
     await gradeSelect.setValue('七年级上')
+    // 来源必填：一起填上，否则保存按钮保持禁用。
+    await wrapper.find('[data-testid="source-input"]').setValue('期中考试')
     await flushPromises()
 
     // createQuestion 失败 → saveError 显示在底部操作栏
@@ -440,6 +447,8 @@ describe('MistakeEntry.vue', () => {
 
     const gradeSelect = wrapper.findAll('select')[0]
     await gradeSelect.setValue('七年级上')
+    // 来源必填：一起填上，否则保存按钮保持禁用。
+    await wrapper.find('[data-testid="source-input"]').setValue('期中考试')
     await flushPromises()
     httpMethods.post.mockResolvedValueOnce(ok({ id: 42 }))
     httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 1 } } })
@@ -471,6 +480,8 @@ describe('MistakeEntry.vue', () => {
     // 选年级 → 保存。
     const gradeSelect = wrapper.findAll('select')[0]
     await gradeSelect.setValue('七年级上')
+    // 来源必填：一起填上，否则保存按钮保持禁用。
+    await wrapper.find('[data-testid="source-input"]').setValue('期中考试')
     await flushPromises()
     httpMethods.post.mockResolvedValueOnce(ok({ id: 42 }))
     httpMethods.post.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: { id: 1 } } })
@@ -509,5 +520,33 @@ describe('MistakeEntry.vue', () => {
 
     expect(wrapper.text()).not.toContain('几何图形')
     expect(wrapper.text()).not.toContain('重绘')
+  })
+
+  it('来源必填：未填写（或只填空白）时保存按钮禁用', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await recognizeWithResult(wrapper, mathGeoResult(8))
+
+    const sourceInput = wrapper.find('[data-testid="source-input"]')
+    expect(sourceInput.exists()).toBe(true)
+    expect(wrapper.text()).toContain('来源')
+
+    // 题干与年级都就绪，但来源为空 → 仍禁用。
+    await wrapper.findAll('select')[0].setValue('七年级上')
+    await flushPromises()
+    expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(true)
+
+    // 只填空白同样视为未填写。
+    await sourceInput.setValue('   ')
+    await flushPromises()
+    expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(true)
+
+    await sourceInput.setValue('期中考试')
+    await flushPromises()
+    expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
 })

@@ -163,6 +163,7 @@ func TestMistakeHandlerFlow(t *testing.T) {
 		"user_id":      1,
 		"question_id":  qid,
 		"wrong_reason": "careless",
+		"source":       "期中考试",
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("create mistake: expected 200, got %d body=%s", w.Code, w.Body.String())
@@ -335,7 +336,7 @@ func TestMistakeGetSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = doRequest(t, r, http.MethodPost, "/api/mistakes", map[string]any{
-		"user_id": 1, "question_id": qresp.Data.ID,
+		"user_id": 1, "question_id": qresp.Data.ID, "source": "期中考试",
 	})
 	var mresp struct {
 		Data domain.Mistake `json:"data"`
@@ -378,6 +379,26 @@ func TestMistakeCreateInvalidJSON(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestMistakeCreateRequiresSource(t *testing.T) {
+	r := setupHandler(t)
+
+	w := doRequest(t, r, http.MethodPost, "/api/questions", map[string]any{"subject": "math"})
+	var qresp struct {
+		Data domain.Question `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &qresp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 未传来源应 400（来源必填）。
+	w = doRequest(t, r, http.MethodPost, "/api/mistakes", map[string]any{
+		"user_id": 1, "question_id": qresp.Data.ID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing source, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

@@ -255,3 +255,45 @@ describe('MistakeList.vue 导出', () => {
     expect(buttonByText(wrapper, '导出').attributes('disabled')).toBeDefined()
   })
 })
+
+describe('MistakeList.vue 来源', () => {
+  const withSources: Mistake[] = [
+    { ...mockMistakes[0], id: 1, source: '期中考试' },
+    { ...mockMistakes[1], id: 2, source: '练习册 P32' },
+  ]
+
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, { global: { plugins: [router] } })
+  }
+
+  it('卡片展示来源，并可点来源胶囊筛选', async () => {
+    httpMethods.get.mockResolvedValue(ok({ items: withSources, total: 2 }))
+    const wrapper = mountList()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('来源：期中考试')
+    expect(wrapper.text()).toContain('来源：练习册 P32')
+
+    // 点「练习册 P32」胶囊后只剩第二条。
+    const chip = wrapper.findAll('button').find((b) => b.text().includes('练习册 P32'))!
+    await chip.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('∠C=90°')
+    expect(wrapper.text()).not.toContain('y = x² - 2x - 3')
+  })
+
+  it('关键词可以搜索来源', async () => {
+    httpMethods.get.mockResolvedValue(ok({ items: withSources, total: 2 }))
+    const wrapper = mountList()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="搜索"]').setValue('期中考试')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('y = x² - 2x - 3')
+    expect(wrapper.text()).not.toContain('∠C=90°')
+  })
+})

@@ -153,6 +153,24 @@ func TestCreateMistakeRequiresQuestion(t *testing.T) {
 	}
 }
 
+func TestCreateMistakeRequiresSource(t *testing.T) {
+	svc := setupService(t)
+	ctx := context.Background()
+
+	err := svc.CreateMistake(ctx, &domain.Mistake{UserID: 1, QuestionID: 1})
+	if err == nil {
+		t.Fatal("expected error for missing source")
+	}
+	if errors.CodeOf(err) != errors.CodeInvalidArgument {
+		t.Fatalf("expected CodeInvalidArgument, got %d", errors.CodeOf(err))
+	}
+
+	// 仅空白字符同样视为未填写。
+	if err := svc.CreateMistake(ctx, &domain.Mistake{UserID: 1, QuestionID: 1, Source: "   "}); err == nil {
+		t.Fatal("expected error for blank source")
+	}
+}
+
 func TestMistakeCRUD(t *testing.T) {
 	svc := setupService(t)
 	ctx := context.Background()
@@ -162,7 +180,7 @@ func TestMistakeCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := &domain.Mistake{UserID: 1, QuestionID: q.ID, WrongReason: "careless"}
+	m := &domain.Mistake{UserID: 1, QuestionID: q.ID, WrongReason: "careless", Source: "期中考试"}
 	if err := svc.CreateMistake(ctx, m); err != nil {
 		t.Fatalf("create mistake: %v", err)
 	}
@@ -206,6 +224,7 @@ func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
 	m := &domain.Mistake{
 		UserID:     1,
 		QuestionID: q.ID,
+		Source:     "期中考试",
 		ReviewRecords: []domain.ReviewRecord{
 			{ReviewedAt: reviewedAt, Result: "correct"},
 			{ReviewedAt: reviewedAt.Add(24 * time.Hour), Result: "wrong"},

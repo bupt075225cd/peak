@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"peak/libs/domain"
@@ -62,6 +63,11 @@ func (s *Service) CreateMistake(ctx context.Context, m *domain.Mistake) error {
 	}
 	if m.QuestionID == 0 {
 		return errors.New(errors.CodeInvalidArgument, "question_id is required")
+	}
+	// 来源必填：录入时要求填写错题出处，便于后续按来源筛选与统计。
+	m.Source = strings.TrimSpace(m.Source)
+	if m.Source == "" {
+		return errors.New(errors.CodeInvalidArgument, "source is required")
 	}
 	// 前端未传 recorded_at 时由服务端兜底为当前时间，避免入库为零值（0001-01-01）。
 	if m.RecordedAt.IsZero() {

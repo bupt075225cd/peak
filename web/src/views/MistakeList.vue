@@ -30,16 +30,40 @@ function subjectCount(subject: string): number {
   return items.value.filter((m) => (m.question?.subject ?? '') === subject).length
 }
 
-// 按学科 + 关键词过滤。
+// 错题来源：优先题目来源，其次错题记录来源（与导出的取值口径一致）。
+function mistakeSource(m: Mistake): string {
+  return (m.question?.source ?? '').trim() || (m.source ?? '').trim()
+}
+
+// 来源筛选：全部 + 数据中实际出现的来源。
+const activeSource = ref('全部')
+const sourceOptions = computed(() => {
+  const set = new Set<string>()
+  for (const m of items.value) {
+    const s = mistakeSource(m)
+    if (s) set.add(s)
+  }
+  return Array.from(set).sort()
+})
+
+// 某来源下的错题数量。
+function sourceCount(source: string): number {
+  if (source === '全部') return items.value.length
+  return items.value.filter((m) => mistakeSource(m) === source).length
+}
+
+// 按学科 + 来源 + 关键词过滤。
 const filteredItems = computed(() => {
   const kw = keyword.value.trim()
   return items.value.filter((m) => {
     const subject = m.question?.subject ?? ''
     if (activeSubject.value !== '全部' && subject !== activeSubject.value) return false
+    if (activeSource.value !== '全部' && mistakeSource(m) !== activeSource.value) return false
     if (!kw) return true
     const stem = m.question?.stem_text ?? ''
     const kps = knowledgePoints(m.question).join(' ')
-    return subject.includes(kw) || stem.includes(kw) || kps.includes(kw)
+    const source = mistakeSource(m)
+    return subject.includes(kw) || stem.includes(kw) || kps.includes(kw) || source.includes(kw)
   })
 })
 
@@ -265,13 +289,33 @@ async function resolveExportError(err: unknown): Promise<string> {
     </div>
 
     <!-- 搜索 -->
-    <div class="relative mb-6 animate-fade-up">
+    <div class="relative mb-4 animate-fade-up">
       <Search class="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
       <input
         v-model="keyword"
         class="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-        placeholder="搜索错题、知识点"
+        placeholder="搜索错题、知识点、来源"
       />
+    </div>
+
+    <!-- 按来源筛选（来源在录入时填写） -->
+    <div
+      v-if="sourceOptions.length"
+      class="flex flex-wrap items-center gap-2 mb-6 animate-fade-up"
+    >
+      <span class="text-xs text-ink-faint mr-1">来源</span>
+      <button
+        v-for="s in ['全部', ...sourceOptions]"
+        :key="s"
+        type="button"
+        class="rounded-full border px-3 py-1 text-xs font-medium transition-colors"
+        :class="activeSource === s
+          ? 'bg-primary text-white border-primary'
+          : 'bg-white text-ink-soft border-slate-200 hover:bg-slate-50'"
+        @click="activeSource = s"
+      >
+        {{ s }}<span class="ml-1 opacity-70">{{ sourceCount(s) }}</span>
+      </button>
     </div>
 
     <!-- 选择与导出状态 -->
@@ -360,9 +404,13 @@ async function resolveExportError(err: unknown): Promise<string> {
                   <BookOpen class="w-5 h-5 text-primary" />
                 </div>
                 <div class="flex-1">
-                  <div class="flex items-center gap-2 mb-1">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
                     <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">{{ item.question?.subject ?? '未分类' }}</span>
                     <span class="text-xs text-ink-faint">{{ item.question?.question_type }}</span>
+                    <span
+                      v-if="mistakeSource(item)"
+                      class="text-xs text-ink-soft bg-surface-tint px-2 py-0.5 rounded-full"
+                    >来源：{{ mistakeSource(item) }}</span>
                     <span class="text-xs text-ink-faint">{{ item.recorded_at?.slice(0, 10) }}</span>
                   </div>
                   <p class="text-sm text-ink leading-relaxed">{{ item.question?.stem_text }}</p>
