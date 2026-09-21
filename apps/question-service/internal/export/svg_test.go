@@ -21,6 +21,11 @@ func TestRasterizeSVGProducesPNG(t *testing.T) {
 	if asset.Width != svgRenderWidth || asset.Height != svgRenderWidth/2 {
 		t.Fatalf("size = %dx%d, want %dx%d", asset.Width, asset.Height, svgRenderWidth, svgRenderWidth/2)
 	}
+	// 自然尺寸记录 viewBox，并标记为矢量图（不受放大倍数限制）。
+	if asset.NaturalWidth != 100 || asset.NaturalHeight != 50 || !asset.Vector {
+		t.Fatalf("natural size = %dx%d vector=%v, want 100x50 vector",
+			asset.NaturalWidth, asset.NaturalHeight, asset.Vector)
+	}
 	if _, err := png.Decode(bytes.NewReader(asset.Data)); err != nil {
 		t.Fatalf("rasterized bytes are not a valid png: %v", err)
 	}

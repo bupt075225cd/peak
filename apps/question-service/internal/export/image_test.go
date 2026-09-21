@@ -218,3 +218,23 @@ func TestImageLoaderWithoutKeys(t *testing.T) {
 		t.Fatalf("expected nil results, got assets=%v warnings=%v", assets, warnings)
 	}
 }
+
+func TestNormalizeImageRecordsNaturalSize(t *testing.T) {
+	// 小位图保留原始字节：自然尺寸即解码像素。
+	small, err := normalizeImage(encodePNG(t, 100, 50), "a.png", 1200, nil)
+	if err != nil {
+		t.Fatalf("normalizeImage: %v", err)
+	}
+	if small.NaturalWidth != 100 || small.NaturalHeight != 50 || small.Vector {
+		t.Fatalf("unexpected natural size: %+v", small)
+	}
+
+	// 超限位图缩放后，自然尺寸仍为缩放前的原始像素。
+	big, err := normalizeImage(encodePNG(t, 2000, 1000), "b.png", 1000, nil)
+	if err != nil {
+		t.Fatalf("normalizeImage: %v", err)
+	}
+	if big.Width != 1000 || big.NaturalWidth != 2000 || big.NaturalHeight != 1000 {
+		t.Fatalf("unexpected sizes: %+v", big)
+	}
+}

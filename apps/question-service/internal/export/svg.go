@@ -73,7 +73,12 @@ func rasterizeSVG(data []byte, maxWidth int, fonts *FontProvider) (*ImageAsset, 
 	if err := png.Encode(&buf, rgba); err != nil {
 		return nil, fmt.Errorf("encode rasterized svg: %w", err)
 	}
-	return &ImageAsset{Data: buf.Bytes(), Format: "png", Width: w, Height: h}, nil
+	return &ImageAsset{
+		Data: buf.Bytes(), Format: "png",
+		Width: w, Height: h,
+		NaturalWidth: vw, NaturalHeight: vh,
+		Vector: true,
+	}, nil
 }
 
 // svgTargetSize 计算 SVG 光栅化尺寸。

@@ -165,7 +165,10 @@ func normalizeImage(raw []byte, key string, maxWidth int, fonts *FontProvider) (
 	if maxWidth <= 0 || w <= maxWidth {
 		switch f := strings.ToLower(format); f {
 		case "jpeg", "png":
-			return &ImageAsset{Data: raw, Format: f, Width: w, Height: h}, nil
+			return &ImageAsset{
+				Data: raw, Format: f, Width: w, Height: h,
+				NaturalWidth: w, NaturalHeight: h,
+			}, nil
 		}
 	}
 
@@ -183,13 +186,19 @@ func normalizeImage(raw []byte, key string, maxWidth int, fonts *FontProvider) (
 		if err := jpeg.Encode(&buf, pic, &jpeg.Options{Quality: jpegQuality}); err != nil {
 			return nil, fmt.Errorf("encode jpeg: %w", err)
 		}
-		return &ImageAsset{Data: buf.Bytes(), Format: "jpeg", Width: nw, Height: nh}, nil
+		return &ImageAsset{
+			Data: buf.Bytes(), Format: "jpeg", Width: nw, Height: nh,
+			NaturalWidth: w, NaturalHeight: h,
+		}, nil
 	}
 
 	if err := png.Encode(&buf, pic); err != nil {
 		return nil, fmt.Errorf("encode image: %w", err)
 	}
-	return &ImageAsset{Data: buf.Bytes(), Format: "png", Width: nw, Height: nh}, nil
+	return &ImageAsset{
+		Data: buf.Bytes(), Format: "png", Width: nw, Height: nh,
+		NaturalWidth: w, NaturalHeight: h,
+	}, nil
 }
 
 // scaleSize 按最大宽度等比缩放尺寸；maxWidth <= 0 或宽度未超限时返回原尺寸。

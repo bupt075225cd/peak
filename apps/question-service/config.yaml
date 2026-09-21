@@ -20,3 +20,4 @@ export:
   max_image_width: "${EXPORT_MAX_IMAGE_WIDTH:-1200}"  # 配图最大像素宽度，0 表示不限制
   fetch_timeout: "${EXPORT_FETCH_TIMEOUT:-10s}"       # 单张配图拉取超时
   font_path: "${EXPORT_FONT_PATH:-}"                  # 外部字体路径，留空使用内置中文字体
+  merge_stem_line_breaks: "${EXPORT_MERGE_STEM_LINE_BREAKS:-true}"  # 题干换行折叠为空格后重排，false 则保留原换行

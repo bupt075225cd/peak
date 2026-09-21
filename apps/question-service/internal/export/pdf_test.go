@@ -3,6 +3,7 @@ package export
 import (
 	"bytes"
 	"compress/zlib"
+	"image/png"
 	"io"
 	"regexp"
 	"strconv"
@@ -193,4 +194,130 @@ func streamHasDrawingOp(body []byte) bool {
 		_ = zr.Close()
 	}
 	return bytes.Contains(content, []byte(" Do"))
+}
+
+func TestSplitItemImageSplitsTallBitmapAtSafeBreaks(t *testing.T) {
+	// 高度超过单页容量的位图应被切成多片，且总高度不变。
+	tall := pdfStripHeightPx*2 + 100
+	data := encodePNG(t, 40, tall)
+
+	// 模拟文字行/配图边界：每 300px 一个安全断点。
+	breaks := make([]int, 0, tall/300)
+	for y := 300; y < tall; y += 300 {
+		breaks = append(breaks, y)
+	}
+
+	parts, err := splitItemImage(data, 40, tall, breaks)
+	if err != nil {
+		t.Fatalf("splitItemImage: %v", err)
+	}
+	if len(parts) < 3 {
+		t.Fatalf("parts = %d, want >= 3", len(parts))
+	}
+
+	total := 0
+	for _, p := range parts {
+		if p.pxW != 40 || p.pxH <= 0 || p.pxH > pdfStripHeightPx {
+			t.Fatalf("unexpected part: %dx%d", p.pxW, p.pxH)
+		}
+		if _, err := png.Decode(bytes.NewReader(p.data)); err != nil {
+			t.Fatalf("part is not a valid png: %v", err)
+		}
+		total += p.pxH
+	}
+	if total != tall {
+		t.Fatalf("total height = %d, want %d", total, tall)
+	}
+}
+
+func TestSplitCutsOnlyAtSafeBreaks(t *testing.T) {
+	// 配图占 [1000, 2000)，区间内没有任何断点：切点不得落在其中，否则会截断图形。
+	const pxH = 6000
+	breaks := []int{500, 1000, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500}
+
+	cuts := splitCuts(pxH, breaks)
+	if len(cuts) == 0 || cuts[len(cuts)-1] != pxH {
+		t.Fatalf("cuts = %v, want last cut %d", cuts, pxH)
+	}
+
+	prev := 0
+	for _, cut := range cuts {
+		if cut <= prev {
+			t.Fatalf("cuts not increasing: %v", cuts)
+		}
+		if cut < pxH && !containsInt(breaks, cut) {
+			t.Fatalf("cut %d is not a safe break (would tear an image)", cut)
+		}
+		prev = cut
+	}
+}
+
+func containsInt(values []int, v int) bool {
+	for _, x := range values {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSplitItemImageKeepsShortBitmapIntact(t *testing.T) {
+	data := encodePNG(t, 40, 20)
+	parts, err := splitItemImage(data, 40, 20, nil)
+	if err != nil {
+		t.Fatalf("splitItemImage: %v", err)
+	}
+	if len(parts) != 1 || parts[0].pxH != 20 || !bytes.Equal(parts[0].data, data) {
+		t.Fatalf("short bitmap should be returned unchanged: %+v", parts)
+	}
+}
+
+func TestBuildPDFSplitsOverflowingItemAcrossPages(t *testing.T) {
+	fonts := testFonts(t)
+	long := strings.Repeat("这是一道超长题干，用于验证分页而不是整题缩小。", 160)
+	items := []renderItem{{item: ExportItem{Subject: "数学", StemText: long}}}
+
+	data, err := buildPDF("t", items, fonts)
+	if err != nil {
+		t.Fatalf("buildPDF: %v", err)
+	}
+	if pages := pdfPageCount(t, data); pages < 2 {
+		t.Fatalf("expected the long item to span multiple pages, got %d", pages)
+	}
+}
+
+// TestSplitCutsAvoidFigureRegion 回归测试：配图恰好跨越页面边界时，切点不得落在
+// 配图内部，否则导出的 PDF 会把几何图形从中间截断成两页。
+func TestSplitCutsAvoidFigureRegion(t *testing.T) {
+	fonts := testFonts(t)
+	rc := defaultRenderConfig()
+
+	it := renderItem{
+		item:   ExportItem{StemText: strings.Repeat("这是一段用于验证分页不会截断配图的较长题干内容。", 80)},
+		images: []ImageAsset{{Data: encodePNG(t, 1200, 900), Format: "png", Width: 1200, Height: 900}},
+	}
+
+	layout, err := renderItemLayout(rc, fonts, 1, it)
+	if err != nil {
+		t.Fatalf("renderItemLayout: %v", err)
+	}
+	if layout.height <= pdfStripHeightPx {
+		t.Fatalf("test setup expects an over-height item, got %d", layout.height)
+	}
+
+	placed, err := decodeImages(it.images, float64(rc.width-2*rc.padding))
+	if err != nil || len(placed) != 1 {
+		t.Fatalf("decodeImages: %v, placed %d", err, len(placed))
+	}
+	// 配图是最后一个元素：其上下边界可由画布高度反推。
+	figureBottom := float64(layout.height - rc.padding)
+	figureTop := figureBottom - placed[0].h
+
+	for _, cut := range splitCuts(layout.height, layout.breaks) {
+		y := float64(cut)
+		if y > figureTop+1 && y < figureBottom-1 {
+			t.Fatalf("cut %d falls inside figure [%.1f, %.1f): figure would be torn",
+				cut, figureTop, figureBottom)
+		}
+	}
 }

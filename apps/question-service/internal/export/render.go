@@ -42,11 +42,14 @@ func defaultRenderConfig() renderConfig {
 	}
 }
 
-// imageMaxWidthRatio 配图在正文中的最大宽度占比。
+// spaceBreakMinFill 空格断行的最小填充比例：仅当在空格断行后该行宽度仍不低于可用
+// 宽度的该比例时才断在空格处，否则按字符断行，避免行尾参差与"换行太早"。
+const spaceBreakMinFill = 0.6
+
+// imageRowGapScale 同一行内相邻配图之间的水平间距相对段落间距（renderConfig.gap）的倍数。
 //
-// 几何图原始画布往往很小，若一律铺满正文宽度会显得过大且与题干比例失衡，
-// 这里限制为正文宽度的 3/4 并居中，接近试卷的实际版式。
-const imageMaxWidthRatio = 0.75
+// 并排的几何图之间需要比段落间距更明显的间隔，否则两张图挨得太近、容易被看成一整张。
+const imageRowGapScale = 3.0
 
 // 渲染配色。
 var (
@@ -56,22 +59,41 @@ var (
 	colorPaper   = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 )
 
+// itemLayout 单题渲染结果：位图字节、像素尺寸与可安全断页的位置。
+type itemLayout struct {
+	data   []byte
+	width  int
+	height int
+	// breaks 可安全断页的 y 像素位置（段落、文字行与配图的起始处）。
+	// 配图内部不含断点，保证分页时不会把图形从中间截断。
+	breaks []int
+}
+
 // renderItemImage 把一道错题渲染为 PNG 位图，返回字节与像素尺寸。
-//
-// 高度先按文本行数与配图尺寸算好，再创建画布绘制，避免二次裁剪。
 func renderItemImage(rc renderConfig, fonts *FontProvider, index int, it renderItem) (data []byte, width, height int, err error) {
-	metaFace, err := fonts.Face(rc.metaSize)
+	layout, err := renderItemLayout(rc, fonts, index, it)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	return layout.data, layout.width, layout.height, nil
+}
+
+// renderItemLayout 把一道错题渲染为 PNG 位图，并记录可安全断页的位置。
+//
+// 高度先按文本行数与配图尺寸算好，再创建画布绘制，避免二次裁剪。
+func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it renderItem) (itemLayout, error) {
+	metaFace, err := fonts.Face(rc.metaSize)
+	if err != nil {
+		return itemLayout{}, err
+	}
 	stemFace, err := fonts.Face(rc.stemSize)
 	if err != nil {
-		return nil, 0, 0, err
+		return itemLayout{}, err
 	}
 
 	contentWidth := float64(rc.width - 2*rc.padding)
 	if contentWidth <= 0 {
-		return nil, 0, 0, fmt.Errorf("render width %d is too small", rc.width)
+		return itemLayout{}, fmt.Errorf("render width %d is too small", rc.width)
 	}
 
 	metaLines := wrapText(metaFace, itemMetaLine(index, it.item), contentWidth)
@@ -83,11 +105,14 @@ func renderItemImage(rc renderConfig, fonts *FontProvider, index int, it renderI
 
 	placed, err := decodeImages(it.images, contentWidth)
 	if err != nil {
-		return nil, 0, 0, err
+		return itemLayout{}, err
 	}
 
 	hasStem := stemText != ""
 	hasNote := it.imageFailed
+
+	rowGap := float64(rc.gap) * imageRowGapScale
+	rows := groupImageRows(placed, contentWidth, rowGap)
 
 	totalHeight := float64(rc.padding) + float64(len(metaLines))*metaLineH
 	if hasStem {
@@ -96,8 +121,8 @@ func renderItemImage(rc renderConfig, fonts *FontProvider, index int, it renderI
 	if hasNote {
 		totalHeight += float64(rc.gap) + metaLineH
 	}
-	for _, p := range placed {
-		totalHeight += float64(rc.gap) + p.h
+	for _, row := range rows {
+		totalHeight += float64(rc.gap) + row.height
 	}
 	totalHeight += float64(rc.padding)
 
@@ -110,43 +135,113 @@ func renderItemImage(rc renderConfig, fonts *FontProvider, index int, it renderI
 	dc.SetColor(colorPaper)
 	dc.Clear()
 
+	breaks := make([]int, 0, len(metaLines)+len(stemLines)+len(rows)+2)
+
 	x := float64(rc.padding)
 	y := float64(rc.padding)
 
+	breaks = append(breaks, lineBreaks(y, metaLineH, len(metaLines))...)
 	dc.SetColor(colorMeta)
 	y = drawTextLines(dc, metaFace, metaLines, x, y, metaLineH)
 
 	if hasStem {
 		y += float64(rc.gap)
+		breaks = append(breaks, int(math.Round(y)))
+		breaks = append(breaks, lineBreaks(y, stemLineH, len(stemLines))...)
 		dc.SetColor(colorInk)
 		y = drawTextLines(dc, stemFace, stemLines, x, y, stemLineH)
 	}
 
 	if hasNote {
 		y += float64(rc.gap)
+		breaks = append(breaks, int(math.Round(y)))
 		dc.SetColor(colorWarning)
 		y = drawTextLines(dc, metaFace, []string{"（配图加载失败）"}, x, y, metaLineH)
 	}
 
-	for _, p := range placed {
+	for _, row := range rows {
 		y += float64(rc.gap)
-		dw, dh := int(math.Round(p.w)), int(math.Round(p.h))
-		if dw < 1 || dh < 1 {
-			continue
+		// 每一行配图的起始是安全断点；行内不再记录断点，分页时不会截断图形。
+		breaks = append(breaks, int(math.Round(y)))
+
+		// 整行水平居中；行内配图按行高垂直居中。
+		x := float64(rc.padding)
+		if row.width < contentWidth {
+			x += (contentWidth - row.width) / 2
 		}
-		scaled := image.NewRGBA(image.Rect(0, 0, dw, dh))
-		draw.CatmullRom.Scale(scaled, scaled.Bounds(), p.src, p.src.Bounds(), draw.Over, nil)
-		// 配图宽度受限，水平居中摆放。
-		x := float64(rc.padding) + (contentWidth-p.w)/2
-		dc.DrawImage(scaled, int(math.Round(x)), int(math.Round(y)))
-		y += p.h
+		for _, p := range row.images {
+			drawImageAt(dc, p, x, y+(row.height-p.h)/2)
+			x += p.w + rowGap
+		}
+		y += row.height
 	}
 
 	var buf bytes.Buffer
 	if err := dc.EncodePNG(&buf); err != nil {
-		return nil, 0, 0, fmt.Errorf("encode item image: %w", err)
+		return itemLayout{}, fmt.Errorf("encode item image: %w", err)
 	}
-	return buf.Bytes(), rc.width, canvasH, nil
+	return itemLayout{data: buf.Bytes(), width: rc.width, height: canvasH, breaks: breaks}, nil
+}
+
+// lineBreaks 返回文本块内每一行的起始 y，作为可安全断页的位置。
+func lineBreaks(y, lineH float64, count int) []int {
+	out := make([]int, 0, count)
+	for i := 0; i < count; i++ {
+		out = append(out, int(math.Round(y+float64(i)*lineH)))
+	}
+	return out
+}
+
+// imageRow 同一行内水平排列的配图。
+type imageRow struct {
+	images []placedImage
+	// width 行内配图总宽（含行内间距），用于整行居中。
+	width float64
+	// height 行高，取行内最高配图。
+	height float64
+}
+
+// groupImageRows 把配图按可用宽度水平排列：一行放得下就并排，放不下才换行。
+//
+// 同一题的多个几何图（图1、图2…）并排展示比每图独占一行更紧凑，也更接近试卷版式。
+// 单张配图超过可用宽度时仍独占一行。
+func groupImageRows(placed []placedImage, contentWidth, gap float64) []imageRow {
+	rows := make([]imageRow, 0, 2)
+	var cur imageRow
+
+	for _, p := range placed {
+		// 尺寸过小无法绘制的图片直接忽略，避免影响行宽计算。
+		if int(math.Round(p.w)) < 1 || int(math.Round(p.h)) < 1 {
+			continue
+		}
+		if len(cur.images) > 0 && cur.width+gap+p.w > contentWidth {
+			rows = append(rows, cur)
+			cur = imageRow{}
+		}
+		if len(cur.images) > 0 {
+			cur.width += gap
+		}
+		cur.images = append(cur.images, p)
+		cur.width += p.w
+		if p.h > cur.height {
+			cur.height = p.h
+		}
+	}
+	if len(cur.images) > 0 {
+		rows = append(rows, cur)
+	}
+	return rows
+}
+
+// drawImageAt 把配图按显示尺寸缩放后绘制到画布指定位置。
+func drawImageAt(dc *gg.Context, p placedImage, x, y float64) {
+	dw, dh := int(math.Round(p.w)), int(math.Round(p.h))
+	if dw < 1 || dh < 1 {
+		return
+	}
+	scaled := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	draw.CatmullRom.Scale(scaled, scaled.Bounds(), p.src, p.src.Bounds(), draw.Over, nil)
+	dc.DrawImage(scaled, int(math.Round(x)), int(math.Round(y)))
 }
 
 // placedImage 已解码并计算好显示尺寸的配图。
@@ -155,10 +250,9 @@ type placedImage struct {
 	w, h float64
 }
 
-// decodeImages 解码配图并按内容宽度等比计算显示尺寸，解码失败的图片直接跳过。
+// decodeImages 解码配图并按共用尺寸策略计算显示尺寸，解码失败的图片直接跳过。
 func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, error) {
 	out := make([]placedImage, 0, len(assets))
-	maxWidth := contentWidth * imageMaxWidthRatio
 
 	for _, asset := range assets {
 		if asset.Width <= 0 || asset.Height <= 0 {
@@ -168,8 +262,14 @@ func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, err
 		if err != nil {
 			continue
 		}
-		w := maxWidth
-		h := w * float64(asset.Height) / float64(asset.Width)
+		wMM, hMM := imageDisplaySizeMM(asset)
+		w := wMM * pdfPixelsPerMM
+		h := hMM * pdfPixelsPerMM
+		// 兜底：不超过正文可用宽度。
+		if w > contentWidth {
+			h = h * contentWidth / w
+			w = contentWidth
+		}
 		out = append(out, placedImage{src: src, w: w, h: h})
 	}
 	return out, nil
@@ -219,9 +319,13 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 			rw := runeWidth(face, r)
 			if width+rw > maxWidth && len(line) > 0 {
 				cut := len(line)
+				// 优先在空格处断行（避免切断英文单词），但仅当断点距行尾足够近；
+				// 否则宁可按字符断行，避免行尾大面积留白（"换行太早"）。
 				for i := len(line) - 1; i >= 0; i-- {
 					if line[i] == ' ' {
-						cut = i
+						if runesWidth(face, line[:i]) >= maxWidth*spaceBreakMinFill {
+							cut = i
+						}
 						break
 					}
 				}
@@ -234,10 +338,7 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 					line = line[1:]
 				}
 
-				width = 0
-				for _, lr := range line {
-					width += runeWidth(face, lr)
-				}
+				width = runesWidth(face, line)
 			}
 			line = append(line, r)
 			width += rw
@@ -256,4 +357,13 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 // runeWidth 返回单个字符的显示宽度（像素）。
 func runeWidth(face font.Face, r rune) float64 {
 	return float64(font.MeasureString(face, string(r))) / 64.0
+}
+
+// runesWidth 返回一段文本的显示宽度（像素）。
+func runesWidth(face font.Face, rs []rune) float64 {
+	var w float64
+	for _, r := range rs {
+		w += runeWidth(face, r)
+	}
+	return w
 }

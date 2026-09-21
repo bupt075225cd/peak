@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -17,6 +18,8 @@ const (
 	docxMarginTwips = 1440
 	// emuPerTwip 1 twip 对应的 EMU。
 	emuPerTwip = 635
+	// emuPerMM 1 毫米对应的 EMU（914400/25.4）。
+	emuPerMM = 36000
 )
 
 // docxContentWidthEMU 正文可用宽度：A4 页宽去掉左右边距。
@@ -63,6 +66,7 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 			body.WriteString(docxParagraph(stem, ""))
 		}
 
+		imageRuns := make([]string, 0, len(it.images))
 		for _, img := range it.images {
 			imageSeq++
 			docPrSeq++
@@ -80,8 +84,12 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 
 			media = append(media, mediaFile{path: "word/media/" + name, data: img.Data})
 
-			cx, cy := docxImageSize(img.Width, img.Height)
-			body.WriteString(docxImageParagraph(relID, docPrSeq, name, cx, cy))
+			cx, cy := docxImageSize(img)
+			imageRuns = append(imageRuns, docxImageRun(relID, docPrSeq, name, cx, cy))
+		}
+		// 同一题的多个配图放进同一段落：宽度放得下就并排，放不下由 Word 自动换行。
+		if len(imageRuns) > 0 {
+			body.WriteString(docxImageParagraph(strings.Join(imageRuns, docxImageSpacer)))
 		}
 	}
 
@@ -159,9 +167,21 @@ func docxParagraph(text, style string) string {
 		escapeXMLText(text) + `</w:t></w:r></w:p>`
 }
 
-// docxImageParagraph 生成内嵌图片段落。
-func docxImageParagraph(relID string, id int, name string, cx, cy int) string {
-	return `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
+// docxImageSpacer 同一段落内相邻配图之间的间隔（一个空格 run）。
+const docxImageSpacer = `<w:r><w:t xml:space="preserve"> </w:t></w:r>`
+
+// docxImageParagraph 生成配图段落：整段水平居中并留出适度上下间距。
+//
+// runs 为若干配图 run；多张图共处同一段落时由 Word 按行宽自动并排/换行。
+func docxImageParagraph(runs string) string {
+	return `<w:p><w:pPr><w:jc w:val="center"/>` +
+		`<w:spacing w:before="120" w:after="120"/></w:pPr>` +
+		runs + `</w:p>`
+}
+
+// docxImageRun 生成单张内嵌图片的 run。
+func docxImageRun(relID string, id int, name string, cx, cy int) string {
+	return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
 		fmt.Sprintf(`<wp:extent cx="%d" cy="%d"/>`, cx, cy) +
 		fmt.Sprintf(`<wp:docPr id="%d" name="%s"/>`, id, escapeXMLText(name)) +
 		`<a:graphic><a:graphicData uri="` + nsPic + `"><pic:pic>` +
@@ -170,7 +190,7 @@ func docxImageParagraph(relID string, id int, name string, cx, cy int) string {
 		`<pic:spPr><a:xfrm><a:off x="0" y="0"/>` +
 		fmt.Sprintf(`<a:ext cx="%d" cy="%d"/>`, cx, cy) +
 		`</a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
-		`</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+		`</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`
 }
 
 // docxSectPr A4 页面设置（纵向、四周 1 英寸边距）。
@@ -182,19 +202,17 @@ func docxSectPr() string {
 		docxPageWidthTwips, docxMarginTwips, docxMarginTwips, docxMarginTwips, docxMarginTwips)
 }
 
-// docxImageSize 把像素尺寸换算为 EMU，并等比限制在正文可用宽度内。
-func docxImageSize(w, h int) (int, int) {
-	if w <= 0 || h <= 0 {
-		return docxContentWidthEMU, docxContentWidthEMU / 2
-	}
-	cx := w * emuPerPixel
-	cy := h * emuPerPixel
+// docxImageSize 按共用尺寸策略计算内嵌图片尺寸（EMU），并等比限制在正文可用宽度内。
+func docxImageSize(asset ImageAsset) (int, int) {
+	wMM, hMM := imageDisplaySizeMM(asset)
+	cx := int(math.Round(wMM * emuPerMM))
+	cy := int(math.Round(hMM * emuPerMM))
 	if cx > docxContentWidthEMU {
 		cy = cy * docxContentWidthEMU / cx
 		cx = docxContentWidthEMU
 	}
-	if cy <= 0 {
-		cy = 1
+	if cx < 1 || cy < 1 {
+		return docxContentWidthEMU, docxContentWidthEMU / 2
 	}
 	return cx, cy
 }

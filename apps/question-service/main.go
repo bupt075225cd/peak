@@ -89,6 +89,7 @@ func exportConfig(cfg *config.Loader) export.Config {
 	ec.FontPath = cfg.String("export.font_path", ec.FontPath)
 	ec.MaxItems = cfg.Int("export.max_items", ec.MaxItems)
 	ec.MaxImageWidth = cfg.Int("export.max_image_width", ec.MaxImageWidth)
+	ec.MergeStemLineBreaks = cfg.Bool("export.merge_stem_line_breaks", ec.MergeStemLineBreaks)
 
 	if raw := cfg.String("export.fetch_timeout", ""); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil {

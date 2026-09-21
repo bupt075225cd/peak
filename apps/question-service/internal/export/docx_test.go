@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"io"
+	"math"
 	"strings"
 	"testing"
 )
@@ -158,20 +159,71 @@ func TestBuildDocxRejectsEmptyItems(t *testing.T) {
 	}
 }
 
-func TestDocxImageSizeClampsToContentWidth(t *testing.T) {
-	cx, cy := docxImageSize(4000, 2000)
-	if cx != docxContentWidthEMU || cy != docxContentWidthEMU/2 {
-		t.Fatalf("large image size = %dx%d, want %dx%d", cx, cy, docxContentWidthEMU, docxContentWidthEMU/2)
+func TestDocxImageSizeUsesSharedLayoutStrategy(t *testing.T) {
+	// 大图按宽高比映射到合理宽度，且不超过正文可用宽度。
+	big := ImageAsset{Width: 4000, Height: 2000}
+	cx, cy := docxImageSize(big)
+	wMM, hMM := imageDisplaySizeMM(big)
+	if cx != int(math.Round(wMM*emuPerMM)) || cy != int(math.Round(hMM*emuPerMM)) {
+		t.Fatalf("size = %dx%d, want %.2f×%.2fmm", cx, cy, wMM, hMM)
+	}
+	if cx > docxContentWidthEMU {
+		t.Fatalf("width %d exceeds content width %d", cx, docxContentWidthEMU)
 	}
 
-	cx, cy = docxImageSize(100, 50)
-	if cx != 100*emuPerPixel || cy != 50*emuPerPixel {
-		t.Fatalf("small image size = %dx%d, want %dx%d", cx, cy, 100*emuPerPixel, 50*emuPerPixel)
+	// 正方形小位图：保持正方形，且不再按很小的原始像素嵌入。
+	square := ImageAsset{Width: 100, Height: 100, NaturalWidth: 100, NaturalHeight: 100}
+	cx, cy = docxImageSize(square)
+	if cx != cy {
+		t.Fatalf("square size = %dx%d, want equal", cx, cy)
+	}
+	if cx <= 100*emuPerPixel {
+		t.Fatalf("square width %d should exceed raw pixel size", cx)
 	}
 
-	cx, cy = docxImageSize(0, 0)
-	if cx != docxContentWidthEMU || cy != docxContentWidthEMU/2 {
-		t.Fatalf("invalid image size = %dx%d, want fallback", cx, cy)
+	// 非法尺寸走默认比例。
+	cx, cy = docxImageSize(ImageAsset{})
+	wMM, hMM = imageDisplaySizeMM(ImageAsset{})
+	if cx != int(math.Round(wMM*emuPerMM)) || cy != int(math.Round(hMM*emuPerMM)) {
+		t.Fatalf("invalid image size = %dx%d, want default layout size", cx, cy)
+	}
+}
+
+func TestBuildDocxCentersImages(t *testing.T) {
+	items := []renderItem{{
+		item:   ExportItem{StemText: "题干"},
+		images: []ImageAsset{{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20}},
+	}}
+	data, err := buildDocx("t", items)
+	if err != nil {
+		t.Fatalf("buildDocx: %v", err)
+	}
+	doc := string(docxFiles(t, data)["word/document.xml"])
+	if !strings.Contains(doc, `<w:jc w:val="center"/>`) {
+		t.Fatalf("image paragraph not centered: %s", doc)
+	}
+}
+
+func TestBuildDocxKeepsQuestionImagesInOneParagraph(t *testing.T) {
+	items := []renderItem{{
+		item: ExportItem{StemText: "题干"},
+		images: []ImageAsset{
+			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20},
+			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20},
+		},
+	}}
+	data, err := buildDocx("t", items)
+	if err != nil {
+		t.Fatalf("buildDocx: %v", err)
+	}
+
+	doc := string(docxFiles(t, data)["word/document.xml"])
+	if got := strings.Count(doc, "<w:drawing>"); got != 2 {
+		t.Fatalf("drawings = %d, want 2", got)
+	}
+	// 两张图共处同一个居中段落，由 Word 按行宽自动并排/换行。
+	if got := strings.Count(doc, `<w:jc w:val="center"/>`); got != 1 {
+		t.Fatalf("centered image paragraphs = %d, want 1", got)
 	}
 }
 

@@ -69,6 +69,12 @@ type ImageAsset struct {
 	Format string // 图片格式："png" / "jpeg"
 	Width  int    // 像素宽
 	Height int    // 像素高
+	// NaturalWidth/NaturalHeight 为图片的原始尺寸：位图为解码后的原始像素，
+	// SVG 为其 viewBox 尺寸。用于限制低分辨率图片的放大倍数（见 layout.go）。
+	NaturalWidth  int
+	NaturalHeight int
+	// Vector 表示该图片由矢量图（SVG）光栅化而来，缩放不受分辨率限制。
+	Vector bool
 }
 
 // Result 导出结果。

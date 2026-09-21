@@ -18,6 +18,10 @@ type Config struct {
 	MaxItems int
 	// FetchTimeout 单张图片拉取超时。
 	FetchTimeout time.Duration
+	// MergeStemLineBreaks 是否把题干中的换行折叠为空格后重新排版。
+	//
+	// 识别阶段带入的换行位置与导出页宽无关，默认合并，避免"一行没排满就换行"。
+	MergeStemLineBreaks bool
 }
 
 // DefaultConfig 返回带默认值的导出配置。
@@ -27,6 +31,7 @@ func DefaultConfig() Config {
 		MaxImageWidth:      1200,
 		MaxItems:           200,
 		FetchTimeout:       10 * time.Second,
+		MergeStemLineBreaks: true,
 	}
 }
 
@@ -107,6 +112,7 @@ func (s *service) loadImages(ctx context.Context, items []ExportItem) ([]renderI
 
 	rendered := make([]renderItem, 0, len(items))
 	for _, it := range items {
+		it.StemText = normalizeStemText(it.StemText, s.cfg.MergeStemLineBreaks)
 		ri := renderItem{item: it}
 		for _, key := range it.ImageKeys {
 			if asset, ok := byKey[key]; ok {
