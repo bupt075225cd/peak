@@ -470,3 +470,44 @@ describe('MistakeList.vue 搜索', () => {
     vi.useRealTimers()
   })
 })
+
+describe('MistakeList.vue 配图', () => {
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, { global: { plugins: [router] } })
+  }
+
+  it('带图号的配图在图片下方标注，无图号的不标注', async () => {
+    mockListResponse([
+      {
+        ...mockMistakes[0],
+        question: {
+          ...mockMistakes[0].question!,
+          image: JSON.stringify([
+            { key: 'geometry/task_1.svg', label: '图1' },
+            { key: 'geometry/task_1_2.svg', label: '图2' },
+          ]),
+        },
+      },
+      {
+        ...mockMistakes[1],
+        question: {
+          ...mockMistakes[1].question!,
+          image: JSON.stringify([{ key: 'geometry/task_2.svg' }]),
+        },
+      },
+    ])
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    // 只有带图号的两张图有标注。
+    expect(wrapper.findAll('figcaption').map((c) => c.text())).toEqual(['图1', '图2'])
+
+    const html = wrapper.html()
+    expect(html).toContain('/api/recognition/files/geometry/task_1.svg')
+    expect(html).toContain('/api/recognition/files/geometry/task_1_2.svg')
+    expect(html).toContain('/api/recognition/files/geometry/task_2.svg')
+  })
+})

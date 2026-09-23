@@ -45,7 +45,7 @@ func seedExportData(t *testing.T, svc *Service, userID uint64) (questionIDs, mis
 	for _, stem := range []string{"第一题", "第二题", "第三题"} {
 		q := &domain.Question{
 			Subject: "数学", Grade: "七年级上", QuestionType: "解答题",
-			StemText: stem, Source: "期中试卷", Image: `["a.svg"]`,
+			StemText: stem, Source: "期中试卷", Image: `[{"key":"a.svg","label":"图1"}]`,
 		}
 		if err := svc.CreateQuestion(ctx, q); err != nil {
 			t.Fatalf("create question: %v", err)
@@ -120,8 +120,8 @@ func TestExportMistakesKeepsRequestedOrder(t *testing.T) {
 	if items[0].Grade != "七年级上" || items[0].Subject != "数学" || items[0].QuestionType != "解答题" {
 		t.Fatalf("unexpected meta: %+v", items[0])
 	}
-	if len(items[0].ImageKeys) != 1 || items[0].ImageKeys[0] != "a.svg" {
-		t.Fatalf("unexpected image keys: %v", items[0].ImageKeys)
+	if len(items[0].Images) != 1 || items[0].Images[0].Key != "a.svg" || items[0].Images[0].Label != "图1" {
+		t.Fatalf("unexpected images: %v", items[0].Images)
 	}
 
 	if fake.format != export.FormatPDF {
@@ -166,25 +166,41 @@ func TestExportMistakesWrapsExporterError(t *testing.T) {
 	}
 }
 
-func TestParseImageKeys(t *testing.T) {
+func TestParseImages(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
 		want int
 	}{
-		{"two keys", `["a.svg","b.png"]`, 2},
-		{"skips empty", `["a.svg",""]`, 1},
+		{"two figures", `[{"key":"a.svg","label":"图1"},{"key":"b.png","label":"图2"}]`, 2},
+		{"missing label", `[{"key":"a.svg"}]`, 1},
+		{"skips empty key", `[{"key":"a.svg"},{"key":"  "}]`, 1},
 		{"empty array", `[]`, 0},
 		{"blank", `   `, 0},
 		{"invalid json", `not json`, 0},
 		{"wrong type", `{"a":1}`, 0},
+		{"legacy string array", `["a.svg"]`, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := parseImageKeys(tc.raw); len(got) != tc.want {
-				t.Fatalf("parseImageKeys(%q) = %v, want %d items", tc.raw, got, tc.want)
+			if got := parseImages(tc.raw); len(got) != tc.want {
+				t.Fatalf("parseImages(%q) = %v, want %d items", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestParseImagesTrimsLabel 验证 key 与图号都会去掉首尾空白，缺失图号记为空。
+func TestParseImagesTrimsLabel(t *testing.T) {
+	refs := parseImages(`[{"key":" a.svg ","label":" 图1 "},{"key":"b.png"}]`)
+	if len(refs) != 2 {
+		t.Fatalf("parsed %d refs, want 2", len(refs))
+	}
+	if refs[0].Key != "a.svg" || refs[0].Label != "图1" {
+		t.Fatalf("first ref = %+v, want a.svg/图1", refs[0])
+	}
+	if refs[1].Key != "b.png" || refs[1].Label != "" {
+		t.Fatalf("second ref = %+v, want b.png with empty label", refs[1])
 	}
 }
 

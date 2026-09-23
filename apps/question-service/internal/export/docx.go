@@ -66,7 +66,6 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 			body.WriteString(docxParagraph(stem, ""))
 		}
 
-		imageRuns := make([]string, 0, len(it.images))
 		for _, img := range it.images {
 			imageSeq++
 			docPrSeq++
@@ -85,11 +84,9 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 			media = append(media, mediaFile{path: "word/media/" + name, data: img.Data})
 
 			cx, cy := docxImageSize(img)
-			imageRuns = append(imageRuns, docxImageRun(relID, docPrSeq, name, cx, cy))
-		}
-		// 同一题的多个配图放进同一段落：宽度放得下就并排，放不下由 Word 自动换行。
-		if len(imageRuns) > 0 {
-			body.WriteString(docxImageParagraph(strings.Join(imageRuns, docxImageSpacer)))
+			body.WriteString(docxImageParagraph(docxImageRun(relID, docPrSeq, name, cx, cy)))
+			// 图号单独成段排在配图正下方（AI 重绘会丢失原图的"图1/图2"标注）。
+			body.WriteString(docxCaptionParagraph(img.Caption))
 		}
 	}
 
@@ -167,16 +164,33 @@ func docxParagraph(text, style string) string {
 		escapeXMLText(text) + `</w:t></w:r></w:p>`
 }
 
-// docxImageSpacer 同一段落内相邻配图之间的间隔（一个空格 run）。
-const docxImageSpacer = `<w:r><w:t xml:space="preserve"> </w:t></w:r>`
-
 // docxImageParagraph 生成配图段落：整段水平居中并留出适度上下间距。
 //
-// runs 为若干配图 run；多张图共处同一段落时由 Word 按行宽自动并排/换行。
-func docxImageParagraph(runs string) string {
-	return `<w:p><w:pPr><w:jc w:val="center"/>` +
-		`<w:spacing w:before="120" w:after="120"/></w:pPr>` +
-		runs + `</w:p>`
+// 每张配图独占一段：这样图号才能紧跟在该图正下方，而不会被 Word 的自动换行打乱。
+func docxImageParagraph(run string) string {
+	return `<w:p><w:pPr>` +
+		`<w:spacing w:before="120" w:after="60"/>` +
+		`<w:jc w:val="center"/>` +
+		`</w:pPr>` + run + `</w:p>`
+}
+
+// docxCaptionFontHalfPoints 图注字号（半磅）：9 磅，比正文小一档。
+const docxCaptionFontHalfPoints = 18
+
+// docxCaptionParagraph 生成图注段落（如"图1"）：小字号、居中、紧贴配图下方。
+//
+// 空图注返回空串，调用方无需判断即可直接拼接。
+func docxCaptionParagraph(caption string) string {
+	caption = sanitizeXMLText(strings.TrimSpace(caption))
+	if caption == "" {
+		return ""
+	}
+	rPr := fmt.Sprintf(`<w:rPr><w:color w:val="404040"/><w:sz w:val="%d"/></w:rPr>`, docxCaptionFontHalfPoints)
+	return `<w:p><w:pPr>` +
+		`<w:spacing w:before="0" w:after="120"/>` +
+		`<w:jc w:val="center"/>` + rPr +
+		`</w:pPr><w:r>` + rPr +
+		`<w:t xml:space="preserve">` + escapeXMLText(caption) + `</w:t></w:r></w:p>`
 }
 
 // docxImageRun 生成单张内嵌图片的 run。

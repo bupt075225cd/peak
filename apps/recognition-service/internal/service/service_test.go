@@ -133,7 +133,8 @@ func (f *fakeMultiPanelSpecProvider) ExtractGeometrySpec(_ context.Context, _ []
 
 // TestProcessImageMathRedrawProducesMultiSVG 验证单图识别时：
 // 数学题 + 含几何图（mock 返回 bbox）且启用了内置几何渲染时，
-// VLM 返回的每个子图各自存储为独立 SVG key 并写入 redraw_svg_keys。
+// VLM 返回的每个子图各自存储为独立 SVG key 并写入 redraw_figures，
+// 同时保留图号（图1/图2），供导出时把标注补回配图。
 func TestProcessImageMathRedrawProducesMultiSVG(t *testing.T) {
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "redraw.db")
@@ -172,20 +173,23 @@ func TestProcessImageMathRedrawProducesMultiSVG(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if len(result.RedrawSVGKeys) != 2 {
-		t.Fatalf("expected 2 redraw svg keys, got %v", result.RedrawSVGKeys)
+	if len(result.RedrawFigures) != 2 {
+		t.Fatalf("expected 2 redraw figures, got %v", result.RedrawFigures)
 	}
-	// 每个子图独立存储且可读回，内容为合法 SVG 文档。
-	for _, k := range result.RedrawSVGKeys {
-		data, err := store.Get(ctx, k)
+	// 每个子图独立存储且可读回，内容为合法 SVG 文档；图号按子图顺序保留。
+	for i, fig := range result.RedrawFigures {
+		data, err := store.Get(ctx, fig.Key)
 		if err != nil {
-			t.Fatalf("svg key not stored %s: %v", k, err)
+			t.Fatalf("svg key not stored %s: %v", fig.Key, err)
 		}
 		if !strings.HasPrefix(string(data), "<svg ") {
-			t.Fatalf("unexpected stored content for %s: %q", k, data)
+			t.Fatalf("unexpected stored content for %s: %q", fig.Key, data)
 		}
 		if !strings.Contains(string(data), "viewBox") {
-			t.Fatalf("expected viewBox in %s: %q", k, data)
+			t.Fatalf("expected viewBox in %s: %q", fig.Key, data)
+		}
+		if want := fmt.Sprintf("图%d", i+1); fig.Label != want {
+			t.Fatalf("figure %d label = %q, want %q", i, fig.Label, want)
 		}
 	}
 	if result.RedrawReport == nil || !result.RedrawReport.Consistent {
@@ -222,8 +226,8 @@ func TestProcessImageNoRedrawEngineSkips(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if len(result.RedrawSVGKeys) != 0 {
-		t.Fatalf("expected no redraw keys without engine, got %v", result.RedrawSVGKeys)
+	if len(result.RedrawFigures) != 0 {
+		t.Fatalf("expected no redraw figures without engine, got %v", result.RedrawFigures)
 	}
 }
 
@@ -396,8 +400,8 @@ func TestProcessImageRedrawFeedsValidationIssuesBack(t *testing.T) {
 		Provider: provider.NewMockProvider(), specs: []string{bad, good},
 	})
 
-	if len(result.RedrawSVGKeys) != 2 {
-		t.Fatalf("expected 2 redraw svg keys after correction, got %v", result.RedrawSVGKeys)
+	if len(result.RedrawFigures) != 2 {
+		t.Fatalf("expected 2 redraw figures after correction, got %v", result.RedrawFigures)
 	}
 	if result.RedrawReport == nil {
 		t.Fatal("expected redraw report")
@@ -419,8 +423,8 @@ func TestProcessImageRedrawFailureAddsWarning(t *testing.T) {
 	result := runGeometryTask(t, &scriptedSpecProvider{
 		Provider: provider.NewMockProvider(), specs: []string{"not-a-json"},
 	})
-	if len(result.RedrawSVGKeys) != 0 {
-		t.Fatalf("expected no redraw keys on persistent failure, got %v", result.RedrawSVGKeys)
+	if len(result.RedrawFigures) != 0 {
+		t.Fatalf("expected no redraw figures on persistent failure, got %v", result.RedrawFigures)
 	}
 	if result.RedrawReport != nil {
 		t.Fatalf("expected no redraw report on failure, got %+v", result.RedrawReport)

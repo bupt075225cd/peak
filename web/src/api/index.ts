@@ -28,6 +28,15 @@ export interface RecognitionTask {
   provider: string
 }
 
+// 题目配图引用：存储 key + 图号标识（如"图1"）。
+//
+// 图号来自识别阶段：AI 重绘只保留图形本身，原图的"图1/图2"文字标注需要显式保留，
+// 才能在导出文档里标注回配图。label 缺省表示该图无图号。
+export interface QuestionImageRef {
+  key: string
+  label?: string
+}
+
 // 识别结果。
 export interface RecognitionResult {
   stem_text: string
@@ -35,9 +44,9 @@ export interface RecognitionResult {
   subject?: string
   question_type?: string
   geometry: { shape_type: string; properties: Record<string, string>; description: string }
-  // 几何重绘 SVG 的存储 key 列表：一个 key 对应一张独立 SVG
-  //（一张原图含多个几何子图时，每个子图一张）。
-  redraw_svg_keys?: string[]
+  // 几何重绘产出的子图：key 为独立 SVG 的存储 key，label 为图号（如"图1"）；
+  // 一张原图含多个几何子图时逐个列出。
+  redraw_figures?: QuestionImageRef[]
   // 几何重绘求解报告。
   redraw_report?: {
     max_hard: number
@@ -128,7 +137,7 @@ export interface Question {
   answer: string
   analysis: string
   question_type: string
-  image?: string // JSON 字符串：图片 image key 列表（几何图或其它科目插图）
+  image?: string // JSON 字符串：配图引用数组（QuestionImageRef[]，含图号）
   knowledge_points?: string // JSON 字符串：知识点标签数组
   source?: string // 题目来源（试卷/练习册等）
 }

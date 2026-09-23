@@ -112,7 +112,8 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 	hasNote := it.imageFailed
 
 	rowGap := float64(rc.gap) * imageRowGapScale
-	rows := groupImageRows(placed, contentWidth, rowGap)
+	captionLineH := lineHeight(metaFace, rc.lineSpacing)
+	rows := groupImageRows(placed, contentWidth, rowGap, captionLineH)
 
 	totalHeight := float64(rc.padding) + float64(len(metaLines))*metaLineH
 	if hasStem {
@@ -159,18 +160,22 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 		y = drawTextLines(dc, metaFace, []string{"（配图加载失败）"}, x, y, metaLineH)
 	}
 
+	// 图注用元信息色（比题干浅、字更小），与配图一起构成"图 + 图号"块。
+	dc.SetColor(colorMeta)
 	for _, row := range rows {
 		y += float64(rc.gap)
-		// 每一行配图的起始是安全断点；行内不再记录断点，分页时不会截断图形。
+		// 每一行配图的起始是安全断点；图与图注同在一行内，分页时不会截断图形或图注。
 		breaks = append(breaks, int(math.Round(y)))
 
-		// 整行水平居中；行内配图按行高垂直居中。
+		// 整行水平居中；行内配图底边对齐，图注排在行底统一的图注带里。
 		x := float64(rc.padding)
 		if row.width < contentWidth {
 			x += (contentWidth - row.width) / 2
 		}
+		captionY := y + row.height - row.captionH
 		for _, p := range row.images {
-			drawImageAt(dc, p, x, y+(row.height-p.h)/2)
+			drawImageAt(dc, p, x, captionY-p.h)
+			drawCaption(dc, metaFace, p.caption, x, captionY, p.w)
 			x += p.w + rowGap
 		}
 		y += row.height
@@ -197,15 +202,17 @@ type imageRow struct {
 	images []placedImage
 	// width 行内配图总宽（含行内间距），用于整行居中。
 	width float64
-	// height 行高，取行内最高配图。
+	// height 行高：行内最高配图 + 图注带。
 	height float64
+	// captionH 行底图注带高度（行内无图注时为 0）：配图底边对齐、图注成行。
+	captionH float64
 }
 
 // groupImageRows 把配图按可用宽度水平排列：一行放得下就并排，放不下才换行。
 //
 // 同一题的多个几何图（图1、图2…）并排展示比每图独占一行更紧凑，也更接近试卷版式。
-// 单张配图超过可用宽度时仍独占一行。
-func groupImageRows(placed []placedImage, contentWidth, gap float64) []imageRow {
+// 单张配图超过可用宽度时仍独占一行。带图注的行在底部预留一条与字号等高的图注带。
+func groupImageRows(placed []placedImage, contentWidth, gap, captionH float64) []imageRow {
 	rows := make([]imageRow, 0, 2)
 	var cur imageRow
 
@@ -226,11 +233,30 @@ func groupImageRows(placed []placedImage, contentWidth, gap float64) []imageRow 
 		if p.h > cur.height {
 			cur.height = p.h
 		}
+		if p.caption != "" {
+			cur.captionH = captionH
+		}
 	}
 	if len(cur.images) > 0 {
 		rows = append(rows, cur)
 	}
+	// 图注带统一计入行高：行内配图底边对齐，图注落在带内居中。
+	for i := range rows {
+		rows[i].height += rows[i].captionH
+	}
 	return rows
+}
+
+// drawCaption 在配图正下方水平居中绘制图注（如"图1"）；空图注不绘制。
+func drawCaption(dc *gg.Context, face font.Face, caption string, x, y, width float64) {
+	caption = strings.TrimSpace(caption)
+	if caption == "" {
+		return
+	}
+	dc.SetFontFace(face)
+	ascent := float64(face.Metrics().Ascent) / 64.0
+	textWidth := runesWidth(face, []rune(caption))
+	dc.DrawString(caption, x+(width-textWidth)/2, y+ascent)
 }
 
 // drawImageAt 把配图按显示尺寸缩放后绘制到画布指定位置。
@@ -248,6 +274,8 @@ func drawImageAt(dc *gg.Context, p placedImage, x, y float64) {
 type placedImage struct {
 	src  image.Image
 	w, h float64
+	// caption 图注（如"图1"）；为空表示该图不加标注。
+	caption string
 }
 
 // decodeImages 解码配图并按共用尺寸策略计算显示尺寸，解码失败的图片直接跳过。
@@ -270,7 +298,7 @@ func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, err
 			h = h * contentWidth / w
 			w = contentWidth
 		}
-		out = append(out, placedImage{src: src, w: w, h: h})
+		out = append(out, placedImage{src: src, w: w, h: h, caption: strings.TrimSpace(asset.Caption)})
 	}
 	return out, nil
 }

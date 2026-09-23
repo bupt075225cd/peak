@@ -2,7 +2,10 @@
 import { ref, computed, onMounted, onUnmounted, watch, h, type FunctionalComponent } from 'vue'
 import { BookOpen, Plus, Search, Loader2, Download } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
-import { listMistakes, exportMistakes, type Mistake, type ExportFormat } from '../api'
+import {
+  listMistakes, exportMistakes,
+  type Mistake, type ExportFormat, type QuestionImageRef,
+} from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
 
 const router = useRouter()
@@ -177,15 +180,24 @@ function goEntry() {
   router.push('/entry')
 }
 
-// 解析题目的 image（JSON 字符串数组）为 image key 列表。
-function imageKeys(q: Mistake['question']): string[] {
+// 解析题目的 image（JSON 字符串）为配图引用列表（含图号）。
+function imageRefs(q: Mistake['question']): QuestionImageRef[] {
   if (!q?.image) return []
   try {
     const arr = JSON.parse(q.image)
-    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
+    if (!Array.isArray(arr)) return []
+    return (arr as unknown[])
+      .map((x) => x as QuestionImageRef)
+      .filter((ref) => typeof ref?.key === 'string' && ref.key.length > 0)
+      .map((ref) => ({ key: ref.key, label: (ref.label || '').trim() }))
   } catch {
     return []
   }
+}
+
+// 配图访问地址：识别服务的文件接口。
+function figureUrl(key: string): string {
+  return `/api/recognition/files/${key}`
 }
 
 // 解析题目的 knowledge_points（JSON 字符串数组）为知识点标签列表。
@@ -503,22 +515,27 @@ async function resolveExportError(err: unknown): Promise<string> {
                       class="rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs font-medium"
                     >{{ kp }}</span>
                   </div>
-                  <!-- 题目配图：点击放大查看 -->
-                  <div v-if="imageKeys(item.question)" class="mt-2 flex gap-2 flex-wrap">
-                    <button
-                      v-for="(gk, i) in imageKeys(item.question)"
+                  <!-- 题目配图：点击放大查看；有图号的在图下方标注 -->
+                  <div v-if="imageRefs(item.question).length" class="mt-2 flex gap-3 flex-wrap">
+                    <figure
+                      v-for="(fig, i) in imageRefs(item.question)"
                       :key="i"
-                      type="button"
-                      class="block group focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg"
-                      title="点击放大查看"
-                      @click="openViewer(`/api/recognition/files/${gk}`)"
+                      class="flex flex-col items-center gap-1"
                     >
-                      <img
-                        :src="`/api/recognition/files/${gk}`"
-                        class="h-20 rounded-lg border border-slate-200 object-contain bg-white cursor-zoom-in transition-transform group-hover:scale-[1.03]"
-                        alt="题目配图"
-                      />
-                    </button>
+                      <button
+                        type="button"
+                        class="block group focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg"
+                        title="点击放大查看"
+                        @click="openViewer(figureUrl(fig.key))"
+                      >
+                        <img
+                          :src="figureUrl(fig.key)"
+                          class="h-20 rounded-lg border border-slate-200 object-contain bg-white cursor-zoom-in transition-transform group-hover:scale-[1.03]"
+                          :alt="fig.label || '题目配图'"
+                        />
+                      </button>
+                      <figcaption v-if="fig.label" class="text-xs text-ink-faint">{{ fig.label }}</figcaption>
+                    </figure>
                   </div>
                 </div>
               </div>

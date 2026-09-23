@@ -407,7 +407,7 @@ describe('MistakeEntry.vue', () => {
     }
   }
 
-  it('数学题含多个几何子图时逐张展示重绘 SVG（每子图一张，无手动操作入口）', async () => {
+  it('数学题含多个几何子图时逐张展示重绘 SVG 并标注图号（无手动操作入口）', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -415,17 +415,21 @@ describe('MistakeEntry.vue', () => {
     await flushPromises()
 
     const task = mathGeoResult(5, {
-      redraw_svg_keys: ['geometry/task_5.svg', 'geometry/task_5_2.svg'],
+      redraw_figures: [
+        { key: 'geometry/task_5.svg', label: '图1' },
+        { key: 'geometry/task_5_2.svg', label: '图2' },
+      ],
       redraw_report: { max_hard: 0.0001, max_soft: 0.01, attempts: 1, consistent: true },
     })
     await recognizeWithResult(wrapper, task)
 
-    // 每张子图都单独展示。
+    // 每张子图都单独展示，并带回图号（重绘会丢失原图标注）。
     await vi.waitFor(() => {
       expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5.svg')
       expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5_2.svg')
     })
     expect(wrapper.text()).toContain('2 张')
+    expect(wrapper.findAll('figcaption').map((c) => c.text())).toEqual(['图1', '图2'])
     // 页面不再有手动框选/擦除入口，也不展示原始裁剪图预览。
     expect(wrapper.text()).not.toContain('重新框选')
     expect(wrapper.text()).not.toContain('擦除手写')
@@ -438,7 +442,7 @@ describe('MistakeEntry.vue', () => {
     const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
     await flushPromises()
 
-    // 未产出重绘（无侧车/非几何）：不含 redraw_svg_keys。
+    // 未产出重绘（无侧车/非几何）：不含 redraw_figures。
     const task = mathGeoResult(6)
     await recognizeWithResult(wrapper, task)
     await flushPromises()
@@ -461,7 +465,7 @@ describe('MistakeEntry.vue', () => {
     })
   })
 
-  it('数学题含几何图保存时 image 存全部重绘 SVG key', async () => {
+  it('数学题含几何图保存时 image 存全部重绘子图（含图号）', async () => {
     const router = buildRouter()
     router.push('/entry')
     await router.isReady()
@@ -469,7 +473,11 @@ describe('MistakeEntry.vue', () => {
     await flushPromises()
 
     const task = mathGeoResult(7, {
-      redraw_svg_keys: ['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg'],
+      redraw_figures: [
+        { key: 'geometry/task_7.svg', label: '图1' },
+        { key: 'geometry/task_7_2.svg', label: '图2' },
+        { key: 'geometry/task_7_3.svg', label: '图3' },
+      ],
       redraw_report: { max_hard: 0.0001, max_soft: 0.01, attempts: 1, consistent: true },
     })
     await recognizeWithResult(wrapper, task)
@@ -489,7 +497,11 @@ describe('MistakeEntry.vue', () => {
     await getSaveBtn(wrapper).trigger('click')
     await vi.waitFor(() => {
       expect(httpMethods.post).toHaveBeenCalledWith('/questions', expect.objectContaining({
-        image: JSON.stringify(['geometry/task_7.svg', 'geometry/task_7_2.svg', 'geometry/task_7_3.svg']),
+        image: JSON.stringify([
+          { key: 'geometry/task_7.svg', label: '图1' },
+          { key: 'geometry/task_7_2.svg', label: '图2' },
+          { key: 'geometry/task_7_3.svg', label: '图3' },
+        ]),
       }))
     })
   })

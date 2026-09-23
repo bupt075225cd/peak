@@ -30,15 +30,26 @@ type RecognitionResult struct {
 	Subject        string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
 	QuestionType   string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
 	Geometry       provider.GeometryResult `json:"geometry"`
-	// RedrawSVGKeys 几何重绘输出的存储 key 列表：一个 key 对应一张独立 SVG
-	// （一张原图含多个几何子图时，每个子图一张，配置了 geometry sidecar 才填充）。
-	RedrawSVGKeys []string `json:"redraw_svg_keys,omitempty"`
+	// RedrawFigures 几何重绘输出的子图列表：key 为独立 SVG 的存储 key，
+	// label 为该子图在题干中的图号（如"图1"）。一张原图含多个几何子图时逐个填充
+	// （配置了 geometry sidecar 才填充）。
+	RedrawFigures []RedrawFigure `json:"redraw_figures,omitempty"`
 	// RedrawReport 几何重绘求解报告（残差、重试次数、是否几何自洽）。
 	RedrawReport *RedrawReport `json:"redraw_report,omitempty"`
 	// Questions 文档识别出的多道题（仅文档上传时填充）。
 	Questions []QuestionItem `json:"questions,omitempty"`
 	// Warning 非致命错误提示（如公式/几何识别失败），供前端展示。
 	Warning string `json:"warning,omitempty"`
+}
+
+// RedrawFigure 几何重绘产出的单个子图。
+//
+// 重绘只保留图形本身，原图上的"图1/图2"文字标注不会出现在新 SVG 里；label 来自
+// 几何描述提取阶段的 panel.title（模型未给出时按下标兜底为"图1/图2…"），
+// 保存后即可在导出文档中把图号标注回配图。
+type RedrawFigure struct {
+	Key   string `json:"key"`
+	Label string `json:"label,omitempty"`
 }
 
 // QuestionItem 文档中拆分出的单道题。
@@ -371,16 +382,17 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		return errors.New(errors.CodeUpstream, "geometry redraw produced no result")
 	}
 
-	// 逐子图存储独立 SVG。即使仍有少量结构问题也输出已渲染结果，同时提示告警。
-	keys := make([]string, 0, len(panels))
+	// 逐子图存储独立 SVG，并带上图号（如"图1"）。
+	// 即使仍有少量结构问题也输出已渲染结果，同时提示告警。
+	figures := make([]RedrawFigure, 0, len(panels))
 	for i, panel := range panels {
 		key := geometrySVGKey(taskID, i, len(panels))
 		if err := s.storage.Put(ctx, key, panel.SVG); err != nil {
 			return errors.Wrap(errors.CodeStorageFail, "store redraw svg failed", err)
 		}
-		keys = append(keys, key)
+		figures = append(figures, RedrawFigure{Key: key, Label: strings.TrimSpace(panel.Title)})
 	}
-	result.RedrawSVGKeys = keys
+	result.RedrawFigures = figures
 
 	consistent := geom.AllConsistent(panels)
 	result.RedrawReport = &RedrawReport{Attempts: attempts, Consistent: consistent}
@@ -391,7 +403,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		result.Warning += "几何重绘描述存在结构问题（已输出可渲染部分），图形仅供参考"
 	}
 	s.log.Info("geometry redraw done", zap.Uint64("task_id", taskID),
-		zap.Int("svg_count", len(keys)), zap.Int("attempts", attempts), zap.Bool("consistent", consistent))
+		zap.Int("svg_count", len(figures)), zap.Int("attempts", attempts), zap.Bool("consistent", consistent))
 	return nil
 }
 

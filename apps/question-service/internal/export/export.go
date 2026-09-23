@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -106,7 +107,9 @@ func (s *service) loadImages(ctx context.Context, items []ExportItem) ([]renderI
 
 	allKeys := make([]string, 0, len(items))
 	for _, it := range items {
-		allKeys = append(allKeys, it.ImageKeys...)
+		for _, ref := range it.Images {
+			allKeys = append(allKeys, ref.Key)
+		}
 	}
 	byKey, warnings := loader.Load(ctx, allKeys)
 
@@ -114,12 +117,17 @@ func (s *service) loadImages(ctx context.Context, items []ExportItem) ([]renderI
 	for _, it := range items {
 		it.StemText = normalizeStemText(it.StemText, s.cfg.MergeStemLineBreaks)
 		ri := renderItem{item: it}
-		for _, key := range it.ImageKeys {
-			if asset, ok := byKey[key]; ok {
-				ri.images = append(ri.images, *asset)
+		for _, ref := range it.Images {
+			asset, ok := byKey[ref.Key]
+			if !ok {
+				continue
 			}
+			// 图号属于"这道题的这张图"：同一 key 在不同题目里可能有不同图号，故按题赋值。
+			img := *asset
+			img.Caption = strings.TrimSpace(ref.Label)
+			ri.images = append(ri.images, img)
 		}
-		ri.imageFailed = len(it.ImageKeys) > 0 && len(ri.images) == 0
+		ri.imageFailed = len(it.Images) > 0 && len(ri.images) == 0
 		rendered = append(rendered, ri)
 	}
 	return rendered, warnings

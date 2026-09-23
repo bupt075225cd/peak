@@ -2,11 +2,13 @@ package export
 
 import (
 	"bytes"
+	"image"
 	"image/png"
 	"math"
 	"strings"
 	"testing"
 
+	"github.com/fogleman/gg"
 	"golang.org/x/image/font"
 )
 
@@ -179,6 +181,22 @@ func TestDecodeImagesLimitsBitmapUpscale(t *testing.T) {
 	}
 }
 
+// TestDecodeImagesKeepsFigureCaption 验证图号随配图一起进入渲染队列（去掉首尾空白）。
+func TestDecodeImagesKeepsFigureCaption(t *testing.T) {
+	assets := []ImageAsset{{
+		Data: encodePNG(t, 100, 50), Format: "png",
+		Width: 100, Height: 50, NaturalWidth: 100, NaturalHeight: 50,
+		Caption: " 图2 ",
+	}}
+	placed, err := decodeImages(assets, 800)
+	if err != nil {
+		t.Fatalf("decodeImages: %v", err)
+	}
+	if len(placed) != 1 || placed[0].caption != "图2" {
+		t.Fatalf("caption = %q, want 图2", placed[0].caption)
+	}
+}
+
 func TestWrapTextAvoidsEarlySpaceBreak(t *testing.T) {
 	fonts := testFonts(t)
 	face, err := fonts.Face(20)
@@ -222,6 +240,32 @@ func TestRenderItemImageHeightGrowsWithImage(t *testing.T) {
 	}
 }
 
+// TestRenderItemImageHeightGrowsWithImageCaption 验证图注会额外占用一条图注带的高度。
+func TestRenderItemImageHeightGrowsWithImageCaption(t *testing.T) {
+	fonts := testFonts(t)
+	rc := defaultRenderConfig()
+
+	plain := renderItem{images: []ImageAsset{{
+		Data: encodePNG(t, 200, 200), Format: "png", Width: 200, Height: 200,
+	}}}
+	labeled := renderItem{images: []ImageAsset{{
+		Data: encodePNG(t, 200, 200), Format: "png", Width: 200, Height: 200, Caption: "图1",
+	}}}
+
+	_, _, plainH, err := renderItemImage(rc, fonts, 1, plain)
+	if err != nil {
+		t.Fatalf("render plain: %v", err)
+	}
+	_, _, labeledH, err := renderItemImage(rc, fonts, 1, labeled)
+	if err != nil {
+		t.Fatalf("render labeled: %v", err)
+	}
+
+	if labeledH <= plainH {
+		t.Fatalf("caption should add a band below the figure: %d <= %d", labeledH, plainH)
+	}
+}
+
 func TestRenderItemImageNotesFailedImages(t *testing.T) {
 	fonts := testFonts(t)
 	rc := defaultRenderConfig()
@@ -232,7 +276,7 @@ func TestRenderItemImageNotesFailedImages(t *testing.T) {
 	}
 
 	failed := renderItem{
-		item:        ExportItem{StemText: "题干", ImageKeys: []string{"a.png"}},
+		item:        ExportItem{StemText: "题干", Images: []ImageRef{{Key: "a.png"}}},
 		imageFailed: true,
 	}
 	_, _, failedH, err := renderItemImage(rc, fonts, 1, failed)
@@ -286,12 +330,35 @@ func TestRenderItemLayoutBreaksAreSortedWithinCanvas(t *testing.T) {
 func TestGroupImageRowsPacksSideBySide(t *testing.T) {
 	placed := []placedImage{{w: 300, h: 200}, {w: 300, h: 250}}
 
-	rows := groupImageRows(placed, 1000, 50)
+	rows := groupImageRows(placed, 1000, 50, 30)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1 (images should share a row)", len(rows))
 	}
 	if rows[0].width != 650 || rows[0].height != 250 {
 		t.Fatalf("row = %.0fx%.0f, want 650x250", rows[0].width, rows[0].height)
+	}
+	// 行内没有图注时不预留图注带。
+	if rows[0].captionH != 0 {
+		t.Fatalf("caption band = %.0f, want 0", rows[0].captionH)
+	}
+}
+
+func TestGroupImageRowsReservesCaptionBand(t *testing.T) {
+	placed := []placedImage{
+		{w: 300, h: 200},
+		{w: 300, h: 200, caption: "图2"},
+	}
+
+	rows := groupImageRows(placed, 1000, 50, 30)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].captionH != 30 {
+		t.Fatalf("caption band = %.0f, want 30", rows[0].captionH)
+	}
+	// 行高 = 最高配图 + 图注带。
+	if rows[0].height != 230 {
+		t.Fatalf("row height = %.0f, want 230", rows[0].height)
 	}
 }
 
@@ -299,7 +366,7 @@ func TestGroupImageRowsWrapsWhenTooWide(t *testing.T) {
 	// 600 + 50(间距) + 600 = 1250 > 1000，应换行。
 	placed := []placedImage{{w: 600, h: 100}, {w: 600, h: 100}}
 
-	rows := groupImageRows(placed, 1000, 50)
+	rows := groupImageRows(placed, 1000, 50, 0)
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
@@ -308,7 +375,7 @@ func TestGroupImageRowsWrapsWhenTooWide(t *testing.T) {
 func TestGroupImageRowsKeepsOversizedImageAlone(t *testing.T) {
 	placed := []placedImage{{w: 2000, h: 100}}
 
-	rows := groupImageRows(placed, 1000, 50)
+	rows := groupImageRows(placed, 1000, 50, 0)
 	if len(rows) != 1 || len(rows[0].images) != 1 {
 		t.Fatalf("oversized image should occupy its own row: %+v", rows)
 	}
@@ -352,4 +419,69 @@ func TestImageRowGapIsWiderThanParagraphGap(t *testing.T) {
 	if rowGap <= float64(rc.gap) {
 		t.Fatalf("row gap %.1f should exceed paragraph gap %d", rowGap, rc.gap)
 	}
+}
+
+// TestDrawCaptionPaintsCenteredUnderFigure 验证图注确实被绘制，且横向居中在配图宽度内。
+func TestDrawCaptionPaintsCenteredUnderFigure(t *testing.T) {
+	fonts := testFonts(t)
+	rc := defaultRenderConfig()
+	face, err := fonts.Face(rc.metaSize)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+
+	const figureX, figureW = 100.0, 200.0
+	dc := gg.NewContext(400, 60)
+	dc.SetColor(colorPaper)
+	dc.Clear()
+	dc.SetColor(colorMeta)
+	drawCaption(dc, face, "图1", figureX, 0, figureW)
+
+	minX, maxX, count := paintedBounds(dc.Image())
+	if count == 0 {
+		t.Fatal("caption was not painted")
+	}
+	if minX < figureX || maxX >= figureX+figureW {
+		t.Fatalf("caption painted outside the figure width: [%d,%d]", minX, maxX)
+	}
+}
+
+// TestDrawCaptionSkipsEmptyText 验证空图注不绘制任何内容。
+func TestDrawCaptionSkipsEmptyText(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(defaultRenderConfig().metaSize)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+
+	dc := gg.NewContext(400, 60)
+	dc.SetColor(colorPaper)
+	dc.Clear()
+	drawCaption(dc, face, "   ", 100, 0, 200)
+
+	if _, _, count := paintedBounds(dc.Image()); count != 0 {
+		t.Fatalf("empty caption painted %d pixels", count)
+	}
+}
+
+// paintedBounds 返回非纸面像素的横向范围与数量，用于确认绘制内容与位置。
+func paintedBounds(img image.Image) (minX, maxX, count int) {
+	minX, maxX = -1, -1
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			if r == 0xffff && g == 0xffff && bl == 0xffff {
+				continue
+			}
+			count++
+			if minX == -1 || x < minX {
+				minX = x
+			}
+			if x > maxX {
+				maxX = x
+			}
+		}
+	}
+	return minX, maxX, count
 }

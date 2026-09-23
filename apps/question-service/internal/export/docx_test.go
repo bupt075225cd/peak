@@ -204,12 +204,12 @@ func TestBuildDocxCentersImages(t *testing.T) {
 	}
 }
 
-func TestBuildDocxKeepsQuestionImagesInOneParagraph(t *testing.T) {
+func TestBuildDocxGivesEachFigureItsOwnParagraph(t *testing.T) {
 	items := []renderItem{{
 		item: ExportItem{StemText: "题干"},
 		images: []ImageAsset{
-			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20},
-			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20},
+			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20, Caption: "图1"},
+			{Data: encodePNG(t, 40, 20), Format: "png", Width: 40, Height: 20, Caption: "图2"},
 		},
 	}}
 	data, err := buildDocx("t", items)
@@ -221,9 +221,13 @@ func TestBuildDocxKeepsQuestionImagesInOneParagraph(t *testing.T) {
 	if got := strings.Count(doc, "<w:drawing>"); got != 2 {
 		t.Fatalf("drawings = %d, want 2", got)
 	}
-	// 两张图共处同一个居中段落，由 Word 按行宽自动并排/换行。
-	if got := strings.Count(doc, `<w:jc w:val="center"/>`); got != 1 {
-		t.Fatalf("centered image paragraphs = %d, want 1", got)
+	// 每张图独占一个居中段落，图号才能紧跟在该图正下方。
+	if got := strings.Count(doc, `<w:jc w:val="center"/>`); got != 4 {
+		t.Fatalf("centered paragraphs = %d, want 4 (2 figures + 2 captions)", got)
+	}
+	// 图注文本落在各自图片段落之后。
+	if strings.Index(doc, "图1") > strings.Index(doc, "图2") {
+		t.Fatalf("captions out of order: %s", doc)
 	}
 }
 

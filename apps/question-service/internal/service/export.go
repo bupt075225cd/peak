@@ -56,7 +56,7 @@ func (s *Service) ExportMistakes(
 			QuestionType: m.Question.QuestionType,
 			Source:       mistakeSource(m),
 			StemText:     m.Question.StemText,
-			ImageKeys:    parseImageKeys(m.Question.Image),
+			Images:       parseImages(m.Question.Image),
 		})
 	}
 	if len(items) == 0 {
@@ -80,25 +80,27 @@ func mistakeSource(m *domain.Mistake) string {
 	return strings.TrimSpace(m.Source)
 }
 
-// parseImageKeys 解析 questions.image（JSON 字符串数组）。
+// parseImages 解析 questions.image（JSON：配图引用数组，元素含 key 与图号 label）。
 //
-// 与前端 imageKeys() 行为保持一致：解析失败、元素非字符串或空值都按无图处理。
-func parseImageKeys(raw string) []string {
+// 与前端 imageRefs() 行为保持一致：解析失败、缺少 key 或空值都按无图处理。
+func parseImages(raw string) []export.ImageRef {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
 	}
 
-	var keys []string
-	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+	var refs []export.ImageRef
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
 		return nil
 	}
 
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if k = strings.TrimSpace(k); k != "" {
-			out = append(out, k)
+	out := make([]export.ImageRef, 0, len(refs))
+	for _, ref := range refs {
+		key := strings.TrimSpace(ref.Key)
+		if key == "" {
+			continue
 		}
+		out = append(out, export.ImageRef{Key: key, Label: strings.TrimSpace(ref.Label)})
 	}
 	if len(out) == 0 {
 		return nil

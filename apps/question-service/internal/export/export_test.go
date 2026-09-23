@@ -20,7 +20,7 @@ func TestExportDocxEmbedsImages(t *testing.T) {
 	svc := newTestService(t, ff, 0)
 
 	res, err := svc.Export(context.Background(), []ExportItem{{
-		Grade: "七年级上", Subject: "数学", StemText: "题干", ImageKeys: []string{"a.png"},
+		Grade: "七年级上", Subject: "数学", StemText: "题干", Images: []ImageRef{{Key: "a.png"}},
 	}}, FormatDocx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
@@ -83,7 +83,7 @@ func TestExportReportsImageFailuresWithoutAborting(t *testing.T) {
 	svc := newTestService(t, newFakeFetcher(nil), 0)
 
 	res, err := svc.Export(context.Background(), []ExportItem{{
-		StemText: "题干", ImageKeys: []string{"missing.png"},
+		StemText: "题干", Images: []ImageRef{{Key: "missing.png"}},
 	}}, FormatDocx)
 	if err != nil {
 		t.Fatalf("Export should tolerate missing images: %v", err)
@@ -101,7 +101,7 @@ func TestExportPreservesImageOrder(t *testing.T) {
 	svc := newTestService(t, ff, 0)
 
 	res, err := svc.Export(context.Background(), []ExportItem{{
-		StemText: "题干", ImageKeys: []string{"b.png", "a.png"},
+		StemText: "题干", Images: []ImageRef{{Key: "b.png"}, {Key: "a.png"}},
 	}}, FormatDocx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
@@ -118,6 +118,57 @@ func TestExportPreservesImageOrder(t *testing.T) {
 	}
 	if cfg.Width != 20 {
 		t.Fatalf("first embedded image width = %d, want 20 (b.png)", cfg.Width)
+	}
+}
+
+// TestExportDocxLabelsFigures 验证导出的 Word 会把图号标注在对应配图正下方：
+// 图注必须落在该图与下一张图之间，否则图号会错配到别的图上。
+func TestExportDocxLabelsFigures(t *testing.T) {
+	ff := newFakeFetcher(map[string][]byte{
+		"a.png": encodePNG(t, 40, 40),
+		"b.png": encodePNG(t, 40, 40),
+	})
+	svc := newTestService(t, ff, 0)
+
+	res, err := svc.Export(context.Background(), []ExportItem{{
+		StemText: "题干",
+		Images:   []ImageRef{{Key: "a.png", Label: "图1"}, {Key: "b.png", Label: "图2"}},
+	}}, FormatDocx)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	doc := string(docxFiles(t, res.Data)["word/document.xml"])
+	for _, want := range []string{"图1", "图2"} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("docx missing caption %q: %s", want, doc)
+		}
+	}
+
+	firstImg := strings.Index(doc, `name="image1.png"`)
+	firstCap := strings.Index(doc, "图1")
+	secondImg := strings.Index(doc, `name="image2.png"`)
+	secondCap := strings.Index(doc, "图2")
+	if !(firstImg < firstCap && firstCap < secondImg && secondImg < secondCap) {
+		t.Fatalf("captions not placed under their own figure: %s", doc)
+	}
+}
+
+// TestExportSkipsEmptyCaption 验证未带图号的配图不产生图注段落。
+func TestExportSkipsEmptyCaption(t *testing.T) {
+	ff := newFakeFetcher(map[string][]byte{"a.png": encodePNG(t, 40, 40)})
+	svc := newTestService(t, ff, 0)
+
+	res, err := svc.Export(context.Background(), []ExportItem{{
+		StemText: "题干", Images: []ImageRef{{Key: "a.png"}},
+	}}, FormatDocx)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	doc := string(docxFiles(t, res.Data)["word/document.xml"])
+	if strings.Contains(doc, "图") {
+		t.Fatalf("unexpected caption in docx: %s", doc)
 	}
 }
 

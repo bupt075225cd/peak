@@ -5,7 +5,7 @@ import {
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
-  type RecognitionTask, type RecognitionResult, type QuestionItem,
+  type RecognitionTask, type RecognitionResult, type QuestionItem, type QuestionImageRef,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
 
@@ -28,12 +28,15 @@ const stemText = ref('')
 const selectedGeometryKeys = ref<string[]>([])
 
 // 几何重绘结果：识别流水线对数学题含几何图的原图进行重绘，
-// 一张原图可含多个子图（图1/图2/图3），每个子图一张独立 SVG，逐张展示。
-const redrawSvgKeys = ref<string[]>([])
+// 一张原图可含多个子图（图1/图2/图3），每个子图一张独立 SVG，逐张展示并保留图号。
+// 图号来自识别阶段，保存后用于导出文档给配图加标注。
+const redrawFigures = ref<QuestionImageRef[]>([])
 const redrawConsistent = ref(true)
-const redrawSvgUrls = computed(() =>
-  redrawSvgKeys.value.map((k) => `/api/recognition/files/${k}`),
-)
+
+// 配图访问地址：识别服务的文件接口。
+function figureUrl(key: string): string {
+  return `/api/recognition/files/${key}`
+}
 
 // 年级（学科、题型由识别自动回填，见 applyResult/selectQuestion）。
 const grade = ref('')
@@ -160,9 +163,12 @@ function applyResult(t: RecognitionTask) {
     stemText.value = result.stem_text || ''
     subject.value = result.subject || '数学'
     questionType.value = result.question_type || '解答题'
-    // 几何重绘结果：数学题含几何图时由识别流水线对原图重绘，每个子图一张独立 SVG。
-    redrawSvgKeys.value = Array.isArray(result.redraw_svg_keys)
-      ? result.redraw_svg_keys.filter((k) => typeof k === 'string' && k.length > 0)
+    // 几何重绘结果：数学题含几何图时由识别流水线对原图重绘，每个子图一张独立 SVG，
+    // 并带回该子图的图号（图1/图2…）。
+    redrawFigures.value = Array.isArray(result.redraw_figures)
+      ? result.redraw_figures
+        .filter((f) => typeof f?.key === 'string' && f.key.length > 0)
+        .map((f) => ({ key: f.key, label: (f.label || '').trim() }))
       : []
     redrawConsistent.value = result.redraw_report ? result.redraw_report.consistent !== false : true
   }
@@ -183,13 +189,13 @@ async function handleRetry() {
   }
 }
 
-// 保存到题目的几何引用：数学题含几何图时存 AI 重绘的多张 SVG key；
-// 其余（如文档拆题的子问图）沿用裁剪/内嵌子图 key。
-function imageKeysValue(): string[] {
-  if (redrawSvgKeys.value.length > 0) {
-    return redrawSvgKeys.value
+// 保存到题目的配图引用：数学题含几何图时存 AI 重绘的子图（含图号）；
+// 其余（如文档拆题的子问图）沿用裁剪/内嵌子图 key，这些图没有图号。
+function imageRefsValue(): QuestionImageRef[] {
+  if (redrawFigures.value.length > 0) {
+    return redrawFigures.value
   }
-  return selectedGeometryKeys.value
+  return selectedGeometryKeys.value.map((key) => ({ key }))
 }
 
 async function handleSave() {
@@ -213,7 +219,7 @@ async function handleSave() {
       subject: subject.value || '数学',
       grade: grade.value,
       stem_text: stemText.value,
-      image: JSON.stringify(imageKeysValue()),
+      image: JSON.stringify(imageRefsValue()),
       question_type: questionType.value || '解答题',
     })
     // 第二步：创建错题记录，关联刚创建的题目。
@@ -240,7 +246,7 @@ function reset() {
   questions.value = []
   stemText.value = ''
   selectedGeometryKeys.value = []
-  redrawSvgKeys.value = []
+  redrawFigures.value = []
   redrawConsistent.value = true
   grade.value = ''
   source.value = ''
@@ -275,7 +281,7 @@ function selectQuestion(idx: number) {
   // 文档拆题的几何图沿用裁剪子图引用（不自动重绘）。
   selectedGeometryKeys.value = (q.sub_questions || [])
     .flatMap((sq) => sq.geometry_keys || [])
-  redrawSvgKeys.value = []
+  redrawFigures.value = []
   redrawConsistent.value = true
 }
 </script>
@@ -476,10 +482,10 @@ function selectQuestion(idx: number) {
             </div>
 
             <!-- 数学题含几何图 → AI 重绘图（VLM 坐标直出 → Go 渲染 SVG） -->
-            <div v-if="redrawSvgUrls.length" class="rounded-xl bg-surface-tint p-4">
+            <div v-if="redrawFigures.length" class="rounded-xl bg-surface-tint p-4">
               <div class="flex items-center justify-between mb-2">
                 <label class="block text-sm font-medium text-ink-soft">
-                  几何图形（AI 精确重绘）<span v-if="redrawSvgUrls.length > 1"> · {{ redrawSvgUrls.length }} 张</span>
+                  几何图形（AI 精确重绘）<span v-if="redrawFigures.length > 1"> · {{ redrawFigures.length }} 张</span>
                 </label>
                 <span
                   v-if="!redrawConsistent"
@@ -487,22 +493,27 @@ function selectQuestion(idx: number) {
                   title="结构校验未全部通过，图形可能存在偏差"
                 >结构校验未通过，仅供参考</span>
               </div>
-              <!-- 每个几何子图一张独立 SVG，逐张展示，点击可放大查看 -->
+              <!-- 每个几何子图一张独立 SVG，逐张展示并标注图号（重绘会丢失原图的"图1/图2"标注），点击可放大查看 -->
               <div class="flex flex-wrap gap-3">
-                <button
-                  v-for="(url, i) in redrawSvgUrls"
+                <figure
+                  v-for="(fig, i) in redrawFigures"
                   :key="i"
-                  type="button"
-                  class="block focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg bg-white"
-                  title="点击放大查看"
-                  @click="openViewer(url)"
+                  class="flex flex-col items-center gap-1"
                 >
-                  <img
-                    :src="url"
-                    class="h-40 w-auto rounded-lg border border-slate-200 bg-white object-contain cursor-zoom-in transition-transform hover:scale-[1.02]"
-                    alt="AI 重绘几何图"
-                  />
-                </button>
+                  <button
+                    type="button"
+                    class="block focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-lg bg-white"
+                    title="点击放大查看"
+                    @click="openViewer(figureUrl(fig.key))"
+                  >
+                    <img
+                      :src="figureUrl(fig.key)"
+                      class="h-40 w-auto rounded-lg border border-slate-200 bg-white object-contain cursor-zoom-in transition-transform hover:scale-[1.02]"
+                      :alt="fig.label || 'AI 重绘几何图'"
+                    />
+                  </button>
+                  <figcaption v-if="fig.label" class="text-xs text-ink-soft">{{ fig.label }}</figcaption>
+                </figure>
               </div>
             </div>
           </div>
