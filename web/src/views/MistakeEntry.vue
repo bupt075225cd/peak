@@ -77,17 +77,27 @@ function pickImage() {
   fileInput.value?.click()
 }
 
+// 目前只支持上传图片：非图片文件直接提示，不发起识别。
+// MIME 可能为空（部分拖拽来源），因此再按扩展名兜底判断。
+function ensureImage(file: File): boolean {
+  const isImage =
+    file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(file.name)
+  if (isImage) return true
+  errorMsg.value = '目前仅支持上传图片（JPG、PNG 等）'
+  return false
+}
+
 function onFileChange(e: Event) {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
-  if (!file) return
+  if (!file || !ensureImage(file)) return
   prepareFile(file)
   startRecognition(file)
 }
 
 function onDrop(e: DragEvent) {
   const file = e.dataTransfer?.files?.[0]
-  if (!file) return
+  if (!file || !ensureImage(file)) return
   prepareFile(file)
   startRecognition(file)
 }
@@ -274,7 +284,7 @@ function selectQuestion(idx: number) {
   <div class="mx-auto max-w-5xl px-4 py-8">
     <div class="mb-6 animate-fade-up">
       <h1 class="text-2xl font-semibold text-ink">录入错题</h1>
-      <p class="text-sm text-ink-soft mt-1">拍照上传错题图片，或上传 word/pdf 文档，自动识别题目</p>
+      <p class="text-sm text-ink-soft mt-1">拍照上传错题图片，自动识别题目</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -286,20 +296,21 @@ function selectQuestion(idx: number) {
           @dragover.prevent
           @drop.prevent="onDrop"
         >
-          <input ref="fileInput" type="file" accept="image/*,.doc,.docx,.pdf" class="hidden" @change="onFileChange" />
+          <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFileChange" />
           <div v-if="!previewUrl && !docName" class="flex flex-col items-center justify-center py-16 px-6 text-center">
             <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 group-hover:animate-float">
               <ImagePlus class="w-8 h-8 text-primary" />
             </div>
-            <p class="font-medium text-ink">拍照 / 上传错题图片或文档</p>
-            <p class="text-sm text-ink-faint mt-1">支持图片、Word、PDF，拖拽或点击上传，自动识别</p>
+            <p class="font-medium text-ink">拍照 / 上传错题图片</p>
+            <p class="text-sm text-ink-faint mt-1">支持 JPG、PNG 等图片格式，拖拽或点击上传，自动识别</p>
             <button
               type="button"
               class="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary text-white px-4 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors"
             >
-              <Camera class="w-4 h-4" /> 拍照 / 选择文件
+              <Camera class="w-4 h-4" /> 拍照 / 选择图片
             </button>
           </div>
+          <!-- 文档上传能力完成前保留：当前入口只接受图片，故该分支暂不可达 -->
           <div v-else-if="docName" class="relative">
             <div class="flex items-center gap-4 p-6 bg-surface-muted/40">
               <div class="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
@@ -331,6 +342,9 @@ function selectQuestion(idx: number) {
             </div>
           </div>
         </div>
+
+        <!-- 上传前的文件校验提示（识别失败的提示仍展示在下方进度卡片里） -->
+        <p v-if="errorMsg && !recognizing && !task" class="text-sm text-red-500 animate-fade-up">{{ errorMsg }}</p>
 
         <!-- 识别进度卡片 -->
         <div v-if="recognizing || task" class="rounded-2xl bg-white p-5 shadow-sm border border-slate-200/60 animate-fade-up">

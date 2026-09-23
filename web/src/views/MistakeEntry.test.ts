@@ -549,4 +549,25 @@ describe('MistakeEntry.vue', () => {
     await flushPromises()
     expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
+
+  it('非图片文件不发起识别，并提示只支持图片', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="file"]')
+    const doc = new File(['x'], 'a.pdf', { type: 'application/pdf' })
+    Object.defineProperty(input.element, 'files', { value: [doc], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('目前仅支持上传图片')
+    // 不应触发上传识别接口。
+    expect(httpMethods.post).not.toHaveBeenCalledWith(
+      '/recognition/tasks',
+      expect.anything(),
+    )
+  })
 })
