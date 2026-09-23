@@ -142,16 +142,22 @@ describe('api/index.ts', () => {
     expect(res.id).toBe(7)
   })
 
-  it('listMistakes 返回 items 并在无数据时兜底空数组', async () => {
-    httpMethods.get.mockResolvedValueOnce(ok({ items: [{ id: 1, question_id: 2, user_id: 1 }], total: 1 }))
-    const res = await listMistakes()
-    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes')
-    expect(res).toHaveLength(1)
+  it('listMistakes 透传分页参数并返回 items 与 total', async () => {
+    httpMethods.get.mockResolvedValueOnce(ok({ items: [{ id: 1, question_id: 2, user_id: 1 }], total: 7 }))
+    const res = await listMistakes(20, 20)
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', { params: { offset: 20, limit: 20 } })
+    expect(res.items).toHaveLength(1)
+    expect(res.total).toBe(7)
 
-    // 兜底：data 为 null 时返回 []
+    // 缺省参数：offset=0、limit=20。
+    httpMethods.get.mockResolvedValueOnce(ok({ items: [], total: 0 }))
+    await listMistakes()
+    expect(httpMethods.get).toHaveBeenLastCalledWith('/mistakes', { params: { offset: 0, limit: 20 } })
+
+    // 兜底：data 为 null 时返回空列表与 0。
     httpMethods.get.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: null } })
     const empty = await listMistakes()
-    expect(empty).toEqual([])
+    expect(empty).toEqual({ items: [], total: 0 })
   })
 
   it('exportMistakes 以 blob 方式请求并解析服务端文件名', async () => {

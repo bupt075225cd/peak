@@ -89,7 +89,7 @@ describe('MistakeList.vue', () => {
       global: { plugins: [buildRouter()] },
     })
     await flushPromises()
-    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes')
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', { params: { offset: 0, limit: 20 } })
     expect(wrapper.text()).toContain('我的错题本')
     expect(wrapper.text()).toContain('共 3 道错题')
   })
@@ -116,6 +116,33 @@ describe('MistakeList.vue', () => {
     await btn!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/entry')
+  })
+
+  it('显示后端返回的总条数，并支持「加载更多」追加下一页', async () => {
+    // 第一页 2 条（共 4 条），第二页再返回 1 条。
+    httpMethods.get
+      .mockResolvedValueOnce(ok({ items: mockMistakes.slice(0, 2), total: 4 }))
+      .mockResolvedValueOnce(ok({ items: [mockMistakes[2]], total: 4 }))
+
+    const wrapper = mount(MistakeList, { global: { plugins: [buildRouter()] } })
+    await flushPromises()
+
+    // 总数取后端 total（而不是已加载条数）。
+    expect(wrapper.text()).toContain('共 4 道错题')
+    expect(wrapper.text()).toContain('已加载 2 条')
+
+    const more = wrapper.findAll('button').find((b) => b.text().includes('加载更多'))
+    expect(more).toBeDefined()
+    await more!.trigger('click')
+    await flushPromises()
+
+    // 第二页从 offset=已加载条数 开始拉取。
+    expect(httpMethods.get).toHaveBeenLastCalledWith('/mistakes', {
+      params: { offset: 2, limit: 20 },
+    })
+    expect(wrapper.text()).toContain('已加载 3 条')
+    // 新一页的题目已追加到列表。
+    expect(wrapper.text()).toContain('一个质量为 2kg')
   })
 })
 

@@ -163,10 +163,15 @@ export async function createMistake(payload: Record<string, unknown>): Promise<u
   return data.data
 }
 
-// 查询错题列表。
-export async function listMistakes(): Promise<Mistake[]> {
-  const { data } = await http.get<ApiResponse<{ items: Mistake[]; total: number }>>('/mistakes')
-  return data.data?.items ?? []
+// 查询错题列表（分页）：返回当前页条目与符合条件的总数。
+export async function listMistakes(
+  offset = 0,
+  limit = 20,
+): Promise<{ items: Mistake[]; total: number }> {
+  const { data } = await http.get<ApiResponse<{ items: Mistake[]; total: number }>>('/mistakes', {
+    params: { offset, limit },
+  })
+  return { items: data.data?.items ?? [], total: data.data?.total ?? 0 }
 }
 
 // 导出格式。

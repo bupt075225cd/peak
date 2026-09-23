@@ -82,16 +82,45 @@ const groupedItems = computed(() => {
   return groups
 })
 
-onMounted(async () => {
+// 每页加载条数（后端 limit 上限为 100，超出会回落为 20）。
+const PAGE_SIZE = 20
+// 符合条件的错题总数（后端返回），用于提示"共 N 道"与是否还有未加载项。
+const total = ref(0)
+const loadingMore = ref(false)
+
+// 是否还有未加载的错题。
+const hasMore = computed(() => items.value.length < total.value)
+
+// 加载第一页（重置列表）。
+async function loadFirstPage() {
   loading.value = true
   try {
-    items.value = await listMistakes()
+    const { items: list, total: count } = await listMistakes(0, PAGE_SIZE)
+    items.value = list
+    total.value = count
   } catch (err) {
     console.error('加载错题失败', err)
   } finally {
     loading.value = false
   }
-})
+}
+
+// 追加下一页；失败时保留已加载内容，不影响已有列表。
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  loadingMore.value = true
+  try {
+    const { items: list, total: count } = await listMistakes(items.value.length, PAGE_SIZE)
+    items.value = [...items.value, ...list]
+    total.value = count
+  } catch (err) {
+    console.error('加载更多错题失败', err)
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+onMounted(loadFirstPage)
 
 function goEntry() {
   router.push('/entry')
@@ -242,7 +271,9 @@ async function resolveExportError(err: unknown): Promise<string> {
     <div class="flex items-center justify-between mb-6 animate-fade-up">
       <div>
         <h1 class="text-2xl font-semibold text-ink">我的错题本</h1>
-        <p class="text-sm text-ink-soft mt-1">共 {{ items.length }} 道错题</p>
+        <p class="text-sm text-ink-soft mt-1">
+          共 {{ total }} 道错题<template v-if="hasMore"> · 已加载 {{ items.length }} 条</template>
+        </p>
       </div>
       <div class="flex items-center gap-2">
         <!-- 导出：未勾选时导出当前筛选结果 -->
@@ -331,7 +362,7 @@ async function resolveExportError(err: unknown): Promise<string> {
           :disabled="!filteredItems.length"
           @change="toggleSelectAllVisible"
         />
-        全选当前筛选
+        全选当前已加载
       </label>
       <span v-if="selectedIds.size" class="text-xs text-ink-faint">
         已选 {{ selectedIds.size }} 题
@@ -339,7 +370,7 @@ async function resolveExportError(err: unknown): Promise<string> {
           （其中 {{ hiddenSelectedCount }} 题不在当前筛选结果中，不会被导出）
         </template>
       </span>
-      <span v-else class="text-xs text-ink-faint">未勾选时导出当前筛选结果</span>
+      <span v-else class="text-xs text-ink-faint">未勾选时导出当前已加载的筛选结果</span>
       <span v-if="exportError" class="text-xs text-red-500">{{ exportError }}</span>
     </div>
 
@@ -444,6 +475,19 @@ async function resolveExportError(err: unknown): Promise<string> {
             </div>
           </div>
         </section>
+
+        <!-- 还有未加载的错题时提供「加载更多」（每次追加一页） -->
+        <div v-if="hasMore" class="flex justify-center pt-2 animate-fade-up">
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-ink-soft shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="loadingMore"
+            @click="loadMore"
+          >
+            <Loader2 v-if="loadingMore" class="w-4 h-4 animate-spin" />
+            加载更多（剩余 {{ total - items.length }} 条）
+          </button>
+        </div>
       </div>
     </div>
 
