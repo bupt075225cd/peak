@@ -85,9 +85,9 @@ func (s *Service) GetMistake(ctx context.Context, id uint64) (*domain.Mistake, e
 	return m, nil
 }
 
-// ListMistakes 分页查询用户错题。
-func (s *Service) ListMistakes(ctx context.Context, userID uint64, offset, limit int) ([]domain.Mistake, int64, error) {
-	return s.repos.Mistake.ListByUser(ctx, userID, offset, limit)
+// ListMistakes 按条件分页查询用户错题，并返回学科/来源分面计数。
+func (s *Service) ListMistakes(ctx context.Context, query domain.MistakeQuery) (domain.MistakeListResult, error) {
+	return s.repos.Mistake.ListByUser(ctx, query)
 }
 
 // UpdateMistake 更新错题（修正错误原因、掌握程度等）。

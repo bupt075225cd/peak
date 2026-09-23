@@ -20,7 +20,8 @@ type QuestionRepository interface {
 type MistakeRepository interface {
 	Create(ctx context.Context, m *domain.Mistake) error
 	Get(ctx context.Context, id uint64) (*domain.Mistake, error)
-	ListByUser(ctx context.Context, userID uint64, offset, limit int) ([]domain.Mistake, int64, error)
+	// ListByUser 按条件分页查询用户错题，并返回总数与学科/来源分面计数。
+	ListByUser(ctx context.Context, query domain.MistakeQuery) (domain.MistakeListResult, error)
 	// ListByIDs 按 id 批量查询指定用户的错题（含题目关联），用于导出场景。
 	ListByIDs(ctx context.Context, userID uint64, ids []uint64) ([]domain.Mistake, error)
 	Update(ctx context.Context, m *domain.Mistake) error

@@ -144,22 +144,184 @@ func TestMistakeRepoCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, total, err := repos.Mistake.ListByUser(ctx, userID, 0, 10)
+	res, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 1 || len(list) != 1 {
-		t.Fatalf("expected 1, got total=%d len=%d", total, len(list))
+	if res.Total != 1 || len(res.Items) != 1 {
+		t.Fatalf("expected 1, got total=%d len=%d", res.Total, len(res.Items))
 	}
 
 	// 其他用户查询为空。
-	otherList, otherTotal, _ := repos.Mistake.ListByUser(ctx, 999, 0, 10)
-	if otherTotal != 0 || len(otherList) != 0 {
+	other, _ := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: 999, Limit: 10})
+	if other.Total != 0 || len(other.Items) != 0 {
 		t.Fatal("expected empty for other user")
 	}
 
 	if err := repos.Mistake.Delete(ctx, m.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// seedMistakesForFilter 预置三条错题，覆盖 不同学科/题型/知识点/来源，
+// 其中第 2 条的题目来源为空（回退到错题记录来源），用于验证来源取值口径。
+func seedMistakesForFilter(t *testing.T, repos *GormRepositories, userID uint64) {
+	t.Helper()
+	ctx := context.Background()
+
+	seed := []struct {
+		subject        string
+		questionType   string
+		stem           string
+		kps            string
+		source         string
+		mistakeSource  string
+	}{
+		{"数学", "解答题", "已知二次函数 y=x^2 求顶点", `["二次函数"]`, "期中考试", "错题本"},
+		{"数学", "选择题", "下列 Math 说法正确的是", `["函数"]`, "期中考试", ""},
+		{"物理", "填空题", "一个物体做匀速直线运动", `["运动学"]`, "", "练习册 P32"},
+	}
+	for i, s := range seed {
+		q := &domain.Question{
+			Subject: s.subject, QuestionType: s.questionType, StemText: s.stem,
+			KnowledgePoints: s.kps, Source: s.source,
+		}
+		if err := repos.Question.Create(ctx, q); err != nil {
+			t.Fatalf("create question %d: %v", i, err)
+		}
+		m := &domain.Mistake{UserID: userID, QuestionID: q.ID, Source: s.mistakeSource}
+		if err := repos.Mistake.Create(ctx, m); err != nil {
+			t.Fatalf("create mistake %d: %v", i, err)
+		}
+	}
+}
+
+func TestMistakeListByUserKeyword(t *testing.T) {
+	repos, userID := setupRepos(t)
+	ctx := context.Background()
+	seedMistakesForFilter(t, repos, userID)
+
+	cases := []struct {
+		name    string
+		keyword string
+		want    int64
+	}{
+		{"命中题干且忽略大小写", "math", 1},
+		{"多关键词全部命中", "二次函数 顶点", 1},
+		{"多关键词任一不命中则为空", "二次函数 不存在的词", 0},
+		{"命中知识点", "运动学", 1},
+		{"命中题型", "填空题", 1},
+		{"命中来源（题目来源为空时取错题来源）", "练习册", 1},
+		{"命中学科（保持改造前的可搜行为）", "数学", 2},
+		{"汉字子串命中", "函数", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{
+				UserID: userID, Keyword: tc.keyword, Limit: 10,
+			})
+			if err != nil {
+				t.Fatalf("ListByUser: %v", err)
+			}
+			if res.Total != tc.want {
+				t.Fatalf("keyword %q: total = %d, want %d", tc.keyword, res.Total, tc.want)
+			}
+		})
+	}
+}
+
+func TestMistakeListByUserSubjectAndSource(t *testing.T) {
+	repos, userID := setupRepos(t)
+	ctx := context.Background()
+	seedMistakesForFilter(t, repos, userID)
+
+	math, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Subject: "数学", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if math.Total != 2 {
+		t.Fatalf("subject 数学: total = %d, want 2", math.Total)
+	}
+
+	// 来源优先取题目来源，题目来源为空时回退错题记录来源。
+	midterm, _ := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Source: "期中考试", Limit: 10})
+	if midterm.Total != 2 {
+		t.Fatalf("source 期中考试: total = %d, want 2", midterm.Total)
+	}
+	workbook, _ := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Source: "练习册 P32", Limit: 10})
+	if workbook.Total != 1 {
+		t.Fatalf("source 练习册 P32: total = %d, want 1", workbook.Total)
+	}
+
+	// 学科与来源叠加。
+	combo, _ := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{
+		UserID: userID, Subject: "数学", Source: "期中考试", Limit: 10,
+	})
+	if combo.Total != 2 {
+		t.Fatalf("subject+source: total = %d, want 2", combo.Total)
+	}
+}
+
+func TestMistakeListByUserFacets(t *testing.T) {
+	repos, userID := setupRepos(t)
+	ctx := context.Background()
+	seedMistakesForFilter(t, repos, userID)
+
+	res, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if res.Total != 3 {
+		t.Fatalf("total = %d, want 3", res.Total)
+	}
+	if res.SubjectCounts["数学"] != 2 || res.SubjectCounts["物理"] != 1 {
+		t.Fatalf("subject counts = %v, want 数学:2 物理:1", res.SubjectCounts)
+	}
+	if res.SourceCounts["期中考试"] != 2 || res.SourceCounts["练习册 P32"] != 1 {
+		t.Fatalf("source counts = %v, want 期中考试:2 练习册 P32:1", res.SourceCounts)
+	}
+	// 来源为空的历史数据不进入来源分面。
+	if _, ok := res.SourceCounts[""]; ok {
+		t.Fatal("empty source should not be reported in facets")
+	}
+
+	// 学科筛选不改变分面：其它学科仍需可见，才能切换筛选。
+	filtered, _ := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Subject: "数学", Limit: 10})
+	if filtered.Total != 2 {
+		t.Fatalf("filtered total = %d, want 2", filtered.Total)
+	}
+	if filtered.SubjectCounts["物理"] != 1 || filtered.SubjectCounts["数学"] != 2 {
+		t.Fatalf("facets should ignore subject filter, got %v", filtered.SubjectCounts)
+	}
+}
+
+func TestMistakeListByUserPaginationIsStable(t *testing.T) {
+	repos, userID := setupRepos(t)
+	ctx := context.Background()
+	seedMistakesForFilter(t, repos, userID)
+
+	first, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	second, err := repos.Mistake.ListByUser(ctx, domain.MistakeQuery{UserID: userID, Offset: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if len(first.Items) != 2 || len(second.Items) != 1 {
+		t.Fatalf("page sizes = %d/%d, want 2/1", len(first.Items), len(second.Items))
+	}
+
+	// 两页之间不重复、不遗漏。
+	seen := map[uint64]bool{}
+	for _, m := range append(first.Items, second.Items...) {
+		if seen[m.ID] {
+			t.Fatalf("mistake %d appears on both pages", m.ID)
+		}
+		seen[m.ID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("paged through %d mistakes, want 3", len(seen))
 	}
 }
 

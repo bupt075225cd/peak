@@ -198,12 +198,12 @@ func TestMistakeCRUD(t *testing.T) {
 		t.Fatalf("update mistake: %v", err)
 	}
 
-	list, total, err := svc.ListMistakes(ctx, 1, 0, 10)
+	res, err := svc.ListMistakes(ctx, domain.MistakeQuery{UserID: 1, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 1 || len(list) != 1 {
-		t.Fatalf("expected 1, got total=%d len=%d", total, len(list))
+	if res.Total != 1 || len(res.Items) != 1 {
+		t.Fatalf("expected 1, got total=%d len=%d", res.Total, len(res.Items))
 	}
 
 	if err := svc.DeleteMistake(ctx, m.ID); err != nil {

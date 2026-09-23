@@ -163,15 +163,49 @@ export async function createMistake(payload: Record<string, unknown>): Promise<u
   return data.data
 }
 
-// 查询错题列表（分页）：返回当前页条目与符合条件的总数。
-export async function listMistakes(
-  offset = 0,
-  limit = 20,
-): Promise<{ items: Mistake[]; total: number }> {
-  const { data } = await http.get<ApiResponse<{ items: Mistake[]; total: number }>>('/mistakes', {
-    params: { offset, limit },
-  })
-  return { items: data.data?.items ?? [], total: data.data?.total ?? 0 }
+// 错题列表查询参数：分页 + 服务端筛选。
+export interface MistakeListParams {
+  offset?: number
+  limit?: number
+  /** 关键词：空格分隔多个词，全部命中（匹配 题干/知识点/题型/来源）。 */
+  keyword?: string
+  /** 学科精确匹配。 */
+  subject?: string
+  /** 来源精确匹配（题目来源优先，其次错题记录来源）。 */
+  source?: string
+}
+
+// 错题列表查询结果：当前页条目、总数与分面计数。
+export interface MistakeListResult {
+  items: Mistake[]
+  total: number
+  /** 学科分布计数（仅按关键词统计）。 */
+  subjectCounts: Record<string, number>
+  /** 来源分布计数（仅按关键词统计，不含空来源）。 */
+  sourceCounts: Record<string, number>
+}
+
+// 查询错题列表：筛选在服务端完成，返回当前页、总数与分面计数。
+export async function listMistakes(params: MistakeListParams = {}): Promise<MistakeListResult> {
+  const { offset = 0, limit = 20, keyword, subject, source } = params
+  const query: Record<string, string | number> = { offset, limit }
+  if (keyword?.trim()) query.keyword = keyword.trim()
+  if (subject) query.subject = subject
+  if (source) query.source = source
+
+  const { data } = await http.get<ApiResponse<{
+    items: Mistake[]
+    total: number
+    subject_counts?: Record<string, number>
+    source_counts?: Record<string, number>
+  }>>('/mistakes', { params: query })
+
+  return {
+    items: data.data?.items ?? [],
+    total: data.data?.total ?? 0,
+    subjectCounts: data.data?.subject_counts ?? {},
+    sourceCounts: data.data?.source_counts ?? {},
+  }
 }
 
 // 导出格式。

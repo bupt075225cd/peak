@@ -3,6 +3,7 @@ package handler
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -162,12 +163,26 @@ func (h *Handler) getMistake(c *gin.Context) {
 func (h *Handler) listMistakes(c *gin.Context) {
 	userID, _ := strconv.ParseUint(c.GetHeader("X-User-Id"), 10, 64)
 	offset, limit := pageParams(c)
-	list, total, err := h.svc.ListMistakes(c.Request.Context(), userID, offset, limit)
+
+	result, err := h.svc.ListMistakes(c.Request.Context(), domain.MistakeQuery{
+		UserID:  userID,
+		Keyword: keywordParam(c),
+		Subject: strings.TrimSpace(c.Query("subject")),
+		Source:  strings.TrimSpace(c.Query("source")),
+		Offset:  offset,
+		Limit:   limit,
+	})
 	if err != nil {
 		httpx.Fail(c, err)
 		return
 	}
-	httpx.OK(c, gin.H{"items": list, "total": total})
+
+	httpx.OK(c, gin.H{
+		"items":          result.Items,
+		"total":          result.Total,
+		"subject_counts": result.SubjectCounts,
+		"source_counts":  result.SourceCounts,
+	})
 }
 
 func (h *Handler) updateMistake(c *gin.Context) {
@@ -234,4 +249,16 @@ func pageParams(c *gin.Context) (int, int) {
 		limit = 20
 	}
 	return offset, limit
+}
+
+// maxKeywordRunes 关键词最大长度，避免异常长串进入 LIKE 查询。
+const maxKeywordRunes = 100
+
+// keywordParam 读取搜索关键词：去首尾空白并限制长度。
+func keywordParam(c *gin.Context) string {
+	kw := strings.TrimSpace(c.Query("keyword"))
+	if runes := []rune(kw); len(runes) > maxKeywordRunes {
+		kw = string(runes[:maxKeywordRunes])
+	}
+	return kw
 }

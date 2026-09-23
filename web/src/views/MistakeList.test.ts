@@ -78,9 +78,56 @@ const mockMistakes: Mistake[] = [
   },
 ]
 
+// 模拟后端：按 keyword/subject/source 过滤、按 offset/limit 分页，并返回分面计数。
+// 分面计数只跟关键词走（不含学科/来源过滤），与后端实现保持一致。
+function mockListResponse(data: Mistake[] = mockMistakes) {
+  httpMethods.get.mockImplementation(
+    (_url: string, config?: { params?: Record<string, unknown> }) => {
+      const params = config?.params ?? {}
+      const keyword = params.keyword ? String(params.keyword).toLowerCase() : ''
+      const terms = keyword.split(/\s+/).filter(Boolean)
+
+      const sourceOf = (m: Mistake) =>
+        (m.question?.source ?? '').trim() || (m.source ?? '').trim()
+
+      const keywordMatched = data.filter((m) => {
+        if (!terms.length) return true
+        const hay = `${m.question?.subject ?? ''} ${m.question?.stem_text ?? ''} ${sourceOf(m)}`.toLowerCase()
+        return terms.every((t) => hay.includes(t))
+      })
+
+      const items = keywordMatched.filter((m) => {
+        if (params.subject && (m.question?.subject ?? '') !== params.subject) return false
+        if (params.source && sourceOf(m) !== params.source) return false
+        return true
+      })
+
+      const subjectCounts: Record<string, number> = {}
+      const sourceCounts: Record<string, number> = {}
+      for (const m of keywordMatched) {
+        const subject = m.question?.subject ?? ''
+        if (subject) subjectCounts[subject] = (subjectCounts[subject] ?? 0) + 1
+        const source = sourceOf(m)
+        if (source) sourceCounts[source] = (sourceCounts[source] ?? 0) + 1
+      }
+
+      const offset = Number(params.offset ?? 0)
+      const limit = Number(params.limit ?? 20)
+      return Promise.resolve(
+        ok({
+          items: items.slice(offset, offset + limit),
+          total: items.length,
+          subject_counts: subjectCounts,
+          source_counts: sourceCounts,
+        }),
+      )
+    },
+  )
+}
+
 beforeEach(() => {
   httpMethods.get.mockReset()
-  httpMethods.get.mockResolvedValue(ok({ items: mockMistakes, total: 3 }))
+  mockListResponse()
 })
 
 describe('MistakeList.vue', () => {
@@ -296,7 +343,7 @@ describe('MistakeList.vue 来源', () => {
   }
 
   it('卡片展示来源，并可点来源胶囊筛选', async () => {
-    httpMethods.get.mockResolvedValue(ok({ items: withSources, total: 2 }))
+    mockListResponse(withSources)
     const wrapper = mountList()
     await flushPromises()
 
@@ -312,15 +359,114 @@ describe('MistakeList.vue 来源', () => {
     expect(wrapper.text()).not.toContain('y = x² - 2x - 3')
   })
 
-  it('关键词可以搜索来源', async () => {
-    httpMethods.get.mockResolvedValue(ok({ items: withSources, total: 2 }))
+  it('关键词搜索来源：防抖后按关键词请求并过滤', async () => {
+    vi.useFakeTimers()
+    mockListResponse(withSources)
     const wrapper = mountList()
     await flushPromises()
 
     await wrapper.find('input[placeholder*="搜索"]').setValue('期中考试')
+    // 防抖未到点：只应有首次加载的 1 次请求。
+    expect(httpMethods.get).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(300)
     await flushPromises()
 
+    expect(httpMethods.get).toHaveBeenLastCalledWith('/mistakes', {
+      params: { offset: 0, limit: 20, keyword: '期中考试' },
+    })
     expect(wrapper.text()).toContain('y = x² - 2x - 3')
     expect(wrapper.text()).not.toContain('∠C=90°')
+
+    vi.useRealTimers()
+  })
+})
+
+describe('MistakeList.vue 搜索', () => {
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, { global: { plugins: [router] } })
+  }
+
+  it('关键词防抖：连续输入只发一次请求，并从第一页重新加载', async () => {
+    vi.useFakeTimers()
+    mockListResponse()
+    const wrapper = mountList()
+    await flushPromises()
+    httpMethods.get.mockClear()
+
+    const input = wrapper.find('input[placeholder*="搜索"]')
+    await input.setValue('函')
+    await input.setValue('函数')
+    await input.setValue('函数题')
+
+    // 防抖窗口内不发请求。
+    expect(httpMethods.get).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    expect(httpMethods.get).toHaveBeenCalledTimes(1)
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', {
+      params: { offset: 0, limit: 20, keyword: '函数题' },
+    })
+
+    vi.useRealTimers()
+  })
+
+  it('命中的关键词在题干中标黄，且不区分大小写', async () => {
+    vi.useFakeTimers()
+    mockListResponse([
+      {
+        ...mockMistakes[0],
+        question: { ...mockMistakes[0].question!, stem_text: '已知二次函数，Math 表示数学' },
+      },
+    ])
+    const wrapper = mountList()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="搜索"]').setValue('math')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    // 命中片段用 <mark> 包裹，原文大小写保持不变。
+    expect(wrapper.html()).toContain('<mark')
+    expect(wrapper.text()).toContain('Math')
+
+    vi.useRealTimers()
+  })
+
+  it('切换学科立即按第一页重新请求，其它学科仍可选（分面计数不受学科筛选影响）', async () => {
+    mockListResponse()
+    const wrapper = mountList()
+    await flushPromises()
+    httpMethods.get.mockClear()
+
+    const mathTab = wrapper.findAll('button').find((b) => b.text().includes('数学'))!
+    await mathTab.trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', {
+      params: { offset: 0, limit: 20, subject: '数学' },
+    })
+
+    const physicsTab = wrapper.findAll('button').find((b) => b.text().includes('物理'))!
+    expect(physicsTab.text()).toContain('1')
+  })
+
+  it('筛选后没有匹配结果时展示筛选空态文案', async () => {
+    vi.useFakeTimers()
+    mockListResponse()
+    const wrapper = mountList()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="搜索"]').setValue('不存在的关键词')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('没有匹配的错题')
+
+    vi.useRealTimers()
   })
 })

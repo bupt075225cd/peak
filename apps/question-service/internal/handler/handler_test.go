@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -199,6 +200,103 @@ func TestMistakeHandlerFlow(t *testing.T) {
 	w = doRequest(t, r, http.MethodDelete, "/api/mistakes/"+uintToString(mid), nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete mistake: expected 200, got %d", w.Code)
+	}
+}
+
+// createQuestionAndMistake 创建一道题并挂一条错题，供列表筛选测试预置数据。
+func createQuestionAndMistake(t *testing.T, r *gin.Engine, question map[string]any, mistakeSource string) {
+	t.Helper()
+
+	w := doRequest(t, r, http.MethodPost, "/api/questions", question)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create question: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data domain.Question `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode question: %v", err)
+	}
+
+	w = doRequest(t, r, http.MethodPost, "/api/mistakes", map[string]any{
+		"user_id": 1, "question_id": resp.Data.ID, "source": mistakeSource,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create mistake: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMistakeListFilters(t *testing.T) {
+	r := setupHandler(t)
+
+	// 两条数据：题目来源分别为 期中考试 / 练习册，学科与题型不同。
+	createQuestionAndMistake(t, r, map[string]any{
+		"subject": "数学", "stem_text": "已知二次函数求顶点", "question_type": "解答题",
+		"knowledge_points": `["二次函数"]`, "source": "期中考试",
+	}, "错题本")
+	createQuestionAndMistake(t, r, map[string]any{
+		"subject": "物理", "stem_text": "物体做匀速直线运动", "question_type": "填空题",
+		"knowledge_points": `["运动学"]`, "source": "练习册",
+	}, "练习册")
+
+	list := func(query string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/mistakes"+query, nil)
+		req.Header.Set("X-User-Id", "1")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %q: %d %s", query, w.Code, w.Body.String())
+		}
+		var body struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		return body.Data
+	}
+
+	all := list("")
+	if all["total"].(float64) != 2 {
+		t.Fatalf("total = %v, want 2", all["total"])
+	}
+	// 分面计数随列表返回，且来源优先取题目来源。
+	subjects, _ := all["subject_counts"].(map[string]any)
+	if subjects["数学"].(float64) != 1 || subjects["物理"].(float64) != 1 {
+		t.Fatalf("subject_counts = %v", subjects)
+	}
+	sources, _ := all["source_counts"].(map[string]any)
+	if sources["期中考试"].(float64) != 1 || sources["练习册"].(float64) != 1 {
+		t.Fatalf("source_counts = %v", sources)
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  float64
+	}{
+		{"关键词命中题型", "?keyword=" + url.QueryEscape("填空题"), 1},
+		{"关键词命中知识点", "?keyword=" + url.QueryEscape("二次函数"), 1},
+		{"忽略大小写", "?keyword=math", 0}, // 预置数据无英文，验证参数被正常解析
+		{"多关键词需全部命中", "?keyword=" + url.QueryEscape("二次函数 顶点"), 1},
+		{"多关键词任一不命中则为空", "?keyword=" + url.QueryEscape("二次函数 物理"), 0},
+		{"关键词命中学科", "?keyword=" + url.QueryEscape("数学"), 1},
+		{"学科过滤", "?subject=" + url.QueryEscape("数学"), 1},
+		{"来源过滤", "?source=" + url.QueryEscape("练习册"), 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := list(tc.query)["total"].(float64); got != tc.want {
+				t.Fatalf("query %q: total = %v, want %v", tc.query, got, tc.want)
+			}
+		})
+	}
+
+	// 分页：total 仍是符合条件的总数，items 只返回当前页。
+	paged := list("?offset=1&limit=1")
+	if paged["total"].(float64) != 2 || len(paged["items"].([]any)) != 1 {
+		t.Fatalf("paged: total = %v, items = %d", paged["total"], len(paged["items"].([]any)))
 	}
 }
 

@@ -142,22 +142,39 @@ describe('api/index.ts', () => {
     expect(res.id).toBe(7)
   })
 
-  it('listMistakes 透传分页参数并返回 items 与 total', async () => {
-    httpMethods.get.mockResolvedValueOnce(ok({ items: [{ id: 1, question_id: 2, user_id: 1 }], total: 7 }))
-    const res = await listMistakes(20, 20)
-    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', { params: { offset: 20, limit: 20 } })
+  it('listMistakes 透传分页与筛选参数，并返回分面计数', async () => {
+    httpMethods.get.mockResolvedValueOnce(
+      ok({
+        items: [{ id: 1, question_id: 2, user_id: 1 }],
+        total: 7,
+        subject_counts: { 数学: 5 },
+        source_counts: { 期中考试: 7 },
+      }),
+    )
+    const res = await listMistakes({
+      offset: 20,
+      limit: 20,
+      keyword: ' 函数 ',
+      subject: '数学',
+      source: '期中考试',
+    })
+    expect(httpMethods.get).toHaveBeenCalledWith('/mistakes', {
+      params: { offset: 20, limit: 20, keyword: '函数', subject: '数学', source: '期中考试' },
+    })
     expect(res.items).toHaveLength(1)
     expect(res.total).toBe(7)
+    expect(res.subjectCounts).toEqual({ 数学: 5 })
+    expect(res.sourceCounts).toEqual({ 期中考试: 7 })
 
-    // 缺省参数：offset=0、limit=20。
+    // 缺省参数：offset=0、limit=20；空白/空的筛选条件不发送。
     httpMethods.get.mockResolvedValueOnce(ok({ items: [], total: 0 }))
-    await listMistakes()
+    await listMistakes({ keyword: '   ', subject: '', source: '' })
     expect(httpMethods.get).toHaveBeenLastCalledWith('/mistakes', { params: { offset: 0, limit: 20 } })
 
-    // 兜底：data 为 null 时返回空列表与 0。
+    // 兜底：data 为 null 时返回空列表、0 与空分面。
     httpMethods.get.mockResolvedValueOnce({ data: { code: 0, message: 'ok', data: null } })
     const empty = await listMistakes()
-    expect(empty).toEqual({ items: [], total: 0 })
+    expect(empty).toEqual({ items: [], total: 0, subjectCounts: {}, sourceCounts: {} })
   })
 
   it('exportMistakes 以 blob 方式请求并解析服务端文件名', async () => {
