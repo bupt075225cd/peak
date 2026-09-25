@@ -314,7 +314,32 @@ export:
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+### 识别服务存储后端（local / s3）
+
+recognition-service（错题原图、重绘 SVG 等文件的存储位置）支持两种存储后端，
+由 `STORAGE_TYPE` 环境变量切换，默认 `local`：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `STORAGE_TYPE` | `local` | 存储类型：`local`（本地磁盘）/ `s3`（S3 兼容对象存储） |
+| `STORAGE_ROOT` | `./data` | local 后端根目录（STORAGE_TYPE=local 回退时使用） |
+| `S3_ENDPOINT` | `http://127.0.0.1:9000` | S3 兼容服务地址，需含协议前缀（MinIO/OSS/AWS 等） |
+| `S3_REGION` | `us-east-1` | 区域（MinIO 通常 us-east-1） |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `minioadmin` | 访问凭证；为空时回退 SDK 默认链（实例角色等） |
+| `S3_BUCKET` | `peak` | 桶名（需已存在） |
+| `S3_USE_SSL` | `false` | 是否 HTTPS |
+| `S3_PATH_STYLE` | `true` | MinIO 必须为 `true`；AWS S3/OSS 一般为 `false` |
+
+约定：
+
+- **本地调试**：不注入任何变量，默认 local（`./data`），零配置可跑。
+- **Docker 部署**：`docker-compose.prod.yml` 已内置 MinIO（自动建桶）并注入
+  `STORAGE_TYPE=s3`，凭证通过 `.env` 覆盖 `S3_ACCESS_KEY`/`S3_SECRET_KEY`。
+- **K8s 部署**：无需专用配置文件，在 Deployment 中注入上表环境变量即可切换 s3；
+  也可省略 AK/SK，通过 IRSA/工作节点角色走 SDK 默认凭证链。
+
 详细部署流程（配置注入、敏感信息管理、健康检查、回滚、前端部署）见 [`deploy/README.md`](deploy/README.md)。
+
 
 ## 测试
 

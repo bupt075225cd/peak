@@ -13,9 +13,8 @@ import (
 	httpx "peak/libs/http"
 	"peak/libs/logger"
 	"peak/libs/observability"
-	"peak/libs/storage"
-
 	"peak/apps/recognition-service/internal/handler"
+	storagefactory "peak/apps/recognition-service/internal/storage"
 	"peak/apps/recognition-service/internal/provider"
 	"peak/apps/recognition-service/internal/service"
 )
@@ -51,11 +50,12 @@ func main() {
 		panic(err)
 	}
 
-	// 初始化存储。
-	store, err := storage.NewLocalStorage(cfg.String("storage.root", "./data"))
+	// 初始化存储：local=本地磁盘（默认，本地调试）/ s3=S3 兼容对象存储（Docker/K8s 部署）。
+	store, err := storagefactory.New(cfg)
 	if err != nil {
 		panic(err)
 	}
+	appLog.Info("storage backend loaded", zap.String("type", storagefactory.Type(cfg)))
 
 	// 初始化识别 provider（可配置切换）。
 	prov, err := provider.NewFromConfig(cfg)
