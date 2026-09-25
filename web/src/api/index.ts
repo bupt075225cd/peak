@@ -172,6 +172,15 @@ export async function createMistake(payload: Record<string, unknown>): Promise<u
   return data.data
 }
 
+// 更新错题（修正错误原因、来源、重做记录等）。
+//
+// 服务端按整条记录覆盖保存，payload 需带上 user_id/question_id/recorded_at 等
+// 不可丢字段，否则会被写成零值；前端在编辑弹窗里基于原记录构造。
+export async function updateMistake(id: number, payload: Record<string, unknown>): Promise<Mistake> {
+  const { data } = await http.put<ApiResponse<Mistake>>(`/mistakes/${id}`, payload)
+  return data.data as Mistake
+}
+
 // 错题列表查询参数：分页 + 服务端筛选。
 export interface MistakeListParams {
   offset?: number

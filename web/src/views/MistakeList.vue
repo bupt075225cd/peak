@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, h, type FunctionalComponent } from 'vue'
-import { BookOpen, Plus, Search, Loader2, Download } from 'lucide-vue-next'
+import { BookOpen, Plus, Search, Loader2, Download, Pencil } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import {
   listMistakes, exportMistakes,
   type Mistake, type ExportFormat, type QuestionImageRef,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
+import MistakeEditDialog from '../components/MistakeEditDialog.vue'
 
 const router = useRouter()
 const keyword = ref('')
@@ -220,6 +221,25 @@ function openViewer(url: string) {
 }
 function closeViewer() {
   viewerOpen.value = false
+}
+
+// 编辑弹窗状态：点击卡片「编辑」按钮打开，保存后原地更新列表条目。
+const editOpen = ref(false)
+const editingMistake = ref<Mistake | null>(null)
+function openEdit(item: Mistake) {
+  editingMistake.value = item
+  editOpen.value = true
+}
+function closeEdit() {
+  editOpen.value = false
+  editingMistake.value = null
+}
+
+// 保存成功后合并回列表：保留 question 等未在编辑表单中的字段，
+// 避免用后端返回值直接替换而丢掉关联题目。
+function onMistakeSaved(updated: Mistake) {
+  items.value = items.value.map((m) => (m.id === updated.id ? { ...m, ...updated } : m))
+  closeEdit()
 }
 
 // ---- 导出 ----
@@ -538,6 +558,15 @@ async function resolveExportError(err: unknown): Promise<string> {
                     </figure>
                   </div>
                 </div>
+                <!-- 编辑：修正错误原因/来源、维护重做记录 -->
+                <button
+                  type="button"
+                  class="shrink-0 inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-ink-soft hover:border-primary-light hover:bg-surface-tint hover:text-primary transition-colors"
+                  :aria-label="`编辑第 ${item.id} 道错题`"
+                  @click="openEdit(item)"
+                >
+                  <Pencil class="w-3.5 h-3.5" /> 编辑
+                </button>
               </div>
             </div>
           </div>
@@ -560,5 +589,13 @@ async function resolveExportError(err: unknown): Promise<string> {
 
     <!-- 题目配图放大查看器 -->
     <ImageViewer :src="viewerSrc" :open="viewerOpen" @close="closeViewer" />
+
+    <!-- 错题编辑弹窗 -->
+    <MistakeEditDialog
+      :open="editOpen"
+      :mistake="editingMistake"
+      @close="closeEdit"
+      @saved="onMistakeSaved"
+    />
   </div>
 </template>

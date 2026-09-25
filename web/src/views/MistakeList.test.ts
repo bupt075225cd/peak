@@ -5,7 +5,7 @@ import MistakeList from './MistakeList.vue'
 import type { ApiResponse, Mistake } from '../api'
 
 const { httpMethods } = vi.hoisted(() => ({
-  httpMethods: { post: vi.fn(), get: vi.fn() },
+  httpMethods: { post: vi.fn(), get: vi.fn(), put: vi.fn() },
 }))
 
 vi.mock('axios', () => ({
@@ -509,5 +509,135 @@ describe('MistakeList.vue 配图', () => {
     expect(html).toContain('/api/recognition/files/geometry/task_1.svg')
     expect(html).toContain('/api/recognition/files/geometry/task_1_2.svg')
     expect(html).toContain('/api/recognition/files/geometry/task_2.svg')
+  })
+})
+
+describe('MistakeList.vue 编辑错题', () => {
+  beforeEach(() => {
+    httpMethods.put.mockReset()
+  })
+
+  // 弹窗用 Teleport 渲染到 body，stub 掉后可在组件树内查询。
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, {
+      global: { plugins: [router], stubs: { teleport: true } },
+    })
+  }
+
+  function buttonByText(wrapper: ReturnType<typeof mountList>, text: string) {
+    const btn = wrapper.findAll('button').find((b) => b.text().includes(text))
+    expect(btn, `button containing ${text}`).toBeDefined()
+    return btn!
+  }
+
+  const inputValue = (el: Element) => (el as HTMLInputElement | HTMLTextAreaElement).value
+
+  it('点击卡片「编辑」打开弹窗，并预填已有错误原因与重做记录', async () => {
+    mockListResponse([
+      {
+        ...mockMistakes[0],
+        wrong_reason: '计算失误',
+        source: '期中考试',
+        review_records: [{ reviewed_at: '2026-09-10T00:00:00Z', result: '已订正' }],
+      },
+    ])
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '编辑').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('编辑错题')
+    expect(inputValue(wrapper.find('[data-testid="edit-wrong-reason"]').element)).toBe('计算失误')
+    expect(inputValue(wrapper.find('[data-testid="edit-source-input"]').element)).toBe('期中考试')
+    // 已有重做记录按 yyyy-MM-dd 回填到日期输入框。
+    expect(inputValue(wrapper.find('input[type="date"]').element)).toBe('2026-09-10')
+    // 结果改为下拉选项；历史自由文本不在预设选项内时仍作为额外选项回显，不丢数据。
+    const resultSelect = wrapper.find('[aria-label="第 1 条重做结果"]')
+    expect((resultSelect.element as HTMLSelectElement).value).toBe('已订正')
+    expect(resultSelect.findAll('option').map((o) => o.text())).toEqual([
+      '请选择结果',
+      '已订正',
+      '正确',
+      '部分正确',
+      '错误',
+    ])
+  })
+
+  it('新增重做记录并保存：提交完整字段给 PUT，保存后列表原地更新', async () => {
+    httpMethods.put.mockResolvedValueOnce(
+      ok({
+        ...mockMistakes[0],
+        wrong_reason: '概念不清',
+        source: '期中考试',
+        review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误' }],
+      }),
+    )
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '编辑').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="edit-wrong-reason"]').setValue('概念不清')
+    await wrapper.find('[data-testid="edit-source-input"]').setValue('期中考试')
+
+    await buttonByText(wrapper, '添加记录').trigger('click')
+    await flushPromises()
+    await wrapper.find('input[type="date"]').setValue('2026-09-20')
+    await wrapper.find('[aria-label="第 1 条重做结果"]').setValue('错误')
+
+    await buttonByText(wrapper, '保存').trigger('click')
+    await flushPromises()
+
+    // 服务端整条覆盖保存，必须带上不可丢字段。
+    expect(httpMethods.put).toHaveBeenCalledWith('/mistakes/1', {
+      user_id: 1,
+      question_id: 10,
+      wrong_reason: '概念不清',
+      source: '期中考试',
+      review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误' }],
+      recorded_at: '2026-08-10T00:00:00Z',
+    })
+    // 弹窗关闭，列表条目用新来源原地更新。
+    expect(wrapper.text()).not.toContain('编辑错题')
+    expect(wrapper.text()).toContain('来源：期中考试')
+  })
+
+  it('取消编辑不提交更新', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '编辑').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="edit-wrong-reason"]').setValue('不该保存')
+
+    await buttonByText(wrapper, '取消').trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.put).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('编辑错题')
+  })
+
+  it('新增重做记录未选择结果时提示且不提交', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    await buttonByText(wrapper, '编辑').trigger('click')
+    await flushPromises()
+
+    // 来源必填，先补上以启用「保存」按钮。
+    await wrapper.find('[data-testid="edit-source-input"]').setValue('期中考试')
+    await buttonByText(wrapper, '添加记录').trigger('click')
+    await flushPromises()
+
+    await buttonByText(wrapper, '保存').trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.put).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请选择每次重做的结果')
   })
 })
