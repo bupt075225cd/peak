@@ -239,3 +239,46 @@ func TestItemMetaLineSkipsEmptyFields(t *testing.T) {
 		t.Fatalf("meta line = %q", got)
 	}
 }
+
+func TestDocxGroupFigureRows(t *testing.T) {
+	figs := []docxFigure{{cx: 400}, {cx: 400}, {cx: 400}}
+	// 400+gap+400 = 900 <= 1000，前两张并排；第三张换行。
+	rows := docxGroupFigureRows(figs, 1000, 100)
+	if len(rows) != 2 || len(rows[0]) != 2 || len(rows[1]) != 1 {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+	// 超宽配图独占一行。
+	rows = docxGroupFigureRows([]docxFigure{{cx: 2000}}, 1000, 100)
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		t.Fatalf("oversized figure should occupy its own row: %+v", rows)
+	}
+}
+
+func TestBuildDocxFiguresShareRowInTable(t *testing.T) {
+	items := []renderItem{{
+		item: ExportItem{StemText: "多图题"},
+		images: []ImageAsset{
+			{Data: encodePNG(t, 10, 10), Format: "png", Width: 10, Height: 10, Caption: "图1"},
+			{Data: encodePNG(t, 10, 10), Format: "png", Width: 10, Height: 10, Caption: "图2"},
+		},
+	}}
+
+	data, err := buildDocx("t", items)
+	if err != nil {
+		t.Fatalf("buildDocx: %v", err)
+	}
+	doc := string(docxFiles(t, data)["word/document.xml"])
+	if n := strings.Count(doc, "<w:tbl>"); n != 1 {
+		t.Fatalf("expected 1 figure table, got %d", n)
+	}
+	if n := strings.Count(doc, "<w:tc>"); n != 2 {
+		t.Fatalf("expected 2 cells, got %d", n)
+	}
+	if !strings.Contains(doc, "图1") || !strings.Contains(doc, "图2") {
+		t.Fatal("captions missing in figure table")
+	}
+	// 两张图的 drawing 都应位于表格内（表格在 drawing 之前只出现一次开头）。
+	if strings.Count(doc, "<w:drawing>") != 2 {
+		t.Fatal("expected 2 drawings")
+	}
+}

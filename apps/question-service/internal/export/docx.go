@@ -66,6 +66,9 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 			body.WriteString(docxParagraph(stem, ""))
 		}
 
+		// 先收集全部配图资源，再按宽度分行排版（与 PDF 的 groupImageRows 语义一致：
+		// 一行放得下就并排、放不下换行、超宽独占一行），使 Word 与 PDF 版式统一。
+		var figs []docxFigure
 		for _, img := range it.images {
 			imageSeq++
 			docPrSeq++
@@ -84,9 +87,32 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 			media = append(media, mediaFile{path: "word/media/" + name, data: img.Data})
 
 			cx, cy := docxImageSize(img)
-			body.WriteString(docxImageParagraph(docxImageRun(relID, docPrSeq, name, cx, cy)))
-			// 图号单独成段排在配图正下方（AI 重绘会丢失原图的"图1/图2"标注）。
-			body.WriteString(docxCaptionParagraph(img.Caption))
+			figs = append(figs, docxFigure{
+				run:     docxImageRun(relID, docPrSeq, name, cx, cy),
+				caption: img.Caption,
+				cx:      cx,
+			})
+		}
+		prevWasTable := false
+		for _, row := range docxGroupFigureRows(figs, docxContentWidthEMU, docxFigureGapEMU) {
+			if len(row) == 1 {
+				// 单图行保持原段落排版：图独占一段，图号紧跟其下。
+				body.WriteString(docxImageParagraph(row[0].run))
+				body.WriteString(docxCaptionParagraph(row[0].caption))
+				prevWasTable = false
+				continue
+			}
+			// 多图并排用无边框表格：每格一图一图号，单元格底对齐。
+			// 连续两个表格会被 Word 视为同一张表合并，插入极窄空段隔开。
+			if prevWasTable {
+				body.WriteString(`<w:p><w:pPr><w:spacing w:before="0" w:after="0" ` +
+					`w:line="14" w:lineRule="exact"/></w:pPr></w:p>`)
+			}
+			body.WriteString(docxFigureRowTable(row))
+			prevWasTable = true
+		}
+		if prevWasTable {
+			body.WriteString(`<w:p><w:pPr><w:spacing w:before="0" w:after="60"/></w:pPr></w:p>`)
 		}
 	}
 
@@ -151,6 +177,7 @@ func writeZipEntry(zw *zip.Writer, name string, data []byte) error {
 }
 
 // docxParagraph 生成文本段落，style 为空时不带段落样式。
+// 文本中的 \n 转为 Word 换行 <w:br/>（单行 <w:t> 里的换行会被 Word 显示为空格）。
 func docxParagraph(text, style string) string {
 	text = sanitizeXMLText(text)
 	if text == "" {
@@ -160,8 +187,75 @@ func docxParagraph(text, style string) string {
 	if style != "" {
 		pPr = `<w:pPr><w:pStyle w:val="` + style + `"/></w:pPr>`
 	}
-	return `<w:p>` + pPr + `<w:r><w:t xml:space="preserve">` +
-		escapeXMLText(text) + `</w:t></w:r></w:p>`
+	var runs strings.Builder
+	for i, ln := range strings.Split(text, "\n") {
+		if i > 0 {
+			runs.WriteString(`<w:br/>`)
+		}
+		runs.WriteString(`<w:t xml:space="preserve">` + escapeXMLText(ln) + `</w:t>`)
+	}
+	return `<w:p>` + pPr + `<w:r>` + runs.String() + `</w:r></w:p>`
+}
+
+// docxFigureGapEMU 并排配图之间的间距（约 3.2mm）。
+const docxFigureGapEMU = 114300
+
+// docxFigure 一张待排版配图及其图号标注。
+type docxFigure struct {
+	run     string // docxImageRun 生成的内嵌图片 run
+	caption string // 图号（如"图1"），可为空
+	cx      int    // 图片宽度（EMU）
+}
+
+// docxGroupFigureRows 把配图按可用宽度分行：一行放得下就并排（含间距），
+// 放不下换行，超宽独占一行。与 PDF 渲染的 groupImageRows 语义一致，
+// 保证 Word 与 PDF 的多图版式统一。
+func docxGroupFigureRows(figs []docxFigure, contentWidth, gap int) [][]docxFigure {
+	rows := [][]docxFigure{}
+	var cur []docxFigure
+	width := 0
+	for _, f := range figs {
+		if len(cur) > 0 && width+gap+f.cx > contentWidth {
+			rows = append(rows, cur)
+			cur = nil
+			width = 0
+		}
+		if len(cur) > 0 {
+			width += gap
+		}
+		cur = append(cur, f)
+		width += f.cx
+	}
+	if len(cur) > 0 {
+		rows = append(rows, cur)
+	}
+	return rows
+}
+
+// docxFigureRowTable 把同一行的多张配图排进一张无边框表格：
+// 每格一图一图号（均居中），单元格底对齐使配图底边一致，图号落在各自图下方。
+func docxFigureRowTable(row []docxFigure) string {
+	var grid, cells strings.Builder
+	for _, f := range row {
+		wTwips := f.cx / emuPerTwip
+		grid.WriteString(fmt.Sprintf(`<w:gridCol w:w="%d"/>`, wTwips))
+		cells.WriteString(`<w:tc><w:tcPr>` +
+			fmt.Sprintf(`<w:tcW w:w="%d" w:type="dxa"/>`, wTwips) +
+			`<w:vAlign w:val="bottom"/></w:tcPr>` +
+			docxImageParagraph(f.run) + docxCaptionParagraph(f.caption) +
+			`</w:tc>`)
+	}
+	return `<w:tbl><w:tblPr>` +
+		`<w:tblW w:w="0" w:type="auto"/><w:jc w:val="center"/>` +
+		`<w:tblBorders>` +
+		`<w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/>` +
+		`<w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/>` +
+		`<w:insideH w:val="none" w:sz="0" w:space="0"/><w:insideV w:val="none" w:sz="0" w:space="0"/>` +
+		`</w:tblBorders>` +
+		`<w:tblCellMar><w:left w:w="57" w:type="dxa"/><w:right w:w="57" w:type="dxa"/></w:tblCellMar>` +
+		`</w:tblPr>` +
+		`<w:tblGrid>` + grid.String() + `</w:tblGrid>` +
+		`<w:tr>` + cells.String() + `</w:tr></w:tbl>`
 }
 
 // docxImageParagraph 生成配图段落：整段水平居中并留出适度上下间距。
