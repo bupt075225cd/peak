@@ -1,7 +1,7 @@
 # 构建阶段：Go workspace 多模块，需在仓库根目录构建
 FROM golang:1.24-alpine AS builder
 
-ENV GOPROXY=https://goproxy.cn,direct \
+ENV GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct \
     GOSUMDB=off \
     GOTOOLCHAIN=local \
     CGO_ENABLED=0

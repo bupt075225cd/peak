@@ -2,7 +2,7 @@
 FROM golang:1.24-alpine AS builder
 
 # 国内镜像加速
-ENV GOPROXY=https://goproxy.cn,direct \
+ENV GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct \
     GOSUMDB=off \
     GOTOOLCHAIN=local \
     CGO_ENABLED=0
