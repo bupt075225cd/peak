@@ -335,9 +335,10 @@ function selectQuestion(idx: number) {
               </button>
             </div>
           </div>
-          <div v-else class="relative">
+          <div v-else class="relative group">
             <img :src="previewUrl" class="w-full h-72 object-cover" alt="试卷预览" />
-            <div class="absolute inset-0 bg-black/20 flex items-center justify-center">
+            <!-- 悬停才浮现"重新选择"，避免常驻遮罩挡住题目内容 -->
+            <div class="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
               <button
                 type="button"
                 class="inline-flex items-center gap-2 rounded-xl bg-white/90 text-ink px-4 py-2 text-sm font-medium hover:bg-white transition-colors"
