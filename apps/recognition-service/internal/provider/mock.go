@@ -49,7 +49,7 @@ func (m *MockProvider) RecognizeGeometry(_ context.Context, image []byte) (*Geom
 }
 
 // mockGeometrySpec 无外部依赖的完整坐标直出 spec（直角三角形 + 圆），
-// 覆盖 segments/polygons/circles/arcs/right_angles/angle_marks/ticks/parallels/labels
+// 覆盖 segments/polygons/circles/arcs/right_angles/ticks/parallels/labels
 // 全部图元，配合内置 Go 渲染器可端到端跑通"提取 → 校验 → SVG 渲染"链路。
 const mockGeometrySpec = `{
   "title": "mock 几何重绘",
@@ -71,7 +71,6 @@ const mockGeometrySpec = `{
   "circles": [{"center": "O", "through": "A"}],
   "arcs": [{"center": "C", "radius": 10, "start_angle": 200, "end_angle": 340}],
   "right_angles": [{"vertex": "C", "a": "A", "b": "B"}],
-  "angle_marks": [{"vertex": "A", "a": "B", "b": "C", "count": 1}],
   "ticks": [{"from": "A", "to": "C", "count": 1}],
   "parallels": [{"from": "A", "to": "B", "count": 1}],
   "labels": [{"x": 50, "y": 74, "text": "AB=AC", "anchor": "middle"}]

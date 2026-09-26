@@ -34,6 +34,7 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 - arcs：圆弧，radius 必填；角度单位为度，0° 指向 x 轴正方向，角度增大方向与 y 轴正向一致。
 - right_angles：直角标记，vertex 为直角顶点，a/b 为两条边上的点。
 - angle_marks：角的弧线标记，vertex/a/b 为角的顶点与两条边上的点，count 为弧线条数（1~3），不要填 label。
+  忠实原图：仅当原图中确实画有角的弧线标记时才输出；原图没有弧线标记就不要输出，不要臆造。
 - ticks / parallels：等长、平行标记，from/to 为线段两端点，count 为标记数量（1~3）。
 - labels：自由文本标注（边长、代数式、结论等），x/y 为落点，anchor 取 start|middle|end。
 
@@ -45,7 +46,7 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 3. segments/polygons/circles/arcs/right_angles/angle_marks/ticks/parallels 引用的每个点
    都必须在该张图的 points 中出现。
 4. 图上不标注任何角度文字：不写度数、不写角名、不写 ∠ 表达式；
-   角一律用 angle_marks 的弧线表示（不要填 label），直角用 right_angles 表示。
+   角的弧线标记（angle_marks）只在原图确实画有时才如实输出，直角用 right_angles 表示。
    题干里的度数照常保留在题干中，只是不要画到图上。
 5. labels 只用于边长、代数式、结论等非角度文字（如 "AD=2BD"），坐标要放在空白处；
    角平分线、中线、垂直平分线等不要用 ticks 表示。
@@ -80,6 +81,47 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 		return "", err
 	}
 	return extractJSON(out)
+}
+
+// angleMarkVerifySystemPrompt 角弧线标记核对的系统提示词：让 VLM 对原图逐子图
+// 二次确认是否真的画有角的弧线标记，抑制提取阶段的臆造输出。
+const angleMarkVerifySystemPrompt = `你是几何图核对助手。仔细观察这张几何题图片（可能含多个子图），` +
+	`对列出的每个子图分别判断：原图中该子图的顶点处是否真的画有角的弧线标记（小弧线/扇形描边，不含直角方块）。` +
+	`判断标准：只有原图中真实画出的弧线才记为 true；没有画出、或你不确定，一律记为 false。` +
+	`只输出一个 JSON 对象，格式：{"panels":[{"title":"图1","has_angle_marks":false},...]}，` +
+	`panels 必须覆盖给出的全部子图标题。`
+
+// VerifyAngleMarks 对提取出 angle_marks 的子图做原图二次核对，返回 标题→是否确有标记。
+func (v *vlmCapabilities) VerifyAngleMarks(ctx context.Context, geoImage []byte, titles []string) (map[string]bool, error) {
+	var sb strings.Builder
+	sb.WriteString("请逐个核对以下子图的原图中是否画有角的弧线标记：\n")
+	for _, t := range titles {
+		sb.WriteString("- " + t + "\n")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	out, err := v.dash.chatSystem(ctx, angleMarkVerifySystemPrompt, sb.String(), geoImage)
+	if err != nil {
+		return nil, err
+	}
+	jsonPart, err := extractJSON(out)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Panels []struct {
+			Title         string `json:"title"`
+			HasAngleMarks bool   `json:"has_angle_marks"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
+		return nil, fmt.Errorf("parse verify json: %w", err)
+	}
+	verdicts := make(map[string]bool, len(titles))
+	for _, p := range parsed.Panels {
+		verdicts[strings.TrimSpace(p.Title)] = p.HasAngleMarks
+	}
+	return verdicts, nil
 }
 
 // extractJSON 从模型输出中提取 JSON 文本（容忍 ```json 包裹、前后噪声）。

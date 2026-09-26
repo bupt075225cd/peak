@@ -54,3 +54,11 @@ type GeometryRedrawProvider interface {
 type GeometrySpecExtractor interface {
 	ExtractGeometrySpec(ctx context.Context, geoImage []byte, stemText, correction string) (string, error)
 }
+
+// AngleMarkVerifier 原图角弧线标记核对能力（可选实现）。
+// 角弧线要求"忠实原图"：VLM 提取 spec 时可能臆造 angle_marks，因此对声称
+// 含角标记的子图，用同一次输入的原图让 VLM 逐子图二次核对；未确认的一律剔除。
+// 返回 map：子图标题（如"图1"）→ 原图中是否确实画有角的弧线标记。
+type AngleMarkVerifier interface {
+	VerifyAngleMarks(ctx context.Context, geoImage []byte, titles []string) (map[string]bool, error)
+}

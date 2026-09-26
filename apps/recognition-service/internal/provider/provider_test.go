@@ -623,3 +623,12 @@ func TestParseOcrGeoWithColonAndEmpty(t *testing.T) {
 		t.Fatalf("unexpected geo: %q", geo)
 	}
 }
+
+
+func TestNormalizeTranscript(t *testing.T) {
+	in := "  第一行 \r\n\r\n第二行　\r\n"
+	want := "第一行\n第二行"
+	if got := normalizeTranscript(in); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

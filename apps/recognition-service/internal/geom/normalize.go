@@ -110,6 +110,8 @@ func (s *Spec) Normalize() {
 	}
 	s.RightAngles = rightAngles
 
+	// 角的弧线标记忠实原图：保留引用合法的标记（提示词要求"原图没有就不要输出"），
+	// 引用未定义点的仍按结构问题上报，走回喂修正。
 	angleMarks := s.AngleMarks[:0]
 	for _, am := range s.AngleMarks {
 		if exists(am.Vertex) && exists(am.A) && exists(am.B) &&

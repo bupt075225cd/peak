@@ -395,6 +395,8 @@ func drawStructured(s *Spec) string {
 	}
 
 	// 8) 角标记（只画弧线，不写度数/角名）。
+	// 忠实原图：仅当 VLM 判定原图确实画有弧线标记时 spec 才会含 AngleMarks
+	// （提示词明确"原图没有就不要输出"），渲染器按 spec 如实绘制。
 	for _, am := range s.AngleMarks {
 		v, okV := at(am.Vertex)
 		pa, okA := at(am.A)
