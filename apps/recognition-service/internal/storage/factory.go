@@ -45,15 +45,16 @@ func Type(cfg *config.Loader) string {
 // s3ConfigFrom 将 storage.s3.* 配置映射为 S3 存储参数（独立函数便于单测断言）。
 func s3ConfigFrom(cfg *config.Loader) libsstorage.Config {
 	return libsstorage.Config{
-		// 服务地址需含协议前缀，如 http://minio:9000、https://oss-cn-hangzhou.aliyuncs.com。
-		Endpoint: cfg.String("storage.s3.endpoint", "http://127.0.0.1:9000"),
+		// 第三方 S3 兼容服务地址（阿里云 OSS / AWS S3 / Ceph 等），需含协议前缀。
+		// 为空时由 NewS3Storage 返回明确错误提示。
+		Endpoint: cfg.String("storage.s3.endpoint", ""),
 		Region:   cfg.String("storage.s3.region", "us-east-1"),
 		// 凭证为空时回退 SDK 默认链（环境变量/实例角色，适合 K8s IRSA 等场景）。
 		AccessKey: cfg.String("storage.s3.access_key", ""),
 		SecretKey: cfg.String("storage.s3.secret_key", ""),
 		Bucket:    cfg.String("storage.s3.bucket", "peak"),
 		UseSSL:    cfg.Bool("storage.s3.use_ssl", false),
-		// 默认 true 适配 MinIO；AWS S3/OSS 部署时显式置为 false。
-		PathStyle: cfg.Bool("storage.s3.path_style", true),
+		// AWS S3/OSS 走虚拟主机风格；Ceph/MinIO 等自建服务部署时显式置 true。
+		PathStyle: cfg.Bool("storage.s3.path_style", false),
 	}
 }

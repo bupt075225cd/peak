@@ -323,20 +323,19 @@ recognition-service（错题原图、重绘 SVG 等文件的存储位置）支�
 | --- | --- | --- |
 | `STORAGE_TYPE` | `local` | 存储类型：`local`（本地磁盘）/ `s3`（S3 兼容对象存储） |
 | `STORAGE_ROOT` | `./data` | local 后端根目录（STORAGE_TYPE=local 回退时使用） |
-| `S3_ENDPOINT` | `http://127.0.0.1:9000` | S3 兼容服务地址，需含协议前缀（MinIO/OSS/AWS 等） |
-| `S3_REGION` | `us-east-1` | 区域（MinIO 通常 us-east-1） |
-| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `minioadmin` | 访问凭证；为空时回退 SDK 默认链（实例角色等） |
-| `S3_BUCKET` | `peak` | 桶名（需已存在） |
-| `S3_USE_SSL` | `false` | 是否 HTTPS |
-| `S3_PATH_STYLE` | `true` | MinIO 必须为 `true`；AWS S3/OSS 一般为 `false` |
+| `S3_ENDPOINT` | —（s3 时必填） | 第三方 S3 兼容服务地址，需含协议前缀（阿里云 OSS / AWS S3 / Ceph 等） |
+| `S3_REGION` | `us-east-1` | 区域（OSS 用实际区域，如 cn-hangzhou） |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | —（s3 时必填） | 访问凭证；为空时回退 SDK 默认链（实例角色等） |
+| `S3_BUCKET` | `peak` | 桶名（需已在第三方服务上创建） |
+| `S3_USE_SSL` | `false` | 是否 HTTPS（endpoint 已含协议前缀时可省略） |
+| `S3_PATH_STYLE` | `false` | AWS S3/OSS 用虚拟主机风格；Ceph/MinIO 等自建服务置 `true` |
 
 约定：
 
 - **本地调试**：不注入任何变量，默认 local（`./data`），零配置可跑。
-- **Docker 部署**：`docker-compose.prod.yml` 已内置 MinIO（自动建桶）并注入
-  `STORAGE_TYPE=s3`，凭证通过 `.env` 覆盖 `S3_ACCESS_KEY`/`S3_SECRET_KEY`。
-- **K8s 部署**：无需专用配置文件，在 Deployment 中注入上表环境变量即可切换 s3；
-  也可省略 AK/SK，通过 IRSA/工作节点角色走 SDK 默认凭证链。
+- **Docker/K8s 部署**：使用**外部第三方 S3 兼容对象存储**（不在编排内自建 MinIO），
+  通过 `.env` 或部署环境注入 `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`；
+  生产编排缺少必填变量会在启动前直接报错，避免误用本地盘。
 
 详细部署流程（配置注入、敏感信息管理、健康检查、回滚、前端部署）见 [`deploy/README.md`](deploy/README.md)。
 

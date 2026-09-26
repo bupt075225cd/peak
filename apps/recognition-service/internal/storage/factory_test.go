@@ -98,17 +98,17 @@ func TestS3ConfigFrom(t *testing.T) {
 }
 
 func TestS3ConfigFromDefaults(t *testing.T) {
-	// 未配置 s3 子段时的兜底默认值（适配 MinIO）。
+	// 未配置 s3 子段时的兜底默认值：endpoint/凭证需显式提供，虚拟主机寻址。
 	cfg := loadConfig(t, "storage:\n  type: s3\n")
 	got := s3ConfigFrom(cfg)
-	if got.Endpoint != "http://127.0.0.1:9000" {
-		t.Fatalf("Endpoint = %q", got.Endpoint)
+	if got.Endpoint != "" {
+		t.Fatalf("Endpoint = %q, want empty", got.Endpoint)
 	}
 	if got.Bucket != "peak" {
 		t.Fatalf("Bucket = %q", got.Bucket)
 	}
-	if !got.PathStyle {
-		t.Fatal("PathStyle default should be true (MinIO)")
+	if got.PathStyle {
+		t.Fatal("PathStyle default should be false (AWS S3/OSS virtual-host style)")
 	}
 	if got.UseSSL {
 		t.Fatal("UseSSL default should be false")
