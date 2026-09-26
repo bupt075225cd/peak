@@ -25,11 +25,11 @@ import (
 // 图片上传：单题结构（StemText 等字段）。
 // 文档上传：多题结构（Questions 数组）。
 type RecognitionResult struct {
-	StemText       string                  `json:"stem_text"`
-	Answer         string                  `json:"answer"`
-	Subject        string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
-	QuestionType   string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
-	Geometry       provider.GeometryResult `json:"geometry"`
+	StemText     string                  `json:"stem_text"`
+	Answer       string                  `json:"answer"`
+	Subject      string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
+	Geometry     provider.GeometryResult `json:"geometry"`
 	// RedrawFigures 几何重绘输出的子图列表：key 为独立 SVG 的存储 key，
 	// label 为该子图在题干中的图号（如"图1"）。一张原图含多个几何子图时逐个填充
 	// （配置了 geometry sidecar 才填充）。
@@ -219,6 +219,7 @@ func (s *Service) process(taskID uint64, storageKey string) {
 //   - 合并原 OCR + 学科/题型分类两次调用为一次 ParseQuestion；
 //   - 几何识别与整题解析并行发起，重叠耗时；
 //   - 每个阶段实时更新 progress_text 并记录耗时日志（便于定位慢点）。
+//
 // 几何重绘直接用原始图片（不再裁剪子图）：数学题且图中含几何图形时，
 // 把题干文本交给 VLM 坐标直出各子图的几何描述，内置渲染器每个子图渲染一张独立 SVG。
 func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey string) (*RecognitionResult, error) {
@@ -360,11 +361,33 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			s.log.Warn("geometry spec extract failed", zap.Int("attempt", attempt), zap.String("error", eerr.Error()))
 			continue
 		}
-		panels, lastErr = geom.RenderPanels(spec)
-		if lastErr != nil {
-			s.log.Warn("geometry render failed", zap.Int("attempt", attempt),
-				zap.String("error", lastErr.Error()), zap.String("spec", truncate(spec, 512)))
-			correction = fmt.Sprintf("上一轮输出的 JSON 无法解析或渲染（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", lastErr)
+		parsed, perr := geom.ParsePanels(spec)
+		if perr != nil {
+			lastErr = perr
+			s.log.Warn("geometry parse failed", zap.Int("attempt", attempt),
+				zap.String("error", perr.Error()), zap.String("spec", truncate(spec, 512)))
+			correction = fmt.Sprintf("上一轮输出的 JSON 无法解析（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", perr)
+			continue
+		}
+		s.verifyAngleMarks(ctx, taskID, extractImage, parsed)
+
+		panels = panels[:0]
+		renderFailed := false
+		for i := range parsed {
+			svg, rerr := geom.Render(&parsed[i].Spec)
+			if rerr != nil {
+				lastErr = rerr
+				s.log.Warn("geometry render failed", zap.Int("attempt", attempt),
+					zap.String("error", rerr.Error()), zap.String("spec", truncate(spec, 512)))
+				correction = fmt.Sprintf("上一轮输出的 JSON 无法渲染（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", rerr)
+				renderFailed = true
+				break
+			}
+			panels = append(panels, geom.PanelResult{
+				Title: parsed[i].Title, SVG: svg, Issues: parsed[i].Issues,
+			})
+		}
+		if renderFailed {
 			continue
 		}
 		// 结构校验（点引用完整性、坐标有限性、图元字段完备性等）替代原残差判据。
@@ -406,6 +429,44 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	s.log.Info("geometry redraw done", zap.Uint64("task_id", taskID),
 		zap.Int("svg_count", len(figures)), zap.Int("attempts", attempts), zap.Bool("consistent", consistent))
 	return nil
+}
+
+// verifyAngleMarks 原图核对角弧线标记（忠实原图）。
+// VLM 提取 spec 时可能臆造 angle_marks（原图没画也输出），对声称含标记的子图
+// 用 VLM 对原图二次确认；未确认的子图剔除标记后再渲染。
+// 核对调用失败时保守保留提取结果（fail-open），避免网络抖动导致标记闪烁。
+func (s *Service) verifyAngleMarks(ctx context.Context, taskID uint64, geoImage []byte, parsed []geom.Panel) {
+	verifier, ok := s.prov.(provider.AngleMarkVerifier)
+	if !ok {
+		return
+	}
+	titles := make([]string, 0, len(parsed))
+	claimed := make(map[string]bool, len(parsed))
+	for i := range parsed {
+		titles = append(titles, parsed[i].Title)
+		if len(parsed[i].Spec.AngleMarks) > 0 {
+			claimed[parsed[i].Title] = true
+		}
+	}
+	if len(claimed) == 0 {
+		return
+	}
+	verdicts, err := verifier.VerifyAngleMarks(ctx, geoImage, titles)
+	if err != nil {
+		s.log.Warn("angle mark verify failed, keep as extracted",
+			zap.Uint64("task_id", taskID), zap.String("error", err.Error()))
+		return
+	}
+	for i := range parsed {
+		if !claimed[parsed[i].Title] {
+			continue
+		}
+		if !verdicts[parsed[i].Title] {
+			parsed[i].Spec.AngleMarks = nil
+			s.log.Info("angle marks dropped by original-image check",
+				zap.Uint64("task_id", taskID), zap.String("panel", parsed[i].Title))
+		}
+	}
 }
 
 // truncate 截断字符串用于日志。
@@ -558,4 +619,3 @@ func detectSubject(stem string) string {
 // classifyQuestion 判断题目学科与题型：优先调用识别模型，失败时降级为规则判断。
 // fillClassify 学科/题型降级规则：模型整题解析未给出时按题干文本启发式判断。
 // （合并进单次 ParseQuestion 后不再单独调 VLM 做分类。）
-
