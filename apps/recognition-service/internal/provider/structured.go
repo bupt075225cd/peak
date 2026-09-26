@@ -57,6 +57,7 @@ const structuredPrompt = `你是数学试卷结构化解析器。请将下面的
 2. 文档开头的标题、副标题（如“相交线与平行线（角度计算与证明）”“七下第3周周中练习·18题”等）不是题目，不要单独输出为一道题；若它紧邻某道题，可作为该题的说明前缀并入题干。
 3. 形如 "18."、"第18题" 的编号属于题号，题号本身与题干正文合并输出。
 4. 每道题包含：题干 stem_text（完整正文，包含所有子问的原始文字）、学科 subject、题型 question_type、子问列表 sub_questions（每个子问含 label、text、geometry_desc、geometry_refs）。
+   stem_text 与子问 text 保留原图/文档的换行版式：原图/文档中哪里换行，文本就在哪里换行（JSON 字符串中用 \n 表示）；不要把多行合并为一段，也不要增加原本没有的换行。
 5. subject 从以下选项中选择：数学、语文、英语、物理、化学；question_type 从以下选项中选择：选择题、填空题、解答题。
 6. geometry_refs 是整数数组，表示该子问关联的图片序号（对应文档中的 [图N]，从 1 开始）。若子问无关联图片，则为空数组 []。例如子问提到“如图2”，且该图是文档中的第 2 张图，则 geometry_refs 为 [2]。
 7. 仅输出如下 JSON 数组，不要输出任何解释或 Markdown 代码块：
@@ -184,7 +185,44 @@ func parseStructured(out string) ([]StructuredItem, error) {
 	if err := json.Unmarshal([]byte(s), &items); err != nil {
 		return nil, err
 	}
+	for i := range items {
+		items[i].StemText = normalizeTranscript(items[i].StemText)
+		for j := range items[i].SubQuestions {
+			items[i].SubQuestions[j].Text = normalizeTranscript(items[i].SubQuestions[j].Text)
+		}
+	}
 	return items, nil
+}
+
+// normalizeTranscript 归一化转录文本：统一换行为 \n、去掉行尾空白与首尾空行。
+// 提示词要求模型保留原图/文档的换行版式（JSON 中以 \n 表示），该兜底消除
+// 模型输出 \r\n、行尾空格等造成的显示差异，保证行为确定。
+func normalizeTranscript(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, " \t　")
+	}
+	// 首行可能带转录产生的缩进，去掉；其余行的缩进视为原图版式予以保留。
+	if len(lines) > 0 {
+		lines[0] = strings.TrimLeft(lines[0], " \t　")
+	}
+	// 丢弃内部空行（转录伪影），只保留真实换行。
+	out := lines[:0]
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			out = append(out, ln)
+		}
+	}
+	lines = out
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // questionNoRe 题号前缀正则（provider 包内 mock 与兜底使用）。

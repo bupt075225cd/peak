@@ -34,6 +34,7 @@ func (v *vlmCapabilities) ParseQuestion(ctx context.Context, image []byte) (*Que
 
 要求：
 - text 必须包含题目的完整题干文字（含数字与单位，若图中仅有图形则输出空字符串）。
+- text 保留原图的换行版式：原图中哪里换行，text 就在哪里换行（JSON 字符串中用 \n 表示）；不要把多行合并为一行，也不要增加原图没有的换行。
 - subject 只能从 数学/语文/英语/物理/化学 中选择；question_type 只能从 选择题/填空题/解答题 中选择。不确定时用最接近的值。`
 	out, err := v.dash.chat(ctx, prompt, image)
 	if err != nil {
@@ -58,12 +59,12 @@ func parseQuestion(out string) *QuestionParseResult {
 		return &QuestionParseResult{Text: strings.TrimSpace(out)}
 	}
 	res := &QuestionParseResult{
-		Text:         strings.TrimSpace(r.Text),
+		Text:         normalizeTranscript(r.Text),
 		Subject:      strings.TrimSpace(r.Subject),
 		QuestionType: strings.TrimSpace(r.QuestionType),
 	}
 	if res.Text == "" {
-		res.Text = strings.TrimSpace(out)
+		res.Text = normalizeTranscript(out)
 	}
 	return res
 }
