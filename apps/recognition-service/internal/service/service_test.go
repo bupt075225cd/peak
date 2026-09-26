@@ -84,7 +84,7 @@ func TestProcessTaskSuccess(t *testing.T) {
 	for time.Now().Before(deadline) {
 		got, _ := svc.GetTask(ctx, task.ID)
 		if got.Status == domain.TaskSuccess {
-			if got.ResultJSON == "" {
+			if got.ResultJSON == nil || *got.ResultJSON == "" {
 				t.Fatal("expected result json")
 			}
 			return
@@ -170,7 +170,7 @@ func TestProcessImageMathRedrawProducesMultiSVG(t *testing.T) {
 		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
 	}
 	var result RecognitionResult
-	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
+	if err := json.Unmarshal([]byte(*got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	if len(result.RedrawFigures) != 2 {
@@ -223,7 +223,7 @@ func TestProcessImageNoRedrawEngineSkips(t *testing.T) {
 		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
 	}
 	var result RecognitionResult
-	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
+	if err := json.Unmarshal([]byte(*got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	if len(result.RedrawFigures) != 0 {
@@ -375,7 +375,7 @@ func runGeometryTask(t *testing.T, prov provider.Provider) RecognitionResult {
 		t.Fatalf("expected success, got %s: %s", got.Status, got.ErrorMessage)
 	}
 	var result RecognitionResult
-	if err := json.Unmarshal([]byte(got.ResultJSON), &result); err != nil {
+	if err := json.Unmarshal([]byte(*got.ResultJSON), &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	return result

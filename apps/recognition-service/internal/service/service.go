@@ -201,11 +201,12 @@ func (s *Service) process(taskID uint64, storageKey string) {
 
 	// 序列化结果并标记成功。
 	resultJSON, _ := json.Marshal(result)
+	resStr := string(resultJSON)
 	s.db.Model(&domain.RecognitionTask{}).Where("id = ?", taskID).Updates(map[string]any{
 		"status":        domain.TaskSuccess,
 		"progress":      100,
 		"progress_text": "",
-		"result_json":   string(resultJSON),
+		"result_json":   &resStr,
 	})
 	s.log.Info("recognition task done",
 		zap.Uint64("task_id", taskID),

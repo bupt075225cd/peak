@@ -386,7 +386,8 @@ func TestImageRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	img := &domain.Image{MistakeID: m.ID, StorageKey: "a/b.jpg", ImageType: "original"}
+	mistakeID := m.ID
+	img := &domain.Image{MistakeID: &mistakeID, StorageKey: "a/b.jpg", ImageType: "original"}
 	if err := repos.Image.Create(ctx, img); err != nil {
 		t.Fatal(err)
 	}

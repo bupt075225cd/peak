@@ -62,9 +62,13 @@ type Mistake struct {
 }
 
 // Image 图片元信息（文件本身存本地/对象存储）。
+//
+// MistakeID 可空：识别服务上传原图/文档时错题尚未创建（前端先传 /recognition/tasks
+// 再保存错题），此时图片暂不属于任何错题（mistake_id 为 NULL，外键允许 NULL）；
+// 图片的实际归属由 questions.image 中的 storage_key 表达。
 type Image struct {
 	ID         uint64         `gorm:"primaryKey" json:"id"`
-	MistakeID  uint64         `gorm:"index" json:"mistake_id"`
+	MistakeID  *uint64        `gorm:"index" json:"mistake_id,omitempty"`
 	StorageKey string         `gorm:"size:255" json:"storage_key"`
 	ImageType  string         `gorm:"size:32" json:"image_type"` // original/erased/crop
 	Width      int            `json:"width"`
@@ -98,7 +102,9 @@ type RecognitionTask struct {
 	Status       string         `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
 	Progress     int            `gorm:"default:0" json:"progress"`     // 0-100
 	ProgressText string         `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
-	ResultJSON   string         `gorm:"type:json" json:"result_json"`
+	// ResultJSON 识别结果（JSON 列）。指针类型：任务创建时为 NULL——MySQL 的 JSON 列
+	// 不接受空字符串，且前端以 falsy 判断"结果未就绪"。
+	ResultJSON   *string        `gorm:"type:json" json:"result_json"`
 	ErrorMessage string         `gorm:"size:512" json:"error_message"`
 	Provider     string         `gorm:"size:32" json:"provider"`
 	RetryCount   int            `gorm:"default:0" json:"retry_count"`
