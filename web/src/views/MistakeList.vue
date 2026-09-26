@@ -248,7 +248,26 @@ function onMistakeSaved(updated: Mistake) {
 const selectedIds = ref<Set<number>>(new Set())
 const exporting = ref(false)
 const exportError = ref('')
-const exportMenuOpen = ref(false)
+const exportDialogOpen = ref(false)
+const exportFormat = ref<ExportFormat>('pdf')
+const exportName = ref('')
+
+// 打开导出对话框并预填默认文件名（与后端命名口径一致），用户可修改。
+function openExportDialog() {
+  if (!exportName.value.trim()) {
+    exportName.value = `我的错题本 ${new Date().toISOString().slice(0, 10)}`
+  }
+  exportDialogOpen.value = true
+}
+
+// 导出文件名：用户填写者优先（剥离误填的扩展名），否则用服务端默认名。
+function exportFileName(serverName: string, format: ExportFormat): string {
+  const custom = exportName.value.trim()
+  const base = custom
+    ? custom.replace(/\.(pdf|docx)$/i, '')
+    : serverName.replace(/\.[^.]+$/, '')
+  return `${base}.${format}`
+}
 
 // 当前筛选结果中的已勾选项。
 const selectedVisible = computed(() =>
@@ -298,8 +317,8 @@ function toggleSelectAllVisible() {
   selectedIds.value = next
 }
 
-async function handleExport(format: ExportFormat) {
-  exportMenuOpen.value = false
+async function handleExport() {
+  exportDialogOpen.value = false
   exportError.value = ''
 
   const ids = exportTargets.value.map((m) => m.id)
@@ -310,8 +329,8 @@ async function handleExport(format: ExportFormat) {
 
   exporting.value = true
   try {
-    const { blob, filename } = await exportMistakes(ids, format)
-    downloadBlob(blob, filename)
+    const { blob, filename } = await exportMistakes(ids, exportFormat.value)
+    downloadBlob(blob, exportFileName(filename, exportFormat.value))
   } catch (err) {
     exportError.value = await resolveExportError(err)
   } finally {
@@ -365,31 +384,13 @@ async function resolveExportError(err: unknown): Promise<string> {
             type="button"
             class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-ink-soft shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!canExport"
-            @click="exportMenuOpen = !exportMenuOpen"
+            @click="openExportDialog"
           >
             <Loader2 v-if="exporting" class="w-4 h-4 animate-spin" />
             <Download v-else class="w-4 h-4" />
             {{ exporting ? '导出中…' : '导出' }}
           </button>
-          <div
-            v-if="exportMenuOpen"
-            class="absolute right-0 mt-2 w-40 rounded-xl border border-slate-200 bg-white shadow-lg py-1 z-10"
-          >
-            <button
-              type="button"
-              class="w-full text-left px-3 py-2 text-sm text-ink-soft hover:bg-slate-50"
-              @click="handleExport('pdf')"
-            >
-              导出为 PDF
-            </button>
-            <button
-              type="button"
-              class="w-full text-left px-3 py-2 text-sm text-ink-soft hover:bg-slate-50"
-              @click="handleExport('docx')"
-            >
-              导出为 Word
-            </button>
-          </div>
+
         </div>
 
         <button
@@ -523,8 +524,8 @@ async function resolveExportError(err: unknown): Promise<string> {
                     >来源：<HighlightText :text="mistakeSource(item)" /></span>
                     <span class="text-xs text-ink-faint">{{ item.recorded_at?.slice(0, 10) }}</span>
                   </div>
-                  <!-- 题干：命中的关键词标黄 -->
-                  <p class="text-sm text-ink leading-relaxed">
+                  <!-- 题干：命中的关键词标黄；pre-line 保留识别出的换行 -->
+                  <p class="text-sm text-ink leading-relaxed whitespace-pre-line">
                     <HighlightText :text="item.question?.stem_text ?? ''" />
                   </p>
                   <!-- 知识点标签 -->
@@ -597,5 +598,78 @@ async function resolveExportError(err: unknown): Promise<string> {
       @close="closeEdit"
       @saved="onMistakeSaved"
     />
+
+    <!-- 导出对话框：选格式、改文件名，确认后才导出 -->
+    <div
+      v-if="exportDialogOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="导出错题"
+      @click.self="exportDialogOpen = false"
+    >
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-semibold text-ink">导出错题</h2>
+            <p class="text-xs text-ink-faint mt-1">
+              共 {{ exportTargets.length }} 道题{{ hiddenSelectedCount > 0 ? `（另有 ${hiddenSelectedCount} 道已勾选题被当前筛选排除）` : '' }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="text-ink-faint hover:text-ink transition-colors"
+            @click="exportDialogOpen = false"
+          >✕</button>
+        </div>
+
+        <label class="block text-sm font-medium text-ink mb-2">导出格式</label>
+        <div class="grid grid-cols-2 gap-2 mb-4">
+          <button
+            type="button"
+            class="rounded-xl border px-3 py-2 text-sm font-medium transition-colors"
+            :class="exportFormat === 'pdf'
+              ? 'border-primary bg-primary/5 text-ink'
+              : 'border-slate-200 text-ink-soft hover:bg-slate-50'"
+            @click="exportFormat = 'pdf'"
+          >PDF</button>
+          <button
+            type="button"
+            class="rounded-xl border px-3 py-2 text-sm font-medium transition-colors"
+            :class="exportFormat === 'docx'
+              ? 'border-primary bg-primary/5 text-ink'
+              : 'border-slate-200 text-ink-soft hover:bg-slate-50'"
+            @click="exportFormat = 'docx'"
+          >Word</button>
+        </div>
+
+        <label class="block text-sm font-medium text-ink mb-2" for="export-name">文件名</label>
+        <input
+          id="export-name"
+          v-model="exportName"
+          type="text"
+          class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+          placeholder="我的错题本"
+        />
+        <p v-if="exportError" class="mt-2 text-sm text-red-500">{{ exportError }}</p>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-ink-soft hover:bg-slate-50 transition-colors"
+            @click="exportDialogOpen = false"
+          >取消</button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-xl bg-primary text-white px-4 py-2 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="!canExport"
+            @click="handleExport"
+          >
+            <Loader2 v-if="exporting" class="w-4 h-4 animate-spin" />
+            {{ exporting ? '导出中…' : '导出' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
