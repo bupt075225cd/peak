@@ -14,6 +14,9 @@ type FileStorage interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	// Delete 删除对象。
 	Delete(ctx context.Context, key string) error
+	// DeleteByPrefix 删除指定前缀下的全部对象，返回删除数量。
+	// 用于按任务清理中间产物（如 geometry/task_<id>*），无匹配对象时返回 0。
+	DeleteByPrefix(ctx context.Context, prefix string) (int, error)
 	// PresignedURL 生成带有效期的访问 URL。
 	PresignedURL(ctx context.Context, key string, expire time.Duration) (string, error)
 }

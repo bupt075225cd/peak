@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,5 +117,41 @@ func TestNewLocalStorageError(t *testing.T) {
 	}
 	if _, err := NewLocalStorage(file); err == nil {
 		t.Fatal("expected error when root is a file")
+	}
+}
+
+func TestDeleteByPrefix(t *testing.T) {
+	store, err := NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, key := range []string{"a/1.txt", "a/2.txt", "a/sub/3.txt", "b/4.txt"} {
+		if err := store.Put(ctx, key, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := store.DeleteByPrefix(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("deleted = %d, want 3", n)
+	}
+	// 前缀目录连同空的子目录应被清理；其它前缀不受影响。
+	if _, err := store.Get(ctx, "a/1.txt"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a/1.txt should be gone, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.root, "a")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("empty dir a should be pruned, got %v", err)
+	}
+	if _, err := store.Get(ctx, "b/4.txt"); err != nil {
+		t.Fatalf("b/4.txt should survive: %v", err)
+	}
+
+	// 不存在的前缀返回 0。
+	if n, err := store.DeleteByPrefix(ctx, "missing"); err != nil || n != 0 {
+		t.Fatalf("missing prefix: n=%d err=%v", n, err)
 	}
 }

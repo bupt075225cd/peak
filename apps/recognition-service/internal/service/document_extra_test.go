@@ -43,6 +43,9 @@ func (f *failingStorage) Get(context.Context, string) ([]byte, error) {
 	return nil, errors.New("not implemented")
 }
 func (f *failingStorage) Delete(context.Context, string) error { return nil }
+func (f *failingStorage) DeleteByPrefix(context.Context, string) (int, error) {
+	return 0, nil
+}
 func (f *failingStorage) PresignedURL(context.Context, string, time.Duration) (string, error) {
 	return "", errors.New("not implemented")
 }

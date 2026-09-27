@@ -11,6 +11,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -127,6 +128,44 @@ func (s *S3Storage) Delete(ctx context.Context, key string) error {
 		Key:    aws.String(key),
 	})
 	return err
+}
+
+// DeleteByPrefix 删除指定前缀下的全部对象（分页列举 + 每批最多 1000 个批量删除），
+// 返回删除数量。前缀无对象时返回 0。
+func (s *S3Storage) DeleteByPrefix(ctx context.Context, prefix string) (int, error) {
+	var keys []string
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, obj := range page.Contents {
+			if obj.Key != nil && *obj.Key != "" {
+				keys = append(keys, *obj.Key)
+			}
+		}
+	}
+	deleted := 0
+	for start := 0; start < len(keys); start += 1000 {
+		end := min(start+1000, len(keys))
+		batch := keys[start:end]
+		idents := make([]types.ObjectIdentifier, 0, len(batch))
+		for _, k := range batch {
+			idents = append(idents, types.ObjectIdentifier{Key: aws.String(k)})
+		}
+		if _, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(s.bucket),
+			Delete: &types.Delete{Objects: idents, Quiet: aws.Bool(true)},
+		}); err != nil {
+			return deleted, err
+		}
+		deleted += len(batch)
+	}
+	return deleted, nil
 }
 
 // PresignedURL 生成预签名下载 URL。
