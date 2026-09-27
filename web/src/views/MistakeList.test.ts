@@ -222,6 +222,18 @@ describe('MistakeList.vue 导出', () => {
     return btn!
   }
 
+  // 导出走的是对话框：点「导出」打开 → 选格式 → 在对话框内点「导出」确认。
+  function openExportDialog(wrapper: ReturnType<typeof mountList>) {
+    return buttonByText(wrapper, '导出').trigger('click')
+  }
+
+  function dialogButtonByText(wrapper: ReturnType<typeof mountList>, text: string) {
+    const dialog = wrapper.find('[role="dialog"]')
+    const btn = dialog.findAll('button').find((b) => b.text().includes(text))
+    expect(btn, `dialog button containing ${text}`).toBeDefined()
+    return btn!
+  }
+
   it('未勾选时导出当前筛选结果，并触发浏览器下载', async () => {
     httpMethods.post.mockResolvedValueOnce({
       data: new Blob(['pdf-bytes']),
@@ -239,8 +251,12 @@ describe('MistakeList.vue 导出', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '导出').trigger('click')
-    await buttonByText(wrapper, '导出为 PDF').trigger('click')
+    await openExportDialog(wrapper)
+    await flushPromises()
+    // 清空预填文件名，验证使用服务端返回的默认名。
+    await wrapper.find('#export-name').setValue('')
+    await dialogButtonByText(wrapper, 'PDF').trigger('click')
+    await dialogButtonByText(wrapper, '导出').trigger('click')
     await flushPromises()
 
     expect(httpMethods.post).toHaveBeenCalledWith(
@@ -264,8 +280,10 @@ describe('MistakeList.vue 导出', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('已选 1 题')
 
-    await buttonByText(wrapper, '导出').trigger('click')
-    await buttonByText(wrapper, '导出为 Word').trigger('click')
+    await openExportDialog(wrapper)
+    await flushPromises()
+    await dialogButtonByText(wrapper, 'Word').trigger('click')
+    await dialogButtonByText(wrapper, '导出').trigger('click')
     await flushPromises()
 
     expect(httpMethods.post).toHaveBeenCalledWith(
@@ -313,8 +331,10 @@ describe('MistakeList.vue 导出', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '导出').trigger('click')
-    await buttonByText(wrapper, '导出为 PDF').trigger('click')
+    await openExportDialog(wrapper)
+    await flushPromises()
+    await dialogButtonByText(wrapper, 'PDF').trigger('click')
+    await dialogButtonByText(wrapper, '导出').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('没有可导出的错题')
