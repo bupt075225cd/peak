@@ -65,6 +65,15 @@ services:
       LOG_DEV: "false"
       DB_DIALECT: "mysql"
       DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      # 与 recognition-service 共用同一存储：负责 committed/ 正式区读取与提交拷贝
+      STORAGE_TYPE: "s3"
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_USE_SSL: ${S3_USE_SSL:-}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-false}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     expose:
       - "8081"

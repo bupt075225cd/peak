@@ -196,8 +196,12 @@ function imageRefs(q: Mistake['question']): QuestionImageRef[] {
   }
 }
 
-// 配图访问地址：识别服务的文件接口。
+// 配图访问地址：正式区（committed/）走错题服务的文件接口；
+// 无前缀的存量 key 回退识别服务文件接口。
 function figureUrl(key: string): string {
+  if (key.startsWith('committed/')) {
+    return `/api/mistakes/files/${key.slice('committed/'.length)}`
+  }
   return `/api/recognition/files/${key}`
 }
 
