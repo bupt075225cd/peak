@@ -2,18 +2,21 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm/logger"
 
 	"peak/libs/domain"
+	"peak/libs/storage"
 
 	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/repository"
@@ -28,6 +31,16 @@ func setupHandler(t *testing.T) *gin.Engine {
 // setupHandlerWithExporter 构造带指定导出能力的处理器，exporter 为 nil 表示不启用导出。
 func setupHandlerWithExporter(t *testing.T, exporter export.Service) *gin.Engine {
 	t.Helper()
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	return setupHandlerWithStorage(t, store, exporter)
+}
+
+// setupHandlerWithStorage 构造带指定存储的处理器，供晋升/文件接口测试注入。
+func setupHandlerWithStorage(t *testing.T, store storage.FileStorage, exporter export.Service) *gin.Engine {
+	t.Helper()
 	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "h.db"), logger.Silent)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -37,7 +50,7 @@ func setupHandlerWithExporter(t *testing.T, exporter export.Service) *gin.Engine
 	}
 	repos := repository.NewGormRepositories(db)
 	svc := service.New(repos, exporter)
-	h := New(svc)
+	h := New(svc, store)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -542,5 +555,84 @@ func TestCategoryListEmpty(t *testing.T) {
 	w := doRequest(t, r, http.MethodGet, "/api/categories", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestCreateQuestionPromotesTransientImages(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 预置临时区产物与既有正式区文件（非 transient 引用不拷贝，仅校验保留）。
+	for _, key := range []string{
+		"transient/geometry/task_1.svg", "transient/original/x.jpg", "committed/legacy.png",
+	} {
+		if err := store.Put(context.Background(), key, []byte("data-"+key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := setupHandlerWithStorage(t, store, nil)
+
+	// web 实际发送的 image 是字符串化的 JSON 数组（JSON.stringify 后的引用列表）。
+	refs, _ := json.Marshal([]map[string]any{
+		{"key": "transient/geometry/task_1.svg", "label": "图1"},
+		{"key": "committed/legacy.png"}, // 非 transient 引用应原样保留
+	})
+	body := map[string]any{
+		"subject": "数学", "grade": "七年级上", "stem_text": "题干",
+		"image": string(refs),
+	}
+	w := doRequest(t, r, http.MethodPost, "/api/questions", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create question: %d %s", w.Code, w.Body.String())
+	}
+
+	// 已拷贝到正式区。
+	ctx := context.Background()
+	for _, key := range []string{"committed/geometry/task_1.svg", "committed/legacy.png"} {
+		if _, err := store.Get(ctx, key); err != nil {
+			t.Fatalf("%s should exist: %v", key, err)
+		}
+	}
+	// 响应中的 image 引用应已改写为 committed key，且原样保留非 transient 引用。
+	var resp struct {
+		Data domain.Question `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var got []struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(resp.Data.Image), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Key != "committed/geometry/task_1.svg" || got[1].Key != "committed/legacy.png" {
+		t.Fatalf("unexpected image refs: %+v", got)
+	}
+}
+
+func TestGetMistakeFileServesCommittedOnly(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Put(ctx, "committed/geometry/a.svg", []byte("<svg/>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, "transient/geometry/b.svg", []byte("<svg/>")); err != nil {
+		t.Fatal(err)
+	}
+	r := setupHandlerWithStorage(t, store, nil)
+
+	w := doRequest(t, r, http.MethodGet, "/api/mistakes/files/geometry/a.svg", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<svg/>") {
+		t.Fatalf("committed file: %d %s", w.Code, w.Body.String())
+	}
+	// 非 committed/ 前缀一律 404/错误，防止读到临时区。
+	w = doRequest(t, r, http.MethodGet, "/api/mistakes/files/../../transient/geometry/b.svg", nil)
+	if w.Code == http.StatusOK {
+		t.Fatal("transient file should not be served")
 	}
 }

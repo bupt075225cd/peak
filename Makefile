@@ -125,8 +125,8 @@ run-sqlite:
 	go build -o $(PEAK_BIN)/question-service ./apps/question-service
 	go build -o $(PEAK_BIN)/recognition-service ./apps/recognition-service
 	@echo "==> 启动服务（sqlite 空库）"
-	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
-	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
+	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db STORAGE_ROOT=$(PEAK_DATA)/storage nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
+	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db STORAGE_ROOT=$(PEAK_DATA)/storage RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
 	cd $(GATEWAY_DIR) && exec nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
 	@sleep 2
 	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082"

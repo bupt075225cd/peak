@@ -9,7 +9,9 @@ import (
 
 // Config 导出配置。
 type Config struct {
-	// RecognitionBaseURL 图片服务基地址（recognition-service）。
+	// RecognitionBaseURL Deprecated: 图片改为直读对象存储（见 StorageFetcher），
+	// 仅保留字段以兼容旧调用方。
+
 	RecognitionBaseURL string
 	// FontPath 外部字体文件路径；为空时使用内置字体。
 	FontPath string
@@ -23,6 +25,16 @@ type Config struct {
 	//
 	// 识别阶段带入的换行位置与导出页宽无关，默认合并，避免"一行没排满就换行"。
 	MergeStemLineBreaks bool
+}
+
+// NewDefaultWithFetcher 创建带注入 fetcher 的默认导出服务：
+// 字体在启动阶段加载，配置错误立即暴露。
+func NewDefaultWithFetcher(cfg Config, fetcher Fetcher) (Service, error) {
+	fonts, err := NewFontProvider(cfg.FontPath)
+	if err != nil {
+		return nil, err
+	}
+	return New(cfg, fetcher, fonts), nil
 }
 
 // DefaultConfig 返回带默认值的导出配置。

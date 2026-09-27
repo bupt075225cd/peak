@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,6 +15,7 @@ import (
 	httpx "peak/libs/http"
 	"peak/libs/logger"
 	"peak/libs/observability"
+	"peak/libs/storage"
 
 	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/handler"
@@ -52,16 +54,23 @@ func main() {
 		panic(err)
 	}
 
+	// 初始化存储（与 recognition-service 共用同一存储与桶：负责 committed/ 正式区
+	// 的读取与 transient/ -> committed/ 的提交拷贝）。
+	store, err := newStorage(cfg)
+	if err != nil {
+		panic(err)
+	}
+
 	// 组装依赖：repository -> service -> handler。
 	repos := repository.NewGormRepositories(db)
 
 	// 导出能力在启动阶段初始化：字体加载等问题会立即暴露，而不是等用户点导出。
-	exporter, err := export.NewDefault(exportConfig(cfg))
+	exporter, err := export.NewDefaultWithFetcher(exportConfig(cfg), export.NewStorageFetcher(store))
 	if err != nil {
 		panic(err)
 	}
 	svc := service.New(repos, exporter)
-	h := handler.New(svc)
+	h := handler.New(svc, store)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()
@@ -85,7 +94,6 @@ func gormLogLevel(dev bool) gormlogger.LogLevel {
 // exportConfig 从配置构建导出配置，未配置项沿用默认值。
 func exportConfig(cfg *config.Loader) export.Config {
 	ec := export.DefaultConfig()
-	ec.RecognitionBaseURL = cfg.String("recognition.base_url", ec.RecognitionBaseURL)
 	ec.FontPath = cfg.String("export.font_path", ec.FontPath)
 	ec.MaxItems = cfg.Int("export.max_items", ec.MaxItems)
 	ec.MaxImageWidth = cfg.Int("export.max_image_width", ec.MaxImageWidth)
@@ -97,4 +105,24 @@ func exportConfig(cfg *config.Loader) export.Config {
 		}
 	}
 	return ec
+}
+
+// newStorage 按配置创建存储后端：storage.type 为 "s3" 时返回 S3 兼容存储，
+// 否则（含空值）回退本地磁盘（storage.root）。与 recognition-service 的
+// 配置口径一致，两端必须指向同一存储/桶。
+func newStorage(cfg *config.Loader) (storage.FileStorage, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.String("storage.type", "local"))) {
+	case "s3":
+		return storage.NewS3Storage(storage.Config{
+			Endpoint:  cfg.String("storage.s3.endpoint", ""),
+			Region:    cfg.String("storage.s3.region", "us-east-1"),
+			AccessKey: cfg.String("storage.s3.access_key", ""),
+			SecretKey: cfg.String("storage.s3.secret_key", ""),
+			Bucket:    cfg.String("storage.s3.bucket", "peak"),
+			UseSSL:    cfg.Bool("storage.s3.use_ssl", false),
+			PathStyle: cfg.Bool("storage.s3.path_style", false),
+		})
+	default:
+		return storage.NewLocalStorage(cfg.String("storage.root", "./data"))
+	}
 }

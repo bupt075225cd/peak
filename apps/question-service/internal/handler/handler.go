@@ -2,26 +2,39 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"peak/libs/domain"
 	"peak/libs/errors"
 	httpx "peak/libs/http"
+	"peak/libs/storage"
 
 	"peak/apps/question-service/internal/service"
 )
 
+// transientPrefix 识别产物临时区前缀；提交时拷贝到 committed/ 正式区。
+const transientPrefix = "transient/"
+
+// committedPrefix 正式区前缀：错题引用的图片全部位于该前缀下。
+const committedPrefix = "committed/"
+
 // Handler HTTP 处理器。
 type Handler struct {
-	svc *service.Service
+	svc   *service.Service
+	store storage.FileStorage
 }
 
 // New 创建处理器实例。
-func New(svc *service.Service) *Handler {
-	return &Handler{svc: svc}
+func New(svc *service.Service, store storage.FileStorage) *Handler {
+	return &Handler{svc: svc, store: store}
 }
 
 // RegisterRoutes 注册路由。
@@ -37,6 +50,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 	mistake := r.Group("/api/mistakes")
 	{
+		mistake.GET("/files/*key", h.getMistakeFile)
 		mistake.POST("", h.createMistake)
 		mistake.GET("/:id", h.getMistake)
 		mistake.GET("", h.listMistakes)
@@ -67,6 +81,17 @@ func (h *Handler) createQuestion(c *gin.Context) {
 	if err := c.ShouldBindJSON(&q); err != nil {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, err.Error()))
 		return
+	}
+	// 提交错题 = 把识别产物从临时区晋升为正式区：拷贝 transient/<key> ->
+	// committed/<key>，并把 questions.image 中的引用改写为正式 key。
+	// 拷贝使用 Get+Put，兼容本地磁盘与任意 S3 兼容存储。
+	if q.Image != "" {
+		committed, err := h.promoteImageRefs(c.Request.Context(), q.Image)
+		if err != nil {
+			httpx.Fail(c, errors.Wrap(errors.CodeStorageFail, "promote images failed", err))
+			return
+		}
+		q.Image = committed
 	}
 	if err := h.svc.CreateQuestion(c.Request.Context(), &q); err != nil {
 		httpx.Fail(c, err)
@@ -262,3 +287,72 @@ func keywordParam(c *gin.Context) string {
 	}
 	return kw
 }
+
+// getMistakeFile 提供正式区（committed/）错题配图访问。
+// key 不带 committed/ 前缀；只允许访问正式区，防止任意对象读取。
+func (h *Handler) getMistakeFile(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" || strings.Contains(key, "..") {
+		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "invalid file key"))
+		return
+	}
+	data, err := h.store.Get(c.Request.Context(), committedPrefix+key)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.Data(200, mimeByExt(strings.ToLower(filepath.Ext(key))), data)
+}
+
+// promoteImageRefs 把 image JSON 中的 transient/ 引用拷贝到 committed/ 并改写；
+// 非 transient 引用（存量数据原样 key）保持不变。
+func (h *Handler) promoteImageRefs(ctx context.Context, imageJSON string) (string, error) {
+	var refs []struct {
+		Key   string `json:"key"`
+		Label string `json:"label,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(imageJSON), &refs); err != nil {
+		return "", fmt.Errorf("parse image refs: %w", err)
+	}
+	changed := false
+	for i, r := range refs {
+		if !strings.HasPrefix(r.Key, transientPrefix) {
+			continue
+		}
+		dst := committedPrefix + strings.TrimPrefix(r.Key, transientPrefix)
+		data, err := h.store.Get(ctx, r.Key)
+		if err != nil {
+			return "", fmt.Errorf("read transient %q: %w", r.Key, err)
+		}
+		if err := h.store.Put(ctx, dst, data); err != nil {
+			return "", fmt.Errorf("write committed %q: %w", dst, err)
+		}
+		refs[i].Key = dst
+		changed = true
+	}
+	if !changed {
+		return imageJSON, nil
+	}
+	out, err := json.Marshal(refs)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// mimeByExt 按扩展名返回内容类型（识别产物只有 SVG/PNG/JPEG）。
+func mimeByExt(ext string) string {
+	switch ext {
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		return "image/jpeg"
+	}
+}
+
+// time 未直接使用的占位保持导入整洁（当前无额外用途可移除）。
+var _ = time.Second
