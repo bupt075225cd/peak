@@ -155,3 +155,31 @@ func TestDeleteByPrefix(t *testing.T) {
 		t.Fatalf("missing prefix: n=%d err=%v", n, err)
 	}
 }
+
+// TestDeleteByPrefixNoEscape 保证前缀目录不存在时不会向上爬出存储根目录，
+// 误删 root 之外的无关目录（此前会一路爬到 os.TempDir 并清理空目录）。
+func TestDeleteByPrefixNoEscape(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "storage")
+	store, err := NewLocalStorage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟前次清理已把 root 删光的场景，prefix 目录必然不存在。
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(base, "unrelated")
+	if err := os.Mkdir(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := store.DeleteByPrefix(context.Background(), "transient/geometry/task_1.")
+	if err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v, want 0/nil", n, err)
+	}
+	// root 之外的兄弟目录必须原样保留。
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling outside root must survive: %v", err)
+	}
+}

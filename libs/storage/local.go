@@ -71,15 +71,26 @@ func (s *LocalStorage) DeleteByPrefix(_ context.Context, prefix string) (int, er
 		return 1, nil
 	}
 
+	// withinRoot 判断 path 是否位于存储根目录内（含等于 root 本身）。
+	withinRoot := func(p string) bool {
+		rel, err := filepath.Rel(s.root, p)
+		if err != nil {
+			return false
+		}
+		return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+
 	// 找到 prefix 路径下实际存在的最深祖先目录，从那里遍历。
+	// 上爬不得越出存储根目录：prefix 目录不存在时按无匹配处理，
+	// 否则会爬到 root 之外（如 /tmp），误删无关的空目录与文件。
 	walkDir := dir
 	for {
 		if _, err := os.Stat(walkDir); err == nil {
 			break
 		}
 		parent := filepath.Dir(walkDir)
-		if parent == walkDir {
-			return 0, nil // 已到文件系统根。
+		if parent == walkDir || !withinRoot(parent) {
+			return 0, nil // prefix 目录不存在，视为无匹配。
 		}
 		walkDir = parent
 	}
