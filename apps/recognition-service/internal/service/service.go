@@ -196,6 +196,10 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	if err != nil {
 		s.log.Error("recognition failed", zap.String("error", err.Error()))
 		s.updateStatus(taskID, domain.TaskFailed, 0, err.Error())
+		// 失败即时清理：任务失败后其重绘产物（geometry/task_<id>.）不会再被
+		// 任何错题引用，直接从存储删除，避免未提交流程在对象存储中留下孤儿文件。
+		// 原图（original/…）必须保留：失败后用户可点重试，重试需从存储重新读取原图。
+		s.cleanupTaskArtifacts(taskID)
 		return
 	}
 
@@ -469,6 +473,24 @@ func (s *Service) verifyAngleMarks(ctx context.Context, taskID uint64, geoImage 
 	}
 }
 
+// cleanupTaskArtifacts 清理失败任务的重绘产物（transient/geometry/task_<id>. 前缀）。
+// 清理失败仅记录日志——产物残留不影响正确性，只占用存储。
+func (s *Service) cleanupTaskArtifacts(taskID uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("transient/geometry/task_%d.", taskID)
+	n, err := s.storage.DeleteByPrefix(ctx, prefix)
+	if err != nil {
+		s.log.Warn("cleanup failed-task artifacts", zap.Uint64("task_id", taskID),
+			zap.String("prefix", prefix), zap.String("error", err.Error()))
+		return
+	}
+	if n > 0 {
+		s.log.Info("cleaned up failed-task artifacts",
+			zap.Uint64("task_id", taskID), zap.Int("deleted", n))
+	}
+}
+
 // truncate 截断字符串用于日志。
 func truncate(s string, n int) string {
 	if len(s) <= n {
@@ -540,9 +562,9 @@ func (s *Service) updateStatus(taskID uint64, status string, progress int, errMs
 // 单张原图只含一个子图时用 task_<id>.svg；含多个子图时用 task_<id>_<i>.svg（i 从 1 开始）。
 func geometrySVGKey(taskID uint64, index, total int) string {
 	if total <= 1 {
-		return "geometry/task_" + itoa(taskID) + ".svg"
+		return "transient/geometry/task_" + itoa(taskID) + ".svg"
 	}
-	return "geometry/task_" + itoa(taskID) + "_" + itoa(uint64(index+1)) + ".svg"
+	return "transient/geometry/task_" + itoa(taskID) + "_" + itoa(uint64(index+1)) + ".svg"
 }
 
 func itoa(n uint64) string {

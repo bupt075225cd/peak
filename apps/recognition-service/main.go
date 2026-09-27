@@ -8,15 +8,15 @@ import (
 	"go.uber.org/zap"
 	gormlogger "gorm.io/gorm/logger"
 
+	"peak/apps/recognition-service/internal/handler"
+	"peak/apps/recognition-service/internal/provider"
+	"peak/apps/recognition-service/internal/service"
+	storagefactory "peak/apps/recognition-service/internal/storage"
 	"peak/libs/config"
 	"peak/libs/domain"
 	httpx "peak/libs/http"
 	"peak/libs/logger"
 	"peak/libs/observability"
-	"peak/apps/recognition-service/internal/handler"
-	storagefactory "peak/apps/recognition-service/internal/storage"
-	"peak/apps/recognition-service/internal/provider"
-	"peak/apps/recognition-service/internal/service"
 )
 
 func main() {
@@ -77,6 +77,10 @@ func main() {
 
 	// 组装依赖。
 	svc := service.New(db, store, prov, appLog, svcOpts...)
+
+	// transient/ 临时区的清理由对象存储生命周期规则完成（按前缀 + 对象年龄过期），
+	// 应用层不再做周期 GC；本地存储调试时产物残留可忽略。
+
 	h := handler.New(svc, db, store)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))

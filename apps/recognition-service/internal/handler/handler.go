@@ -93,7 +93,9 @@ func (h *Handler) createTask(c *gin.Context) {
 	}
 
 	// 保存原始文件到存储（key 保留原始扩展名，便于 process 阶段判断格式）。
-	key := "original/" + strconv.FormatInt(time.Now().UnixNano(), 10) + "_" + filename
+	// 识别产物统一写入 transient/ 前缀（临时区）：提交错题时由 question-service
+		// 拷贝到 committed/ 正式区；transient/ 由对象存储生命周期规则定期清理。
+		key := "transient/original/" + strconv.FormatInt(time.Now().UnixNano(), 10) + "_" + filename
 	if err := h.storage.Put(c.Request.Context(), key, data); err != nil {
 		httpx.Fail(c, errors.Wrap(errors.CodeStorageFail, "store file failed", err))
 		return

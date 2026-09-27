@@ -25,6 +25,8 @@ storage:
     bucket: "${S3_BUCKET:-peak}"
     use_ssl: "${S3_USE_SSL:-false}"
     path_style: "${S3_PATH_STYLE:-false}"  # AWS S3/OSS 用虚拟主机风格；Ceph/MinIO 等置 true
+    # transient/ 临时区的清理使用对象存储生命周期规则（按前缀+对象年龄过期），
+    # 应用层不做周期 GC；建议规则：前缀 transient/，对象创建 1 天后过期。
 
 recognition:
   provider: "${RECOGNITION_PROVIDER:-mock}"  # mock / aliyun / zhipu
