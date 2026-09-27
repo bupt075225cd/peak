@@ -29,7 +29,8 @@ type Question struct {
 	Analysis        string         `gorm:"type:text" json:"analysis"`
 	QuestionType    string         `gorm:"size:32" json:"question_type"`      // 选择/填空/解答
 	Image           string         `gorm:"type:json" json:"image"`            // 图片引用（image key 列表，含几何图与其它科目插图）
-	KnowledgePoints string         `gorm:"type:json" json:"knowledge_points"` // 知识点标签数组
+	// KnowledgePoints 可空指针：MySQL 的 JSON 列不接受空字符串，未设置时存 NULL。
+	KnowledgePoints *string        `gorm:"type:json" json:"knowledge_points"` // 知识点标签数组
 	Source          string         `gorm:"size:128" json:"source"`            // 题目来源（试卷/练习册等）
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`

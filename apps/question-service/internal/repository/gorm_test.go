@@ -170,12 +170,12 @@ func seedMistakesForFilter(t *testing.T, repos *GormRepositories, userID uint64)
 	ctx := context.Background()
 
 	seed := []struct {
-		subject        string
-		questionType   string
-		stem           string
-		kps            string
-		source         string
-		mistakeSource  string
+		subject       string
+		questionType  string
+		stem          string
+		kps           string
+		source        string
+		mistakeSource string
 	}{
 		{"数学", "解答题", "已知二次函数 y=x^2 求顶点", `["二次函数"]`, "期中考试", "错题本"},
 		{"数学", "选择题", "下列 Math 说法正确的是", `["函数"]`, "期中考试", ""},
@@ -184,7 +184,7 @@ func seedMistakesForFilter(t *testing.T, repos *GormRepositories, userID uint64)
 	for i, s := range seed {
 		q := &domain.Question{
 			Subject: s.subject, QuestionType: s.questionType, StemText: s.stem,
-			KnowledgePoints: s.kps, Source: s.source,
+			KnowledgePoints: strPtr(s.kps), Source: s.source,
 		}
 		if err := repos.Question.Create(ctx, q); err != nil {
 			t.Fatalf("create question %d: %v", i, err)
@@ -416,3 +416,5 @@ func TestImageRepo(t *testing.T) {
 		t.Fatalf("expected empty, got %d", len(empty))
 	}
 }
+
+func strPtr(s string) *string { return &s }

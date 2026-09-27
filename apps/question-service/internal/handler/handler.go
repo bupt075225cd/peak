@@ -82,6 +82,10 @@ func (h *Handler) createQuestion(c *gin.Context) {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, err.Error()))
 		return
 	}
+	if q.Image == "" {
+		// MySQL 的 JSON 列不接受空字符串；无图题目存空数组。
+		q.Image = "[]"
+	}
 	// 提交错题 = 把识别产物从临时区晋升为正式区：拷贝 transient/<key> ->
 	// committed/<key>，并把 questions.image 中的引用改写为正式 key。
 	// 拷贝使用 Get+Put，兼容本地磁盘与任意 S3 兼容存储。
