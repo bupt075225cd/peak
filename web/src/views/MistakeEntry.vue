@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import {
-  Camera, Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText,
+  Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText,
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
@@ -290,11 +290,11 @@ function selectQuestion(idx: number) {
   <div class="mx-auto max-w-5xl px-4 py-8">
     <div class="mb-6 animate-fade-up">
       <h1 class="text-2xl font-semibold text-ink">录入错题</h1>
-      <p class="text-sm text-ink-soft mt-1">拍照上传错题图片，自动识别题目</p>
+      <p class="text-sm text-ink-soft mt-1">上传错题图片，自动识别题目</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
-      <!-- 左侧：拍照上传 + 识别进度 -->
+      <!-- 左侧：图片上传 + 识别进度 -->
       <div class="lg:col-span-2 space-y-6">
         <div
           class="relative rounded-2xl border-2 border-dashed border-slate-300 bg-white overflow-hidden transition-all hover:border-primary-light cursor-pointer group"
@@ -307,13 +307,13 @@ function selectQuestion(idx: number) {
             <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 group-hover:animate-float">
               <ImagePlus class="w-8 h-8 text-primary" />
             </div>
-            <p class="font-medium text-ink">拍照 / 上传错题图片</p>
+            <p class="font-medium text-ink">上传错题图片</p>
             <p class="text-sm text-ink-faint mt-1">支持 JPG、PNG 等图片格式，拖拽或点击上传，自动识别</p>
             <button
               type="button"
               class="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary text-white px-4 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors"
             >
-              <Camera class="w-4 h-4" /> 拍照 / 选择图片
+              <Upload class="w-4 h-4" /> 选择图片
             </button>
           </div>
           <!-- 文档上传能力完成前保留：当前入口只接受图片，故该分支暂不可达 -->
