@@ -89,8 +89,7 @@ func TestIPHourlyLimit(t *testing.T) {
 
 func TestVerifyLifecycle(t *testing.T) {
 	s, cur := newTestStore(t, Config{})
-	codeStr, err := s.Generate("13800000001", "1.2.3.4")
-	if err != nil {
+	if _, err := s.Generate("13800000001", "1.2.3.4"); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	// 错误 4 次仍可再试（未达作废阈值）。
@@ -101,7 +100,7 @@ func TestVerifyLifecycle(t *testing.T) {
 	}
 	// 越过重发间隔后重新生成，新码重置错误计数。
 	*cur = cur.Add(61 * time.Second)
-	codeStr, err = s.Generate("13800000001", "1.2.3.4")
+	codeStr, err := s.Generate("13800000001", "1.2.3.4")
 	if err != nil {
 		t.Fatalf("regenerate after attempts: %v", err)
 	}
