@@ -1,21 +1,77 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { BookOpen, LogIn, ArrowLeft, Info, Eye, EyeOff } from 'lucide-vue-next'
+import { BookOpen, LogIn, ArrowLeft, Loader2, Smartphone, ShieldCheck } from 'lucide-vue-next'
+import { sendSmsCode, smsLogin } from '../api'
 import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
 const { login } = useAuth()
 
-const username = ref('')
-const password = ref('')
-const showPassword = ref(false)
+const phone = ref('')
+const code = ref('')
+const ticket = ref('')
+const debugCode = ref('')
+const sending = ref(false)
+const loggingIn = ref(false)
+const errorMsg = ref('')
+const countdown = ref(0)
+let timer: ReturnType<typeof setInterval> | undefined
 
-// 登录页开发前的临时引导：演示令牌，登录后可体验已登录主页形态。
-function handleDemoLogin() {
-  login('demo-token')
-  router.push('/home')
+// 手机号校验：1 开头，第二位 3-9，共 11 位。
+const phoneValid = computed(() => /^1[3-9]\d{9}$/.test(phone.value))
+const canSend = computed(() => phoneValid.value && countdown.value === 0 && !sending.value)
+const canLogin = computed(() => phoneValid.value && code.value.length > 0 && ticket.value !== '' && !loggingIn.value)
+
+// 发送验证码：成功后记录 ticket 并进入 60 秒倒计时。
+async function handleSendCode() {
+  if (!canSend.value) return
+  sending.value = true
+  errorMsg.value = ''
+  try {
+    const res = await sendSmsCode(phone.value.trim())
+    ticket.value = res.ticket
+    debugCode.value = res.debugCode ?? ''
+    countdown.value = 60
+    timer = setInterval(() => {
+      countdown.value--
+      if (countdown.value <= 0) {
+        clearInterval(timer)
+        timer = undefined
+      }
+    }, 1000)
+  } catch (err) {
+    errorMsg.value = extractError(err, '验证码发送失败，请稍后重试')
+  } finally {
+    sending.value = false
+  }
 }
+
+// 验证码登录：成功后写入令牌并跳转主页。
+async function handleLogin() {
+  if (!canLogin.value) return
+  loggingIn.value = true
+  errorMsg.value = ''
+  try {
+    const res = await smsLogin(phone.value.trim(), code.value.trim(), ticket.value)
+    login(res.token)
+    router.push('/home')
+  } catch (err) {
+    errorMsg.value = extractError(err, '登录失败，请稍后重试')
+  } finally {
+    loggingIn.value = false
+  }
+}
+
+// 从统一响应结构中提取错误信息。
+function extractError(err: unknown, fallback: string): string {
+  const data = (err as { response?: { data?: { message?: string } } })?.response?.data
+  return data?.message || fallback
+}
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 
 function goBack() {
   router.back()
@@ -40,60 +96,76 @@ function goBack() {
           <BookOpen class="w-6 h-6 text-white" />
         </div>
         <h1 class="mt-4 text-xl font-semibold text-ink">登录 Peak 错题本</h1>
-        <p class="mt-1 text-sm text-ink-soft">登录后同步你的错题与复习进度</p>
+        <p class="mt-1 text-sm text-ink-soft">输入手机号，验证码登录；新手机号将自动创建账号</p>
       </div>
 
-      <!-- 表单骨架：登录接口就绪前仅作占位展示 -->
-      <form class="mt-8 space-y-4" @submit.prevent>
+      <form class="mt-8 space-y-4" @submit.prevent="handleLogin">
         <div>
-          <label for="login-username" class="block text-sm font-medium text-ink mb-1.5">用户名</label>
-          <input
-            id="login-username"
-            v-model="username"
-            type="text"
-            autocomplete="username"
-            placeholder="请输入用户名"
-            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-ink placeholder:text-ink-faint outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-shadow"
-          />
-        </div>
-        <div>
-          <label for="login-password" class="block text-sm font-medium text-ink mb-1.5">密码</label>
+          <label for="login-phone" class="block text-sm font-medium text-ink mb-1.5">手机号</label>
           <div class="relative">
+            <Smartphone class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
             <input
-              id="login-password"
-              v-model="password"
-              :type="showPassword ? 'text' : 'password'"
-              autocomplete="current-password"
-              placeholder="请输入密码"
-              class="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 bg-white text-sm text-ink placeholder:text-ink-faint outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-shadow"
+              id="login-phone"
+              v-model="phone"
+              type="tel"
+              maxlength="11"
+              autocomplete="tel"
+              placeholder="请输入 11 位手机号"
+              class="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-ink placeholder:text-ink-faint outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-shadow"
+              @input="errorMsg = ''"
             />
+          </div>
+          <p v-if="phone && !phoneValid" class="mt-1.5 text-xs text-red-600">手机号格式不正确</p>
+        </div>
+
+        <div>
+          <label for="login-code" class="block text-sm font-medium text-ink mb-1.5">验证码</label>
+          <div class="flex gap-2">
+            <div class="relative flex-1">
+              <ShieldCheck class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
+              <input
+                id="login-code"
+                v-model="code"
+                type="text"
+                inputmode="numeric"
+                maxlength="6"
+                autocomplete="one-time-code"
+                placeholder="6 位验证码"
+                class="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-ink placeholder:text-ink-faint outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-shadow"
+                @input="errorMsg = ''"
+              />
+            </div>
             <button
               type="button"
-              class="absolute inset-y-0 right-0 px-3 flex items-center text-ink-faint hover:text-ink-soft cursor-pointer"
-              :aria-label="showPassword ? '隐藏密码' : '显示密码'"
-              @click="showPassword = !showPassword"
+              class="shrink-0 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer disabled:cursor-not-allowed"
+              :class="canSend ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-slate-100 text-ink-faint cursor-not-allowed'"
+              :disabled="!canSend"
+              @click="handleSendCode"
             >
-              <EyeOff v-if="showPassword" class="w-4 h-4" />
-              <Eye v-else class="w-4 h-4" />
+              <Loader2 v-if="sending" class="w-4 h-4 animate-spin" />
+              <span v-else-if="countdown > 0">重新发送({{ countdown }}s)</span>
+              <span v-else>获取验证码</span>
             </button>
           </div>
         </div>
 
+        <p v-if="errorMsg" class="text-sm text-red-600">{{ errorMsg }}</p>
+
         <button
-          type="button"
-          class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-lg shadow-blue-500/25 hover:bg-primary-light transition-colors cursor-pointer"
-          @click="handleDemoLogin"
+          type="submit"
+          class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-lg shadow-blue-500/25 hover:bg-primary-light hover:-translate-y-0.5 transition-all duration-200 cursor-pointer disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none disabled:translate-y-0"
+          :disabled="!canLogin"
         >
-          <LogIn class="w-4 h-4" />
-          演示登录
+          <Loader2 v-if="loggingIn" class="w-4 h-4 animate-spin" />
+          <LogIn v-else class="w-4 h-4" />
+          登录
         </button>
       </form>
 
-      <div class="mt-6 flex items-start gap-2 p-3 rounded-xl bg-amber-50 text-amber-700">
-        <Info class="w-4 h-4 mt-0.5 shrink-0" />
-        <p class="text-xs leading-relaxed">
-          登录功能开发中：正式登录接口（user-service）就绪前，可点击「演示登录」体验已登录后的主页仪表盘。
-        </p>
+      <!-- 开发模式提示：mock 短信通道不真正发短信，展示验证码便于联调 -->
+      <div v-if="debugCode" class="mt-6 flex items-start gap-2 p-3 rounded-xl bg-amber-50 text-amber-700">
+        <ShieldCheck class="w-4 h-4 mt-0.5 shrink-0" />
+        <p class="text-xs leading-relaxed">开发模式验证码：{{ debugCode }}（mock 短信通道不发送真实短信）</p>
       </div>
     </div>
   </div>

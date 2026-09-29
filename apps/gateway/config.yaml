@@ -7,6 +7,10 @@ log:
 tracing:
   endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
 
+# 鉴权：JWT 密钥必须与 user-service 一致（经环境变量注入）。
+auth:
+  jwt_secret: "${JWT_SECRET:-peak-dev-secret}"
+
 # 路由前缀 -> 后端服务地址（可用环境变量覆盖，生产环境指向服务名）
 routes:
   /api/questions: "${QUESTION_SERVICE_URL:-http://localhost:8081}"

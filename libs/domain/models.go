@@ -7,13 +7,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// User 用户（预留，后续迭代实现完整逻辑）。
+// User 用户（手机验证码登录，未注册手机号首次登录自动注册）。
 type User struct {
 	ID        uint64         `gorm:"primaryKey" json:"id"`
 	Account   string         `gorm:"size:64;uniqueIndex" json:"account"`
+	Phone     string         `gorm:"size:16;uniqueIndex" json:"phone"`
 	Name      string         `gorm:"size:64" json:"name"`
-	ClassName string         `gorm:"size:64" json:"class_name"`
-	Grade     string         `gorm:"size:32" json:"grade"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`

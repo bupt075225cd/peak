@@ -6,12 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"peak/libs/auth"
 	"peak/libs/config"
 	"peak/libs/logger"
 )
+
+const testJWTSecret = "gw-test-secret"
 
 func mustLoad(t *testing.T, content string) *config.Loader {
 	t.Helper()
@@ -28,12 +32,34 @@ func mustLoad(t *testing.T, content string) *config.Loader {
 
 func setupGateway(t *testing.T, cfgContent string) *gin.Engine {
 	t.Helper()
+	if cfgContent == "" {
+		cfgContent = "auth:\n  jwt_secret: \"" + testJWTSecret + "\"\n"
+	}
 	gin.SetMode(gin.TestMode)
 	cfg := mustLoad(t, cfgContent)
 	gw := NewGateway(cfg, logger.NewNop())
 	r := gin.New()
 	gw.RegisterRoutes(r)
 	return r
+}
+
+// issueTestToken 签发测试用 JWT。
+func issueTestToken(t *testing.T, userID uint64) string {
+	t.Helper()
+	tok, err := auth.Issue(userID, testJWTSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	return tok
+}
+
+// requestWithToken 构造带 Bearer 令牌的请求。
+func requestWithToken(method, path, token string) *http.Request {
+	req := httptest.NewRequest(method, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req
 }
 
 func TestHealthz(t *testing.T) {
@@ -109,30 +135,81 @@ func TestCORS(t *testing.T) {
 	}
 }
 
-func TestAuthMiddlewareSetsUser(t *testing.T) {
+func TestAuthMiddlewareJWT(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	gw := NewGateway(mustLoad(t, ""), logger.NewNop())
+	gw := NewGateway(mustLoad(t, "auth:\n  jwt_secret: \""+testJWTSecret+"\"\n"), logger.NewNop())
 	r := gin.New()
-	// 仅注册 auth 中间件，观察其行为。
 	r.Use(gw.authMiddleware())
 	r.GET("/whoami", func(c *gin.Context) {
-		c.String(http.StatusOK, c.GetString("user_id"))
+		c.String(http.StatusOK, "%d", c.MustGet("user_id"))
 	})
 
-	// 无 X-User-Id -> mock 用户。
+	// 有效令牌 -> 解析出真实用户 ID。
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/whoami", nil))
-	if w.Body.String() != "mock-user-1" {
-		t.Fatalf("expected mock user, got %s", w.Body.String())
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/whoami", issueTestToken(t, 42)))
+	if w.Body.String() != "42" {
+		t.Fatalf("expected uid 42, got %s", w.Body.String())
 	}
 
-	// 带 X-User-Id -> 透传。
+	// 缺失令牌 -> 401。
 	w = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/whoami", nil)
-	req.Header.Set("X-User-Id", "user-42")
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/whoami", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", w.Code)
+	}
+
+	// 伪造令牌 -> 401。
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/whoami", "forged.token.here"))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with forged token, got %d", w.Code)
+	}
+
+	// 伪造的 X-User-Id 头应被覆盖为真实身份（而非透传）。
+	w = httptest.NewRecorder()
+	req := requestWithToken(http.MethodGet, "/whoami", issueTestToken(t, 7))
+	req.Header.Set("X-User-Id", "999999")
 	r.ServeHTTP(w, req)
-	if w.Body.String() != "user-42" {
-		t.Fatalf("expected user-42, got %s", w.Body.String())
+	if w.Body.String() != "7" {
+		t.Fatalf("forged X-User-Id should be overridden, got %s", w.Body.String())
+	}
+}
+
+func TestAuthMiddlewarePublicPaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, "auth:\n  jwt_secret: \""+testJWTSecret+"\"\n"), logger.NewNop())
+	r := gin.New()
+	r.Use(gw.authMiddleware())
+	r.GET("/api/users/auth/sms/code", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/metrics", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// 白名单路径无需令牌。
+	for _, path := range []string{"/api/users/auth/sms/code", "/healthz", "/metrics"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("public path %s: expected 200, got %d", path, w.Code)
+		}
+	}
+}
+
+func TestAuthMiddlewareInjectsRealIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, "auth:\n  jwt_secret: \""+testJWTSecret+"\"\n"), logger.NewNop())
+	r := gin.New()
+	_ = r.SetTrustedProxies(nil) // 与 RegisterRoutes 中的生产配置一致
+	r.Use(gw.authMiddleware())
+	r.GET("/ip", func(c *gin.Context) { c.String(http.StatusOK, c.Request.Header.Get("X-Real-IP")) })
+
+	// 外部伪造的 X-Real-IP 应被网关侧 ClientIP 覆盖。
+	w := httptest.NewRecorder()
+	req := requestWithToken(http.MethodGet, "/ip", issueTestToken(t, 1))
+	req.Header.Set("X-Real-IP", "6.6.6.6")
+	req.RemoteAddr = "192.168.1.50:12345"
+	r.ServeHTTP(w, req)
+	if w.Body.String() != "192.168.1.50" {
+		t.Fatalf("X-Real-IP = %s, want gateway ClientIP", w.Body.String())
 	}
 }
 
@@ -145,12 +222,11 @@ func TestProxyForwardsToBackend(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	content := "routes:\n  /api/questions: \"" + backend.URL + "\"\n"
+	content := "auth:\n  jwt_secret: \"" + testJWTSecret + "\"\nroutes:\n  /api/questions: \"" + backend.URL + "\"\n"
 	r := setupGateway(t, content)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/questions/1", nil)
+	req := requestWithToken(http.MethodGet, "/api/questions/1", issueTestToken(t, 7))
 	req.Header.Set("X-Trace-Id", "trace-xyz")
-	req.Header.Set("X-User-Id", "user-7")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -175,11 +251,11 @@ func TestProxyForwardsPrefixRoot(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	content := "routes:\n  /api/questions: \"" + backend.URL + "\"\n"
+	content := "auth:\n  jwt_secret: \"" + testJWTSecret + "\"\nroutes:\n  /api/questions: \"" + backend.URL + "\"\n"
 	r := setupGateway(t, content)
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/questions", nil))
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/questions", issueTestToken(t, 7)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 from backend, got %d", w.Code)
@@ -191,11 +267,11 @@ func TestProxyForwardsPrefixRoot(t *testing.T) {
 
 func TestProxyInvalidBackend(t *testing.T) {
 	// 非法 URL 应被跳过（不 panic），但需要保证日志可用。
-	content := "routes:\n  /api/bad: \"://bad url\"\n"
+	content := "auth:\n  jwt_secret: \"" + testJWTSecret + "\"\nroutes:\n  /api/bad: \"://bad url\"\n"
 	r := setupGateway(t, content)
 	w := httptest.NewRecorder()
-	// 该前缀不应注册，请求返回 404。
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/bad/x", nil))
+	// 该前缀不应注册，携带有效令牌的请求返回 404。
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/bad/x", issueTestToken(t, 1)))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for invalid backend, got %d", w.Code)
 	}

@@ -11,10 +11,15 @@ import {
   listMistakes,
   exportMistakes,
   parseContentDisposition,
+  sendSmsCode,
+  smsLogin,
+  authRequestInterceptor,
+  authResponseErrorInterceptor,
   type ApiResponse,
   type RecognitionTask,
   type Category,
 } from './index'
+import { logout, TOKEN_KEY } from '../composables/useAuth'
 
 // 模块加载时 api/index.ts 会调用 axios.create() 创建 http 实例，
 // 因此必须在 vi.mock 工厂里同步提供 create 的返回，确保加载即可用。
@@ -28,7 +33,11 @@ const { httpMethods } = vi.hoisted(() => ({
 
 vi.mock('axios', () => ({
   default: {
-    create: () => ({ ...httpMethods, defaults: { headers: { common: {} } } }),
+    create: () => ({
+      ...httpMethods,
+      interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      defaults: { headers: { common: {} } },
+    }),
   },
 }))
 
@@ -213,5 +222,38 @@ describe('api/index.ts', () => {
     expect(parseContentDisposition(undefined)).toBeNull()
     // 非法百分号编码不应抛出异常。
     expect(parseContentDisposition("attachment; filename*=UTF-8''%E4%B8")).toBeNull()
+  })
+})
+
+describe('api/index.ts 鉴权拦截器', () => {
+  beforeEach(() => {
+    logout()
+  })
+
+  it('authRequestInterceptor 为请求注入 Bearer 令牌', () => {
+    localStorage.setItem(TOKEN_KEY, 'jwt-abc')
+    const config = { headers: {} as Record<string, string> }
+    const res = authRequestInterceptor(config as never)
+    expect((res.headers as Record<string, string>).Authorization).toBe('Bearer jwt-abc')
+  })
+
+  it('authRequestInterceptor 未登录时不注入 Authorization', () => {
+    const config = { headers: {} as Record<string, string> }
+    const res = authRequestInterceptor(config as never)
+    expect((res.headers as Record<string, string>).Authorization).toBeUndefined()
+  })
+
+  it('authResponseErrorInterceptor 对 401 清除登录态并跳转登录页', async () => {
+    localStorage.setItem(TOKEN_KEY, 'jwt-abc')
+    const err = { response: { status: 401 } }
+    await expect(authResponseErrorInterceptor(err)).rejects.toBe(err)
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+
+  it('authResponseErrorInterceptor 对其他错误原样透传', async () => {
+    localStorage.setItem(TOKEN_KEY, 'jwt-abc')
+    const err = { response: { status: 500 } }
+    await expect(authResponseErrorInterceptor(err)).rejects.toBe(err)
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('jwt-abc')
   })
 })

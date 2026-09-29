@@ -2,9 +2,9 @@ import { ref, readonly } from 'vue'
 
 // 登录令牌在 localStorage 中的键名。
 //
-// 登录页（待开发）完成后，只需调用 login(token) 写入同一键即可接管登录态；
-// 若后续切换为服务端会话校验（如 /auth/me），仅需替换本模块实现。
-const TOKEN_KEY = 'peak_token'
+// 登录成功后调用 login(token) 写入；api 层的请求拦截器从同一键读取
+// 并注入 Authorization 头，网关校验 JWT 后注入真实用户身份。
+export const TOKEN_KEY = 'peak_token'
 
 // 模块级单例：所有组件共享同一登录态，一处变更全局生效。
 const isLoggedIn = ref(readToken())

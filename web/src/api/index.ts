@@ -1,19 +1,87 @@
 import axios from 'axios'
+import { TOKEN_KEY, logout } from '../composables/useAuth'
 
 const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
 })
 
-// 当前鉴权为预留实现，网关注入 mock 用户；前端也统一带 mock 用户 ID，
-// 保证 listMistakes 等按用户维度查询的接口能取到数据。
-http.defaults.headers.common['X-User-Id'] = '1'
+// 请求拦截器：注入 Bearer 令牌；用户身份由网关校验 JWT 后注入，
+// 前端不再直接携带 X-User-Id。
+export function authRequestInterceptor(config: import('axios').InternalAxiosRequestConfig) {
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+}
+
+// 401 统一处理：清除登录态并跳转登录页（避免重复跳转）。
+export async function authResponseErrorInterceptor(error: unknown) {
+  const status = (error as { response?: { status?: number } })?.response?.status
+  if (status === 401) {
+    logout()
+    const { default: router } = await import('../router')
+    if (router.currentRoute.value.path !== '/login') {
+      await router.push('/login')
+    }
+  }
+  return Promise.reject(error)
+}
+
+http.interceptors.request.use(authRequestInterceptor)
+http.interceptors.response.use((res) => res, authResponseErrorInterceptor)
 
 // 统一响应结构。
 export interface ApiResponse<T = unknown> {
   code: number
   message: string
   data?: T
+}
+
+// 发送验证码结果：ticket 供登录携带，debugCode 仅开发模式返回。
+export interface SendCodeResult {
+  ticket: string
+  debugCode?: string
+}
+
+// 登录用户信息。
+export interface User {
+  id: number
+  account: string
+  phone: string
+  name: string
+}
+
+// 发送短信验证码（mock 通道，验证码记录在 user-service 日志）。
+export async function sendSmsCode(phone: string): Promise<SendCodeResult> {
+  const { data } = await http.post<ApiResponse<{ ticket: string; debug_code?: string }>>(
+    '/users/auth/sms/code',
+    { phone },
+  )
+  const d = data.data as { ticket: string; debug_code?: string }
+  return { ticket: d.ticket, debugCode: d.debug_code }
+}
+
+// 手机验证码登录（未注册手机号自动注册），成功返回 JWT 与用户信息。
+export async function smsLogin(phone: string, code: string, ticket: string): Promise<{ token: string; user: User }> {
+  const { data } = await http.post<ApiResponse<{ token: string; user: User }>>(
+    '/users/auth/sms/login',
+    { phone, code, ticket },
+  )
+  return data.data as { token: string; user: User }
+}
+
+// 查询当前登录用户信息（身份由网关从 JWT 注入）。
+export async function getMe(): Promise<User> {
+  const { data } = await http.get<ApiResponse<User>>('/users/me')
+  return data.data as User
+}
+
+// 修改当前用户昵称，返回更新后的用户信息。
+export async function updateMyName(name: string): Promise<User> {
+  const { data } = await http.put<ApiResponse<User>>('/users/me', { name })
+  return data.data as User
 }
 
 // 识别任务。

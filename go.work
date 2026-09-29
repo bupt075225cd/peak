@@ -7,6 +7,7 @@ use (
 	./apps/question-service
 	./apps/recognition-service
 	./apps/user-service
+	./libs/auth
 	./libs/config
 	./libs/domain
 	./libs/errors

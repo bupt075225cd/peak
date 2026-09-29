@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+# 构建阶段：Go workspace 多模块，需在仓库根目录构建
+FROM golang:1.24-alpine AS builder
+
+# 国内镜像加速
+ENV GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct \
+    GOSUMDB=off \
+    GOTOOLCHAIN=local \
+    CGO_ENABLED=0
+
+WORKDIR /build
+
+# 先拷贝 go.work 与模块定义，充分利用依赖缓存
+COPY go.work go.work.sum ./
+COPY libs/ ./libs/
+COPY apps/ ./apps/
+
+# 构建 user-service（从 workspace 根目录；挂载持久缓存，失败重试不重复下载依赖）
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd apps/user-service && go build -ldflags="-s -w" -o /out/user-service .
+
+# 运行阶段：精简镜像
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 10001 app
+
+USER app
+
+COPY --from=builder /out/user-service /app/user-service
+COPY apps/user-service/config.yaml /app/config.yaml
+
+WORKDIR /app
+
+EXPOSE 8083
+
+ENTRYPOINT ["/app/user-service"]

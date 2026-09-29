@@ -4,11 +4,15 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"peak/libs/auth"
 	"peak/libs/config"
+	bizerr "peak/libs/errors"
 	httpx "peak/libs/http"
 	"peak/libs/logger"
 )
@@ -46,6 +50,15 @@ func NewGateway(cfg *config.Loader, log *logger.Logger) *Gateway {
 
 // RegisterRoutes 注册网关路由。
 func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
+	// 网关为最外层入口：默认不信任任何代理头（X-Forwarded-For/X-Real-IP），
+	// 防止客户端伪造来源 IP 绕过限频；若上游还有可信反代（如 nginx），
+	// 通过 auth.trusted_proxies 配置其地址段。
+	if tp := g.cfg.String("auth.trusted_proxies", ""); tp != "" {
+		_ = engine.SetTrustedProxies(strings.Split(tp, ","))
+	} else {
+		_ = engine.SetTrustedProxies(nil)
+	}
+
 	engine.GET("/healthz", func(c *gin.Context) {
 		httpx.OK(c, gin.H{"status": "ok"})
 	})
@@ -62,16 +75,62 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 	}
 }
 
-// authMiddleware 预留鉴权：当前放行并写入 mock 用户，后续校验 JWT。
-func (g *Gateway) authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 预留：从 Authorization 头解析用户，当前使用 mock 用户。
-		userID := c.GetHeader("X-User-Id")
-		if userID == "" {
-			userID = "mock-user-1"
+// 公开路径白名单：登录/发码接口与健康检查不要求 JWT。
+var publicPrefixes = []string{
+	"/api/users/auth/", // 发码与验证码登录
+	"/healthz",
+	"/metrics",
+}
+
+// isPublicPath 判断路径是否在鉴权白名单内。
+func isPublicPath(path string) bool {
+	for _, p := range publicPrefixes {
+		if strings.HasPrefix(path, p) {
+			return true
 		}
-		c.Set("user_id", userID)
-		c.Request.Header.Set("X-User-Id", userID)
+	}
+	// 精确匹配（无尾随子路径）。
+	return path == "/healthz" || path == "/metrics"
+}
+
+// authMiddleware JWT 鉴权：校验 Authorization: Bearer，以真实 user_id
+// 覆盖 X-User-Id 透传给后端服务；白名单路径放行，其余未登录返回 401。
+// 同时为所有请求注入 X-Real-IP（取网关侧 ClientIP），供后端限流使用——
+// 后端只信任网关注入值，外部直传的该头会在代理前被覆盖。
+func (g *Gateway) authMiddleware() gin.HandlerFunc {
+	secret := g.cfg.String("auth.jwt_secret", "")
+	return func(c *gin.Context) {
+		// 客户端真实 IP：网关是唯一可信入口，覆盖外部传入的头。
+		c.Request.Header.Set("X-Real-IP", c.ClientIP())
+
+		if isPublicPath(c.Request.URL.Path) {
+			// 已登录用户访问公开接口时仍解析身份（尽力而为，失败不阻断）。
+			if h := c.GetHeader("Authorization"); h != "" {
+				if uid, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret); err == nil {
+					c.Set("user_id", uid)
+					c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
+				}
+			}
+			c.Next()
+			return
+		}
+
+		h := c.GetHeader("Authorization")
+		if h == "" {
+			httpx.Fail(c, bizerr.New(bizerr.CodeUnauthorized, "未登录或令牌缺失"))
+			c.Abort()
+			return
+		}
+		uid, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret)
+		if err != nil || uid == 0 {
+			g.log.Warn("invalid token", zap.String("path", c.Request.URL.Path), zap.Error(err))
+			httpx.Fail(c, bizerr.New(bizerr.CodeUnauthorized, "未登录或令牌已过期"))
+			c.Abort()
+			return
+		}
+		// 以真实身份覆盖 X-User-Id（含外部伪造值），后端服务零改动获得用户隔离。
+		c.Set("user_id", uid)
+		c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
 		c.Next()
 	}
 }
@@ -88,12 +147,9 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	handler := func(c *gin.Context) {
-		// 透传 traceID 与用户信息。
+		// 透传 traceID；用户身份（X-User-Id/X-Real-IP）已由鉴权中间件写入请求头。
 		if tid := c.GetString("trace_id"); tid != "" {
 			c.Request.Header.Set("X-Trace-Id", tid)
-		}
-		if uid := c.GetString("user_id"); uid != "" {
-			c.Request.Header.Set("X-User-Id", uid)
 		}
 		// gin 的 ResponseWriter 未实现 http.CloseNotifier，
 		// 通过适配器补齐以兼容 httputil.ReverseProxy。

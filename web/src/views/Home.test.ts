@@ -10,7 +10,13 @@ const { httpMethods } = vi.hoisted(() => ({
 }))
 
 vi.mock('axios', () => ({
-  default: { create: () => ({ ...httpMethods, defaults: { headers: { common: {} } } }) },
+  default: {
+    create: () => ({
+      ...httpMethods,
+      interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      defaults: { headers: { common: {} } },
+    }),
+  },
 }))
 
 function buildRouter() {

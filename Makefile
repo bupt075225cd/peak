@@ -27,11 +27,15 @@ PEAK_BIN := $(PEAK_RUN)/bin
 PEAK_DATA := $(PEAK_RUN)/data
 QUESTION_DIR := $(CURDIR)/apps/question-service
 RECOGNITION_DIR := $(CURDIR)/apps/recognition-service
+USER_DIR := $(CURDIR)/apps/user-service
 GATEWAY_DIR := $(CURDIR)/apps/gateway
 # recognition-service 默认用 aliyun provider，可覆盖：make run-sqlite RECOGNITION_PROVIDER=mock
 RECOGNITION_PROVIDER ?= aliyun
 # 几何重绘开关（内置 Go 渲染器，置空禁用：make run-sqlite GEOMETRY_ENABLED=false）
 GEOMETRY_ENABLED ?= true
+# 认证配置：JWT 密钥网关与 user-service 须一致；超级验证码仅开发模式生效
+JWT_SECRET ?= peak-dev-secret
+AUTH_MASTER_CODE ?= false
 
 ## 静态检查：Go vet + 前端 vue-tsc 类型检查
 check:
@@ -101,7 +105,7 @@ watch:
 
 # 停止记录的调测进程（按 .pid 文件，不误杀编译进程）
 define stop-sqlite-proc
-	@for f in question recognition gateway; do \
+	@for f in question recognition user gateway; do \
 		pidf=$(PEAK_RUN)/$$f.pid; \
 		if [ -f "$$pidf" ]; then \
 			pid=$$(cat "$$pidf" 2>/dev/null); \
@@ -111,10 +115,11 @@ define stop-sqlite-proc
 	done
 endef
 
-## 本地 SQLite 调测：编译并以 sqlite 空库启动全部服务（gateway/question/recognition）
+## 本地 SQLite 调测：编译并以 sqlite 空库启动全部服务（gateway/question/recognition/user）
 ## 用法：
 ##   make run-sqlite              默认启动（recognition 用 aliyun provider）
 ##   make run-sqlite RECOGNITION_PROVIDER=mock   用 mock 识别，无需 API Key
+##   make run-sqlite AUTH_MASTER_CODE=true       开发模式超级验证码 000000
 ##   make stop-sqlite             停止全部服务并清空数据
 run-sqlite:
 	@mkdir -p $(PEAK_BIN) $(PEAK_DATA)
@@ -124,14 +129,16 @@ run-sqlite:
 	go build -o $(PEAK_BIN)/gateway ./apps/gateway
 	go build -o $(PEAK_BIN)/question-service ./apps/question-service
 	go build -o $(PEAK_BIN)/recognition-service ./apps/recognition-service
+	go build -o $(PEAK_BIN)/user-service ./apps/user-service
 	@echo "==> 启动服务（sqlite 空库）"
 	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db STORAGE_ROOT=$(PEAK_DATA)/storage nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
 	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db STORAGE_ROOT=$(PEAK_DATA)/storage RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
-	cd $(GATEWAY_DIR) && exec nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
+	cd $(USER_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/user.db JWT_SECRET=$(JWT_SECRET) AUTH_MASTER_CODE=$(AUTH_MASTER_CODE) nohup $(PEAK_BIN)/user-service > $(PEAK_RUN)/user.log 2>&1 & echo $$! > $(PEAK_RUN)/user.pid
+	cd $(GATEWAY_DIR) && exec env JWT_SECRET=$(JWT_SECRET) nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
 	@sleep 2
-	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082"
-	@echo "  日志: $(PEAK_RUN)/{gateway,question,recognition}.log"
-	@echo "  数据库(空库): $(PEAK_DATA)/{question,recognition}.db"
+	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082  user=:8083"
+	@echo "  日志: $(PEAK_RUN)/{gateway,question,recognition,user}.log"
+	@echo "  数据库(空库): $(PEAK_DATA)/{question,recognition,user}.db"
 
 ## 停止本地 SQLite 调测服务并清空数据目录
 stop-sqlite:
@@ -139,7 +146,7 @@ stop-sqlite:
 	$(stop-sqlite-proc)
 	@sleep 1
 	@rm -rf $(PEAK_DATA)
-	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/gateway.log
+	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/user.log $(PEAK_RUN)/gateway.log
 	@echo "✓ 已停止并清空 $(PEAK_RUN)/data 与日志"
 
 .PHONY: check build test coverage-gate ci watch install-tools run-sqlite stop-sqlite

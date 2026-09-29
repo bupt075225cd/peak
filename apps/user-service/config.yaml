@@ -2,4 +2,19 @@ server:
   port: "8083"
 
 log:
-  development: true
+  development: ${LOG_DEV:-true}
+
+# 数据库（本地免 MySQL 调测可用 sqlite）。
+database:
+  dialect: "${DB_DIALECT:-sqlite}"
+  dsn: "${DB_DSN:-./data/user.db}"
+
+# 认证配置：JWT 密钥与令牌有效期；secret 必须与 gateway 一致。
+auth:
+  jwt_secret: "${JWT_SECRET:-peak-dev-secret}"
+  token_ttl: "${AUTH_TOKEN_TTL:-168h}"     # 默认 7 天
+  master_code: ${AUTH_MASTER_CODE:-false}  # 超级验证码开关，仅开发模式生效
+
+# 短信发送：provider 仅支持 mock（真实短信下一迭代接入）。
+sms:
+  provider: "mock"
