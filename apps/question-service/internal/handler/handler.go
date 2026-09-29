@@ -28,13 +28,14 @@ const committedPrefix = "committed/"
 
 // Handler HTTP 处理器。
 type Handler struct {
-	svc   *service.Service
-	store storage.FileStorage
+	svc    *service.Service
+	store  storage.FileStorage
+	copier *storage.Copier
 }
 
-// New 创建处理器实例。
-func New(svc *service.Service, store storage.FileStorage) *Handler {
-	return &Handler{svc: svc, store: store}
+// New 创建处理器实例。copier 负责提交时的 transient/ -> committed/ 跨桶拷贝。
+func New(svc *service.Service, store storage.FileStorage, copier *storage.Copier) *Handler {
+	return &Handler{svc: svc, store: store, copier: copier}
 }
 
 // RegisterRoutes 注册路由。
@@ -88,7 +89,7 @@ func (h *Handler) createQuestion(c *gin.Context) {
 	}
 	// 提交错题 = 把识别产物从临时区晋升为正式区：拷贝 transient/<key> ->
 	// committed/<key>，并把 questions.image 中的引用改写为正式 key。
-	// 拷贝使用 Get+Put，兼容本地磁盘与任意 S3 兼容存储。
+	// 拷贝由 Copier 完成：S3 后端走服务端 CopyObject（跨桶），本地走目录间复制。
 	if q.Image != "" {
 		committed, err := h.promoteImageRefs(c.Request.Context(), q.Image)
 		if err != nil {
@@ -324,12 +325,8 @@ func (h *Handler) promoteImageRefs(ctx context.Context, imageJSON string) (strin
 			continue
 		}
 		dst := committedPrefix + strings.TrimPrefix(r.Key, transientPrefix)
-		data, err := h.store.Get(ctx, r.Key)
-		if err != nil {
-			return "", fmt.Errorf("read transient %q: %w", r.Key, err)
-		}
-		if err := h.store.Put(ctx, dst, data); err != nil {
-			return "", fmt.Errorf("write committed %q: %w", dst, err)
+		if err := h.copier.Copy(ctx, r.Key, dst); err != nil {
+			return "", fmt.Errorf("copy %q -> %q: %w", r.Key, dst, err)
 		}
 		refs[i].Key = dst
 		changed = true

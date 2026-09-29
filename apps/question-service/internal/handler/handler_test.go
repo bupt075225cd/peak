@@ -50,7 +50,7 @@ func setupHandlerWithStorage(t *testing.T, store storage.FileStorage, exporter e
 	}
 	repos := repository.NewGormRepositories(db)
 	svc := service.New(repos, exporter)
-	h := New(svc, store)
+	h := New(svc, store, storage.NewCopier(store, store, ""))
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

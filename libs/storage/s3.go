@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -181,6 +184,30 @@ func (s *S3Storage) PresignedURL(ctx context.Context, key string, expire time.Du
 		return "", err
 	}
 	return req.URL, nil
+}
+
+// CopyFrom 通过服务端 CopyObject 把 srcBucket/srcKey 拷贝到本桶 dstKey，
+// 数据不经过应用进程，适合跨桶提交拷贝等场景。
+func (s *S3Storage) CopyFrom(ctx context.Context, srcBucket, srcKey, dstKey string) error {
+	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.bucket),
+		Key:        aws.String(dstKey),
+		CopySource: aws.String(copySource(srcBucket, srcKey)),
+	})
+	if err != nil {
+		return fmt.Errorf("s3 copy %s/%s -> %s: %w", srcBucket, srcKey, dstKey, err)
+	}
+	return nil
+}
+
+// copySource 构造 CopyObject 的 CopySource 值："bucket/key"，
+// 桶名与 key 各段分别 URL 编码（保留 "/" 分隔符）。
+func copySource(bucket, key string) string {
+	segs := strings.Split(key, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return url.PathEscape(bucket) + "/" + strings.Join(segs, "/")
 }
 
 // isNotFound 判断 S3 错误是否为对象不存在。

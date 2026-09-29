@@ -8,17 +8,25 @@ tracing:
   endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
 
 storage:
-  # 与 recognition-service 指向同一存储/桶：读取 committed/ 正式区、执行提交拷贝
+  # question-service 使用专属桶/目录存放 committed/ 正式区；
+  # recognition-service 的桶为源（见 storage.source），提交时跨桶对象拷贝。
   type: "${STORAGE_TYPE:-local}"
-  root: "${STORAGE_ROOT:-./data}"
+  root: "${STORAGE_ROOT:-./data}"  # 本地存储根目录（本服务专属）
   s3:
     endpoint: "${S3_ENDPOINT:-}"
     region: "${S3_REGION:-us-east-1}"
     access_key: "${S3_ACCESS_KEY:-}"
-    secret_key: "${S3_SECRET_KEY:-}"
-    bucket: "${S3_BUCKET:-peak}"
+    secret_key: "${S3_SECRET_KEY:-}"  # 生产环境通过 .env/Secret 注入，勿提交仓库
+    bucket: "${S3_BUCKET:-peak-question}"
     use_ssl: "${S3_USE_SSL:-false}"
     path_style: "${S3_PATH_STYLE:-false}"
+  source:
+    # 源存储 = recognition-service 的存储（transient/ 临时区）。
+    # S3 后端提交拷贝走服务端 CopyObject，仅需要源桶名；
+    # local 后端回退为跨目录复制，root 指向 recognition-service 的数据目录。
+    root: "${STORAGE_SOURCE_ROOT:-./data}"
+    s3:
+      bucket: "${S3_SOURCE_BUCKET:-peak-recognition}"  # 与 recognition-service 的 S3_BUCKET 一致
 
 database:
   dialect: "${DB_DIALECT:-mysql}"  # mysql / postgres / sqlite

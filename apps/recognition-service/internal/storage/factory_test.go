@@ -104,7 +104,7 @@ func TestS3ConfigFromDefaults(t *testing.T) {
 	if got.Endpoint != "" {
 		t.Fatalf("Endpoint = %q, want empty", got.Endpoint)
 	}
-	if got.Bucket != "peak" {
+	if got.Bucket != "peak-recognition" {
 		t.Fatalf("Bucket = %q", got.Bucket)
 	}
 	if got.PathStyle {

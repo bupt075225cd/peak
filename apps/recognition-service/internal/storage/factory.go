@@ -52,7 +52,7 @@ func s3ConfigFrom(cfg *config.Loader) libsstorage.Config {
 		// 凭证为空时回退 SDK 默认链（环境变量/实例角色，适合 K8s IRSA 等场景）。
 		AccessKey: cfg.String("storage.s3.access_key", ""),
 		SecretKey: cfg.String("storage.s3.secret_key", ""),
-		Bucket:    cfg.String("storage.s3.bucket", "peak"),
+		Bucket:    cfg.String("storage.s3.bucket", "peak-recognition"),
 		UseSSL:    cfg.Bool("storage.s3.use_ssl", false),
 		// AWS S3/OSS 走虚拟主机风格；Ceph/MinIO 等自建服务部署时显式置 true。
 		PathStyle: cfg.Bool("storage.s3.path_style", false),

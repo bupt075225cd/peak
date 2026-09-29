@@ -54,9 +54,9 @@ func main() {
 		panic(err)
 	}
 
-	// 初始化存储（与 recognition-service 共用同一存储与桶：负责 committed/ 正式区
-	// 的读取与 transient/ -> committed/ 的提交拷贝）。
-	store, err := newStorage(cfg)
+	// 初始化存储：question-service 使用专属桶/目录存放 committed/ 正式区；
+	// recognition-service 的桶作为源，提交拷贝走对象存储的服务端 CopyObject。
+	store, copier, err := newStorage(cfg)
 	if err != nil {
 		panic(err)
 	}
@@ -70,7 +70,7 @@ func main() {
 		panic(err)
 	}
 	svc := service.New(repos, exporter)
-	h := handler.New(svc, store)
+	h := handler.New(svc, store, copier)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()
@@ -107,22 +107,54 @@ func exportConfig(cfg *config.Loader) export.Config {
 	return ec
 }
 
-// newStorage 按配置创建存储后端：storage.type 为 "s3" 时返回 S3 兼容存储，
-// 否则（含空值）回退本地磁盘（storage.root）。与 recognition-service 的
-// 配置口径一致，两端必须指向同一存储/桶。
-func newStorage(cfg *config.Loader) (storage.FileStorage, error) {
+// newStorage 按配置创建存储后端与跨桶拷贝器：storage.type 为 "s3" 时返回
+// S3 兼容存储，否则（含空值）回退本地磁盘（storage.root）。
+//
+// 目标存储使用本服务专属桶（storage.s3.bucket，存放 committed/ 正式区）；
+// 源存储指向 recognition-service 的桶（storage.source.s3.bucket，transient/
+// 临时区）。S3 后端的提交拷贝通过服务端 CopyObject 跨桶完成（Copier 使用
+// 目标存储客户端 + 源桶名，源桶需与目标桶在同一 Endpoint 下且凭证可读）；
+// 本地后端回退为跨目录复制，源目录由 storage.source.root 指定。
+func newStorage(cfg *config.Loader) (storage.FileStorage, *storage.Copier, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.String("storage.type", "local"))) {
 	case "s3":
-		return storage.NewS3Storage(storage.Config{
+		store, err := storage.NewS3Storage(storage.Config{
 			Endpoint:  cfg.String("storage.s3.endpoint", ""),
 			Region:    cfg.String("storage.s3.region", "us-east-1"),
 			AccessKey: cfg.String("storage.s3.access_key", ""),
 			SecretKey: cfg.String("storage.s3.secret_key", ""),
-			Bucket:    cfg.String("storage.s3.bucket", "peak"),
+			Bucket:    cfg.String("storage.s3.bucket", "peak-question"),
 			UseSSL:    cfg.Bool("storage.s3.use_ssl", false),
 			PathStyle: cfg.Bool("storage.s3.path_style", false),
 		})
+		if err != nil {
+			return nil, nil, err
+		}
+		// 源桶与目标桶共用同一 Endpoint/凭证（不同桶名）；源存储仅作为
+		// Copier 的回退路径（S3 目标存储实现 ObjectCopier，一般不会用到）。
+		src, err := storage.NewS3Storage(storage.Config{
+			Endpoint:  cfg.String("storage.s3.endpoint", ""),
+			Region:    cfg.String("storage.s3.region", "us-east-1"),
+			AccessKey: cfg.String("storage.s3.access_key", ""),
+			SecretKey: cfg.String("storage.s3.secret_key", ""),
+			Bucket:    cfg.String("storage.source.s3.bucket", "peak-recognition"),
+			UseSSL:    cfg.Bool("storage.s3.use_ssl", false),
+			PathStyle: cfg.Bool("storage.s3.path_style", false),
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		srcBucket := cfg.String("storage.source.s3.bucket", "peak-recognition")
+		return store, storage.NewCopier(store, src, srcBucket), nil
 	default:
-		return storage.NewLocalStorage(cfg.String("storage.root", "./data"))
+		store, err := storage.NewLocalStorage(cfg.String("storage.root", "./data"))
+		if err != nil {
+			return nil, nil, err
+		}
+		src, err := storage.NewLocalStorage(cfg.String("storage.source.root", "./data"))
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, storage.NewCopier(store, src, ""), nil
 	}
 }

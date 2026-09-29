@@ -278,6 +278,17 @@ geometry:
 
 > `S3Storage` 已通过 AWS SDK Go v2 统一实现，后续迁移到阿里云 OSS、AWS S3、MinIO 等只需修改 `Endpoint` 与 `PathStyle` 配置，无需改动代码。
 
+### 双桶隔离与跨桶提交拷贝
+
+recognition-service 与 question-service 各自使用一个专属桶：
+
+- **recognition 桶**（`S3_RECOGNITION_BUCKET`，默认 `peak-recognition`）：存放 `transient/` 临时区（识别原图、重绘 SVG），由对象存储生命周期规则定期清理；
+- **question 桶**（`S3_QUESTION_BUCKET`，默认 `peak-question`）：存放 `committed/` 正式区（已提交错题的配图），导出/文件访问只读本桶。
+
+提交错题时（`transient/` → `committed/`），由 `storage.Copier` 完成跨桶拷贝：
+S3 后端走对象存储**服务端 CopyObject**（数据不经过应用进程，需同一 Endpoint 下
+凭证可读源桶）；本地磁盘后端回退为跨目录复制（源目录 `STORAGE_SOURCE_ROOT`）。
+
 ## 错题导出（PDF / Word）
 
 错题列表页支持勾选导出，未勾选时导出当前筛选（学科 + 关键词）结果。
@@ -326,16 +337,27 @@ recognition-service（错题原图、重绘 SVG 等文件的存储位置）支�
 | `S3_ENDPOINT` | —（s3 时必填） | 第三方 S3 兼容服务地址，需含协议前缀（阿里云 OSS / AWS S3 / Ceph 等） |
 | `S3_REGION` | `us-east-1` | 区域（OSS 用实际区域，如 cn-hangzhou） |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | —（s3 时必填） | 访问凭证；为空时回退 SDK 默认链（实例角色等） |
-| `S3_BUCKET` | `peak` | 桶名（需已在第三方服务上创建） |
+| `S3_BUCKET` | `peak-recognition` | 桶名（需已在第三方服务上创建；生产编排取 `S3_RECOGNITION_BUCKET`） |
 | `S3_USE_SSL` | `false` | 是否 HTTPS（endpoint 已含协议前缀时可省略） |
 | `S3_PATH_STYLE` | `false` | AWS S3/OSS 用虚拟主机风格；Ceph/MinIO 等自建服务置 `true` |
+
+双桶相关（question-service 侧）：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `S3_QUESTION_BUCKET` | `peak-question` | question-service 专属桶（`committed/` 正式区） |
+| `S3_RECOGNITION_BUCKET` | `peak-recognition` | recognition-service 专属桶（`transient/` 临时区），提交拷贝的源 |
+| `S3_SOURCE_BUCKET` | `peak-recognition` | question-service 配置的源桶名，须与 `S3_RECOGNITION_BUCKET` 一致 |
+| `STORAGE_SOURCE_ROOT` | `./data` | local 后端回退复制的源目录（recognition-service 的数据目录） |
 
 约定：
 
 - **本地调试**：不注入任何变量，默认 local（`./data`），零配置可跑。
 - **Docker/K8s 部署**：使用**外部第三方 S3 兼容对象存储**（不在编排内自建 MinIO），
-  通过 `.env` 或部署环境注入 `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`；
-  生产编排缺少必填变量会在启动前直接报错，避免误用本地盘。
+  通过 `.env` 或部署环境注入 `S3_ENDPOINT`/`S3_RECOGNITION_BUCKET`/`S3_QUESTION_BUCKET`/
+  `S3_ACCESS_KEY`/`S3_SECRET_KEY`；生产编排缺少必填变量会在启动前直接报错，避免误用本地盘。
+- **跨桶权限**：question-service 需能对 recognition 桶执行读取（CopyObject 源），
+  两桶须在同一 Endpoint 下（同一账号或已授权跨账号读取）。
 
 详细部署流程（配置注入、敏感信息管理、健康检查、回滚、前端部署）见 [`deploy/README.md`](deploy/README.md)。
 

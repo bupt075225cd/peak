@@ -13,6 +13,8 @@ database:
 
 storage:
   # 存储后端类型：local（本地磁盘，默认，适合本地调试）/ s3（S3 兼容对象存储，适合 Docker/K8s 部署）。
+  # 本服务使用专属桶存放 transient/ 临时区；question-service 使用自己的桶存放
+  # committed/ 正式区，提交拷贝由其通过对象存储服务端 CopyObject 跨桶完成。
   type: "${STORAGE_TYPE:-local}"
   # local 后端的存储根目录。
   root: "${STORAGE_ROOT:-./data}"  # 本地存储根目录
@@ -22,9 +24,10 @@ storage:
     region: "${S3_REGION:-us-east-1}"  # OSS/S3 用实际区域
     access_key: "${S3_ACCESS_KEY:-}"
     secret_key: "${S3_SECRET_KEY:-}"  # 生产环境通过 .env/Secret 注入，勿提交仓库
-    bucket: "${S3_BUCKET:-peak}"
+    bucket: "${S3_BUCKET:-peak-recognition}"
     use_ssl: "${S3_USE_SSL:-false}"
     path_style: "${S3_PATH_STYLE:-false}"  # AWS S3/OSS 用虚拟主机风格；Ceph/MinIO 等置 true
+    # 凭证需同时允许 question-service 对本桶的跨桶读取（CopyObject 源）。
     # transient/ 临时区的清理使用对象存储生命周期规则（按前缀+对象年龄过期），
     # 应用层不做周期 GC；建议规则：前缀 transient/，对象创建 1 天后过期。
 

@@ -21,6 +21,15 @@ type FileStorage interface {
 	PresignedURL(ctx context.Context, key string, expire time.Duration) (string, error)
 }
 
+// ObjectCopier 支持跨桶/跨区域对象拷贝的可选扩展接口。
+// S3Storage 通过服务端 CopyObject 实现（数据不经过应用进程）；
+// LocalStorage 不实现该接口，由调用方回退为源读+目标写。
+type ObjectCopier interface {
+	// CopyFrom 把 srcBucket/srcKey 处的对象拷贝到本存储的 dstKey。
+	// 源桶与本存储必须可由同一 Endpoint/凭证访问。
+	CopyFrom(ctx context.Context, srcBucket, srcKey, dstKey string) error
+}
+
 // ErrNotFound 对象不存在。
 var ErrNotFound = &NotFoundError{}
 

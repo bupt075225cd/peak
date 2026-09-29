@@ -29,7 +29,10 @@ services:
 
   # ── 后端服务 ────────────────────────────────────────────
   # 对象存储使用外部第三方 S3 兼容服务（阿里云 OSS / AWS S3 / Ceph 等），
-  # 不在本编排内自建；连接参数通过 S3_* 环境变量注入（见 recognition-service）。
+  # 不在本编排内自建。双桶隔离：recognition-service 用 S3_RECOGNITION_BUCKET
+  # （transient/ 临时区），question-service 用 S3_QUESTION_BUCKET（committed/
+  # 正式区），提交拷贝通过对象存储服务端 CopyObject 跨桶完成；
+  # 连接参数通过 S3_* 环境变量注入。
   gateway:
     build:
       context: .
@@ -65,13 +68,16 @@ services:
       LOG_DEV: "false"
       DB_DIALECT: "mysql"
       DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
-      # 与 recognition-service 共用同一存储：负责 committed/ 正式区读取与提交拷贝
+      # 专属桶存放 committed/ 正式区；transient/ -> committed/ 提交拷贝
+      # 通过对象存储服务端 CopyObject 从 recognition 桶跨桶完成
       STORAGE_TYPE: "s3"
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
-      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_BUCKET: ${S3_QUESTION_BUCKET:?S3_QUESTION_BUCKET is required}
+      # 源桶 = recognition-service 的桶（transient/ 临时区），需与目标桶同一 Endpoint
+      S3_SOURCE_BUCKET: ${S3_RECOGNITION_BUCKET:?S3_RECOGNITION_BUCKET is required}
       S3_USE_SSL: ${S3_USE_SSL:-}
       S3_PATH_STYLE: ${S3_PATH_STYLE:-false}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
@@ -93,13 +99,15 @@ services:
       DB_DIALECT: "mysql"
       DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
       # 部署使用第三方 S3 兼容对象存储（阿里云 OSS / AWS S3 / Ceph 等），
-      # 连接参数通过 .env 或部署环境注入，必需：S3_ENDPOINT / S3_BUCKET / 凭证。
+      # 连接参数通过 .env 或部署环境注入，必需：S3_ENDPOINT / S3_RECOGNITION_BUCKET / 凭证。
+      # 专属桶存放 transient/ 临时区；question-service 的提交拷贝经服务端
+      # CopyObject 从本桶跨桶读取，凭证需允许其跨桶读取。
       STORAGE_TYPE: "s3"
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required, e.g. https://oss-cn-hangzhou.aliyuncs.com}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
-      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_BUCKET: ${S3_RECOGNITION_BUCKET:?S3_RECOGNITION_BUCKET is required}
       S3_USE_SSL: ${S3_USE_SSL:-}
       S3_PATH_STYLE: ${S3_PATH_STYLE:-false}  # OSS/AWS 用虚拟主机风格；Ceph/MinIO 等置 true
       # STORAGE_ROOT 保留：STORAGE_TYPE=local 回退时仍可用。
