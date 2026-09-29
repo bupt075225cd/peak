@@ -20,6 +20,9 @@ WEB := web
 
 # 本地工具安装目录（加入 PATH 后无需 root）
 GOBIN ?= $(shell go env GOPATH)/bin
+# golangci-lint 版本，与 .github/workflows/ci.yml 保持一致
+GOLANGCI_LINT_VERSION ?= v1.64.8
+GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
 # 本地 SQLite 调测配置
 PEAK_RUN ?= /tmp/peak-run
@@ -65,8 +68,22 @@ test:
 coverage-gate:
 	bash scripts/coverage-gate.sh
 
-## 一键全跑：静态检查 + 编译 + 测试 + 覆盖率门禁（推送前执行，等价远端 CI）
-ci: check build test coverage-gate
+# golangci-lint 对 go.work 多模块 workspace 的 ./... 支持不完善（与远端 CI 相同原因），
+# 逐个模块单独 lint；未安装时自动用 go install 装到 $(GOBIN)。
+lint:
+	@if [ ! -x "$(GOLANGCI_LINT)" ]; then \
+		echo "==> 安装 golangci-lint $(GOLANGCI_LINT_VERSION)"; \
+		GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	fi
+	@echo "==> golangci-lint (逐模块)"
+	@set -e; for m in apps/gateway apps/question-service apps/recognition-service apps/user-service \
+		libs/config libs/domain libs/errors libs/http libs/logger libs/observability libs/storage; do \
+		$(GOLANGCI_LINT) run --timeout=5m ./$$m/... ; \
+	done
+	@echo "✓ golangci-lint 通过"
+
+## 一键全跑：静态检查 + lint + 编译 + 测试 + 覆盖率门禁（推送前执行，等价远端 CI）
+ci: check lint build test coverage-gate
 	@echo "✓ 全部通过，可以提交"
 
 ## 一键安装辅助工具：watchexec（文件监听）+ air（Go 热重载）
@@ -149,4 +166,4 @@ stop-sqlite:
 	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/user.log $(PEAK_RUN)/gateway.log
 	@echo "✓ 已停止并清空 $(PEAK_RUN)/data 与日志"
 
-.PHONY: check build test coverage-gate ci watch install-tools run-sqlite stop-sqlite
+.PHONY: check lint build test coverage-gate ci watch install-tools run-sqlite stop-sqlite

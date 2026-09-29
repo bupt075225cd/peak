@@ -291,45 +291,79 @@ jobs:
           name: web-coverage
           path: web/coverage/
 
-  # ── 5. 镜像构建：验证 Dockerfile 可构建（不推送）─────────────
-  docker-build:
-    name: Docker Image Build
+  # ── 5. 镜像构建与推送：构建各服务镜像并推送到阿里云 ACR ────────
+  # 仅 main 分支的 push 事件推送镜像；PR 事件只验证可构建，不推送。
+  # 需要在仓库 Settings → Secrets and variables → Actions 配置：
+  #   ALIYUN_ACR_USERNAME / ALIYUN_ACR_PASSWORD（阿里云容器镜像服务的固定密码）
+  docker-push:
+    name: Docker Image Build & Push
     runs-on: ubuntu-latest
+    env:
+      # 阿里云 ACR 个人实例地址（地域按需修改，如 cn-beijing / cn-shenzhen）
+      ACR_REGISTRY: registry.cn-chengdu.aliyuncs.com
+      # ACR 命名空间，需与阿里云控制台中创建的命名空间一致
+      ACR_NAMESPACE: peak2026
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 依次构建各镜像，仅验证可构建，不推送
-      - name: Build gateway image
+      - name: Login to Aliyun ACR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      # 依次构建各镜像，tag 同时打 commit sha（版本可追溯）与 latest
+      - name: Build & push gateway image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/gateway/Dockerfile
-          push: false
-          tags: peak/gateway:ci
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-gateway:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-gateway:latest
 
-      - name: Build question-service image
+      - name: Build & push question-service image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/question-service/Dockerfile
-          push: false
-          tags: peak/question-service:ci
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-question-service:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-question-service:latest
 
-      - name: Build recognition-service image
+      - name: Build & push user-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/user-service/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-user-service:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-user-service:latest
+
+      - name: Build & push recognition-service image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/recognition-service/Dockerfile
-          push: false
-          tags: peak/recognition-service:ci
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-recognition-service:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-recognition-service:latest
 
-      - name: Build web image
+      - name: Build & push web image
         uses: docker/build-push-action@v6
         with:
           context: ./web
           file: web/Dockerfile
-          push: false
-          tags: peak/web:ci
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-web:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-web:latest
