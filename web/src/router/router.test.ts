@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest'
 import router from './index'
 
 describe('router/index.ts', () => {
-  it('根路径重定向到 /entry', () => {
+  it('根路径重定向到 /home', () => {
     const root = router.getRoutes().find((r) => r.path === '/')
     expect(root).toBeDefined()
-    expect(root?.redirect).toBe('/entry')
+    expect(root?.redirect).toBe('/home')
   })
 
-  it('包含 entry 与 list 两条路由', () => {
+  it('包含 home/login/entry/list 四条路由', () => {
     const names = router.getRoutes().map((r) => r.name)
+    expect(names).toContain('home')
+    expect(names).toContain('login')
     expect(names).toContain('entry')
     expect(names).toContain('list')
   })
