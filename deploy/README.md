@@ -117,12 +117,22 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 
 | 服务 | 端口 | 说明 |
 | --- | --- | --- |
-| grafana | **3000（对外）** | 统一看板入口：预置 5 块看板（全局/运行时/数据库/识别业务/前端），provisioning 自动导入 |
+| grafana | **仅 127.0.0.1:3001** | 统一看板入口（强制登录）：预置 5 块看板（全局/运行时/数据库/识别业务/前端），provisioning 自动导入 |
 | prometheus | 内网 9090 | 指标抓取 + 告警规则求值（`deploy/prometheus/alerts.yml`） |
 | alertmanager | 内网 9093 | 告警分组与通知（webhook 渠道见 `deploy/alertmanager/alertmanager.yml`） |
 | loki | 内网 3100 | 集中日志存储（容器 stdout，JSON，含 trace_id） |
 | alloy | 内网 | 日志采集代理（挂载 docker.sock，自动发现容器） |
 | tempo | 内网 4317/3200 | OTLP 链路接收（业务 `TRACING_ENDPOINT=tempo:4317`）与查询 |
+
+**Grafana 访问（安全双保险）**：端口只绑定主机回环地址 + 强制账号登录（匿名访问已关闭，密码经 `.env` 的 `GRAFANA_ADMIN_PASSWORD` 注入，无默认弱口令）。运维经 SSH 隧道访问：
+
+```bash
+ssh -L 3001:127.0.0.1:3001 root@<host>
+# 浏览器打开 http://127.0.0.1:3001，用 GRAFANA_ADMIN_USER/PASSWORD 登录
+```
+
+> 注意：管理员密码只在数据卷首次初始化时生效；已初始化后如需改密，登入 Grafana 修改，或
+> `docker compose down grafana && docker volume rm peak_grafana-data`（会丢失看板收藏等本地改动，provisioning 内容会自动重建）。
 
 **三支柱互跳**：Grafana 内 Loki 的 `trace_id` 字段可点击跳转 Tempo 链路；Tempo 链路详情可跳回 Loki 按 trace_id 查日志。报警 → 链路 → 日志一条路径完成下钻。
 

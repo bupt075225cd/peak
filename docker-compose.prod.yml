@@ -259,20 +259,21 @@ services:
     container_name: peak-grafana
     restart: unless-stopped
     environment:
-      # 初始管理员密码通过 .env 注入（默认弱密码仅便于首次登录，请修改）。
+      # 强制登录：管理员账号经 .env 注入强密码（必填，无默认弱口令）。
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-peak123456}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # 匿名只读浏览（运营直接看板，无需登录）。
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # 关闭匿名访问：所有看板/Explore 查询均需登录。
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      # 主机侧端口可通过 GRAFANA_PORT 覆盖（默认 3000，与主机上其他服务冲突时改此值）。
-      - "${GRAFANA_PORT:-3000}:3000"
+      # 仅绑定主机回环地址：外网/内网其它机器不可直接访问，
+      # 运维经 SSH 隧道访问（ssh -L 3001:127.0.0.1:3001 root@<host>）。
+      # 主机侧端口可通过 GRAFANA_PORT 覆盖（默认 3001，与主机上其他服务冲突时改此值）。
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
       - loki
