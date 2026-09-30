@@ -38,3 +38,6 @@ apps/user-service/user-service
 # 本地配置（含密钥）
 *.local.yaml
 .env
+.env.production
+deploy/.env.production
+deploy/deploy.env
