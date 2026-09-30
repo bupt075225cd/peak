@@ -50,8 +50,8 @@ scp -P "$PORT" deploy/loki/loki-config.yml "$TARGET:$REMOTE_DIR/deploy/loki/"
 scp -P "$PORT" deploy/tempo/tempo-config.yml "$TARGET:$REMOTE_DIR/deploy/tempo/"
 scp -P "$PORT" deploy/alloy/config.alloy "$TARGET:$REMOTE_DIR/deploy/alloy/"
 scp -P "$PORT" deploy/alertmanager/alertmanager.yml "$TARGET:$REMOTE_DIR/deploy/alertmanager/"
-scp -P "$PORT" -r deploy/grafana/provisioning/. "$TARGET:$REMOTE_DIR/deploy/grafana/provisioning/"
-scp -P "$PORT" deploy/grafana/dashboards/* "$TARGET:$REMOTE_DIR/deploy/grafana/dashboards/" 2>/dev/null || true
+# grafana provisioning + 看板整体传输（tar 管道，避免 scp -r 目录嵌套与 "/." 兼容问题）
+tar -C deploy -cf - grafana | ssh -p "$PORT" "$TARGET" "tar -C $REMOTE_DIR/deploy -xf -"
 
 # 可选：在目标主机登录阿里云 ACR（私有仓库需要）
 if [ -f deploy/deploy.env ]; then
