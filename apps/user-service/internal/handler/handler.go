@@ -1,4 +1,5 @@
-// Package handler 认证 HTTP 接口：发码、验证码登录与用户信息。
+// Package handler 认证 HTTP 接口：发码、验证码登录、邮箱注册、
+// 密码登录与密码重置，以及用户信息。
 package handler
 
 import (
@@ -22,12 +23,16 @@ func New(svc *service.Service) *Handler {
 }
 
 // RegisterRoutes 注册路由（均位于 /api/users 前缀下，经网关转发）。
-// 发码与登录位于 /auth/* 白名单路径，网关不要求 JWT。
+// 认证类接口位于 /auth/* 白名单路径，网关不要求 JWT。
 func (h *Handler) RegisterRoutes(rg gin.IRouter) {
 	authGroup := rg.Group("/api/users/auth")
 	{
 		authGroup.POST("/sms/code", h.sendCode)
 		authGroup.POST("/sms/login", h.smsLogin)
+		authGroup.POST("/email/code", h.sendEmailCode)
+		authGroup.POST("/email/register", h.emailRegister)
+		authGroup.POST("/password/login", h.passwordLogin)
+		authGroup.POST("/password/reset", h.passwordReset)
 	}
 	rg.GET("/api/users/me", h.me)
 	rg.PUT("/api/users/me", h.updateMe)
@@ -83,6 +88,90 @@ func (h *Handler) smsLogin(c *gin.Context) {
 		return
 	}
 	httpx.OK(c, gin.H{"token": res.Token, "user": res.User})
+}
+
+// sendEmailCodeRequest 邮箱验证码请求：purpose 为 register（注册确认）
+// 或 reset（密码重置）。
+type sendEmailCodeRequest struct {
+	Email   string `json:"email" binding:"required"`
+	Purpose string `json:"purpose" binding:"required"`
+}
+
+// sendEmailCode POST /api/users/auth/email/code
+func (h *Handler) sendEmailCode(c *gin.Context) {
+	var req sendEmailCodeRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	res, err := h.svc.SendEmailCode(c.Request.Context(), req.Email, req.Purpose, clientIP(c))
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{
+		"debug_code": res.DebugCode, // 仅开发模式非空，生产为空
+	})
+}
+
+// emailRegisterRequest 邮箱注册请求：凭注册验证码完成，成功即登录态。
+type emailRegisterRequest struct {
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	Code     string `json:"code" binding:"required"`
+}
+
+// emailRegister POST /api/users/auth/email/register
+func (h *Handler) emailRegister(c *gin.Context) {
+	var req emailRegisterRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	res, err := h.svc.EmailRegister(c.Request.Context(), req.Email, req.Password, req.Code, clientIP(c))
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{"token": res.Token, "user": res.User})
+}
+
+// passwordLoginRequest 密码登录请求：account 为手机号或邮箱。
+type passwordLoginRequest struct {
+	Account  string `json:"account" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// passwordLogin POST /api/users/auth/password/login
+func (h *Handler) passwordLogin(c *gin.Context) {
+	var req passwordLoginRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	res, err := h.svc.PasswordLogin(c.Request.Context(), req.Account, req.Password, clientIP(c))
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{"token": res.Token, "user": res.User})
+}
+
+// passwordResetRequest 重置密码请求：邮箱验证码 + 新密码。
+type passwordResetRequest struct {
+	Email    string `json:"email" binding:"required"`
+	Code     string `json:"code" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// passwordReset POST /api/users/auth/password/reset
+func (h *Handler) passwordReset(c *gin.Context) {
+	var req passwordResetRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.svc.ResetPassword(c.Request.Context(), req.Email, req.Code, req.Password, clientIP(c)); err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{"reset": true})
 }
 
 // me GET /api/users/me（身份由网关校验 JWT 后注入 X-User-Id）。

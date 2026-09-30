@@ -24,3 +24,12 @@ auth:
 # 短信发送：provider 仅支持 mock（真实短信下一迭代接入）。
 sms:
   provider: "mock"
+
+# 邮件发送：provider 可选 mock（开发，验证码写日志）或 smtp（生产真实发信）。
+mail:
+  provider: ${MAIL_PROVIDER:-mock}
+  smtp:
+    host: "${SMTP_HOST:-}"        # 如 smtp.example.com:587
+    username: "${SMTP_USERNAME:-}"
+    password: "${SMTP_PASSWORD:-}"
+    from: "${SMTP_FROM:-Peak <no-reply@peak.local>}"

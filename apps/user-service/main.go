@@ -13,6 +13,7 @@ import (
 
 	"peak/apps/user-service/internal/code"
 	"peak/apps/user-service/internal/handler"
+	"peak/apps/user-service/internal/mail"
 	"peak/apps/user-service/internal/repository"
 	"peak/apps/user-service/internal/service"
 	"peak/apps/user-service/internal/sms"
@@ -63,16 +64,17 @@ func main() {
 		observability.RegisterDBStats(sqlDB, "user-service")
 	}
 
-	// 组装认证依赖：repository -> code store -> sms sender -> service -> handler。
+	// 组装认证依赖：repository -> code store -> sms/mail sender -> service -> handler。
 	repos := repository.NewUserRepository(db)
 	codes := code.NewStore(code.Config{})
 	sender := newSender(cfg, zapLog)
+	mailer := newMailSender(cfg, zapLog)
 
 	tokenTTL, err := time.ParseDuration(cfg.String("auth.token_ttl", "168h"))
 	if err != nil {
 		panic(err)
 	}
-	svc := service.New(repos, codes, sender, service.Config{
+	svc := service.New(repos, codes, sender, mailer, service.Config{
 		JWTSecret: cfg.String("auth.jwt_secret", ""),
 		TokenTTL:  tokenTTL,
 		// 超级验证码双开关：配置显式开启 且 仅开发模式生效；生产强制禁用。
@@ -104,6 +106,21 @@ func newSender(cfg *config.Loader, log *zap.Logger) sms.Sender {
 		return sms.NewMockSender(log)
 	default:
 		return sms.NewMockSender(log)
+	}
+}
+
+// newMailSender 按配置创建邮件发送通道：mock（开发，写日志）或 smtp（生产）。
+func newMailSender(cfg *config.Loader, log *zap.Logger) mail.Sender {
+	switch cfg.String("mail.provider", "mock") {
+	case "smtp":
+		return mail.NewSMTPSender(mail.SMTPConfig{
+			Host:     cfg.String("mail.smtp.host", ""),
+			Username: cfg.String("mail.smtp.username", ""),
+			Password: cfg.String("mail.smtp.password", ""),
+			From:     cfg.String("mail.smtp.from", ""),
+		})
+	default:
+		return mail.NewMockSender(log)
 	}
 }
 

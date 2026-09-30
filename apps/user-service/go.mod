@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/gin-gonic/gin v1.10.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/crypto v0.28.0
 	gorm.io/gorm v1.31.2
 	peak/libs/auth v0.0.0-00010101000000-000000000000
 	peak/libs/config v0.0.0
@@ -40,7 +41,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.21.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/crypto v0.28.0 // indirect
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/text v0.22.0 // indirect

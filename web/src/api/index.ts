@@ -57,8 +57,10 @@ export interface SendCodeResult {
 export interface User {
   id: number
   account: string
-  phone: string
+  phone: string | null
+  email: string | null
   name: string
+  email_verified: boolean
 }
 
 // 发送短信验证码（mock 通道，验证码记录在 user-service 日志）。
@@ -78,6 +80,48 @@ export async function smsLogin(phone: string, code: string, ticket: string): Pro
     { phone, code, ticket },
   )
   return data.data as { token: string; user: User }
+}
+
+// 发送邮箱验证码结果：debugCode 仅开发模式返回。
+export interface SendEmailCodeResult {
+  debugCode?: string
+}
+
+// 发送邮箱验证码：purpose 为 'register'（注册确认）或 'reset'（密码重置）。
+export async function sendEmailCode(email: string, purpose: 'register' | 'reset'): Promise<SendEmailCodeResult> {
+  const { data } = await http.post<ApiResponse<{ debug_code?: string }>>(
+    '/users/auth/email/code',
+    { email, purpose },
+  )
+  const d = data.data as { debug_code?: string }
+  return { debugCode: d.debug_code }
+}
+
+// 邮箱+密码注册（凭注册验证码），成功返回 JWT 与用户信息。
+export async function emailRegister(
+  email: string,
+  password: string,
+  code: string,
+): Promise<{ token: string; user: User }> {
+  const { data } = await http.post<ApiResponse<{ token: string; user: User }>>(
+    '/users/auth/email/register',
+    { email, password, code },
+  )
+  return data.data as { token: string; user: User }
+}
+
+// 密码登录：account 为手机号或邮箱。
+export async function passwordLogin(account: string, password: string): Promise<{ token: string; user: User }> {
+  const { data } = await http.post<ApiResponse<{ token: string; user: User }>>(
+    '/users/auth/password/login',
+    { account, password },
+  )
+  return data.data as { token: string; user: User }
+}
+
+// 通过邮箱验证码重置密码。
+export async function resetPassword(email: string, code: string, password: string): Promise<void> {
+  await http.post('/users/auth/password/reset', { email, code, password })
 }
 
 // 查询当前登录用户信息（身份由网关从 JWT 注入）。

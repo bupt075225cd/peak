@@ -7,12 +7,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// User 用户（手机验证码登录，未注册手机号首次登录自动注册）。
+// User 用户（手机验证码登录，未注册手机号首次登录自动注册；
+// 亦支持邮箱+密码注册与密码登录）。
+//
+// Email/Phone 为指针类型：手机用户无邮箱存 NULL，邮箱注册用户无手机号存
+// NULL——MySQL/SQLite 的唯一索引允许多个 NULL，两类账号互不冲突；
+// PasswordHash 为空表示未设置密码（仅验证码登录）。
 type User struct {
 	ID        uint64         `gorm:"primaryKey" json:"id"`
 	Account   string         `gorm:"size:64;uniqueIndex" json:"account"`
-	Phone     string         `gorm:"size:16;uniqueIndex" json:"phone"`
+	Phone     *string        `gorm:"size:16;uniqueIndex" json:"phone"`
+	Email     *string        `gorm:"size:128;uniqueIndex" json:"email"`
 	Name      string         `gorm:"size:64" json:"name"`
+	// PasswordHash bcrypt 哈希，不对外序列化；空串表示未设置密码（仅验证码登录）。
+	PasswordHash string        `gorm:"size:128" json:"-"`
+	EmailVerified bool         `gorm:"default:false" json:"email_verified"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`

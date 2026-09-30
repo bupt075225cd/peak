@@ -25,6 +25,8 @@ function buildRouter() {
       { path: '/', redirect: '/login' },
       { path: '/login', name: 'login', component: Login },
       { path: '/home', name: 'home', component: { template: '<div>home-page</div>' } },
+      { path: '/register', name: 'register', component: { template: '<div>register-page</div>' } },
+      { path: '/forgot-password', name: 'forgot-password', component: { template: '<div>forgot-page</div>' } },
     ],
   })
 }
@@ -122,6 +124,56 @@ describe('Login.vue', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('验证码错误')
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+
+  it('切换到密码登录 Tab 展示账号与密码输入', async () => {
+    const { wrapper } = mountLogin()
+    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
+    await tab.trigger('click')
+
+    expect(wrapper.find('#login-account').exists()).toBe(true)
+    expect(wrapper.find('#login-password').exists()).toBe(true)
+    // 切换后隐藏验证码登录表单。
+    expect(wrapper.find('#login-phone').exists()).toBe(false)
+    // 提供忘记密码与注册入口。
+    expect(wrapper.text()).toContain('忘记密码？')
+    expect(wrapper.text()).toContain('邮箱注册')
+  })
+
+  it('密码登录成功写入令牌并跳转主页', async () => {
+    const { wrapper, router } = mountLogin()
+    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
+    await tab.trigger('click')
+
+    httpMethods.post.mockResolvedValueOnce(
+      ok({ token: 'jwt-pwd', user: { id: 2, account: 'stu@peak.local', email: 'stu@peak.local', phone: null, name: '同学stu', email_verified: true } }),
+    )
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('password123')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/password/login', {
+      account: 'stu@peak.local', password: 'password123',
+    })
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('jwt-pwd')
+    expect(router.currentRoute.value.path).toBe('/home')
+    logout()
+  })
+
+  it('密码登录失败展示统一错误信息', async () => {
+    const { wrapper } = mountLogin()
+    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
+    await tab.trigger('click')
+
+    httpMethods.post.mockRejectedValueOnce(fail('账号或密码不正确', 401))
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('wrong-pass')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('账号或密码不正确')
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
   })
 })

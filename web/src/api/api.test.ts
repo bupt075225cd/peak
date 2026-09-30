@@ -13,6 +13,10 @@ import {
   parseContentDisposition,
   sendSmsCode,
   smsLogin,
+  sendEmailCode,
+  emailRegister,
+  passwordLogin,
+  resetPassword,
   authRequestInterceptor,
   authResponseErrorInterceptor,
   type ApiResponse,
@@ -222,6 +226,49 @@ describe('api/index.ts', () => {
     expect(parseContentDisposition(undefined)).toBeNull()
     // 非法百分号编码不应抛出异常。
     expect(parseContentDisposition("attachment; filename*=UTF-8''%E4%B8")).toBeNull()
+  })
+
+  it('sendEmailCode 携带邮箱与用途，返回开发模式验证码', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ debug_code: '246810' }))
+
+    const res = await sendEmailCode('stu@peak.local', 'register')
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/email/code', {
+      email: 'stu@peak.local', purpose: 'register',
+    })
+    expect(res.debugCode).toBe('246810')
+  })
+
+  it('emailRegister 提交邮箱、密码与验证码并返回令牌', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ token: 'jwt-reg', user: { id: 3 } }))
+
+    const res = await emailRegister('stu@peak.local', 'password123', '135790')
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/email/register', {
+      email: 'stu@peak.local', password: 'password123', code: '135790',
+    })
+    expect(res.token).toBe('jwt-reg')
+  })
+
+  it('passwordLogin 提交账号与密码并返回令牌', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ token: 'jwt-login', user: { id: 4 } }))
+
+    const res = await passwordLogin('13800001234', 'password123')
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/password/login', {
+      account: '13800001234', password: 'password123',
+    })
+    expect(res.token).toBe('jwt-login')
+  })
+
+  it('resetPassword 提交邮箱、验证码与新密码', async () => {
+    httpMethods.post.mockResolvedValueOnce(ok({ reset: true }))
+
+    await expect(resetPassword('stu@peak.local', '246810', 'new-password')).resolves.toBeUndefined()
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/password/reset', {
+      email: 'stu@peak.local', code: '246810', password: 'new-password',
+    })
   })
 })
 

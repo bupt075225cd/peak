@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"peak/apps/user-service/internal/code"
+	"peak/apps/user-service/internal/mail"
 	"peak/apps/user-service/internal/repository"
 	"peak/apps/user-service/internal/service"
 	"peak/libs/auth"
@@ -41,9 +42,47 @@ func (s *recordingSender) last() string {
 	return s.code
 }
 
+// recordingMailer 记录最近一次发送的邮件内容，供测试断言。
+type recordingMailer struct {
+	mu   sync.Mutex
+	code string
+}
+
+func (m *recordingMailer) Send(to, subject, body string) error {
+	// 提取正文中 6 位验证码（mock 发码正文唯一包含 6 位数字）。
+	for i := 0; i+6 <= len(body); i++ {
+		if isDigits(body[i : i+6]) {
+			m.mu.Lock()
+			m.code = body[i : i+6]
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *recordingMailer) last() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.code
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// 编译期断言：recordingMailer 满足 mail.Sender 接口。
+var _ mail.Sender = (*recordingMailer)(nil)
+
 type fixture struct {
 	r      *gin.Engine
 	sender *recordingSender
+	mailer *recordingMailer
 }
 
 // setup 构建带 SQLite 存储的测试服务与路由。
@@ -62,11 +101,12 @@ func setup(t *testing.T, cfg service.Config) *fixture {
 	repos := repository.NewUserRepository(db)
 	codes := code.NewStore(code.Config{})
 	sender := &recordingSender{}
-	svc := service.New(repos, codes, sender, cfg)
+	mailer := &recordingMailer{}
+	svc := service.New(repos, codes, sender, mailer, cfg)
 
 	r := gin.New()
 	New(svc).RegisterRoutes(r)
-	return &fixture{r: r, sender: sender}
+	return &fixture{r: r, sender: sender, mailer: mailer}
 }
 
 func devConfig(masterCode bool) service.Config {
@@ -304,5 +344,199 @@ func TestRateLimitPerPhone(t *testing.T) {
 	}
 	if msg := decode(t, w)["message"]; msg != "发送过于频繁，请稍后再试" {
 		t.Fatalf("message = %v", msg)
+	}
+}
+
+// sendEmailCode 发送邮箱验证码并返回响应 recorder。
+func sendEmailCode(t *testing.T, f *fixture, email, purpose string) *httptest.ResponseRecorder {
+	t.Helper()
+	return post(t, f.r, "/api/users/auth/email/code", map[string]string{"email": email, "purpose": purpose})
+}
+
+// emailCode 从 mock 邮件通道取最近一次发送的验证码。
+func emailCode(t *testing.T, f *fixture) string {
+	t.Helper()
+	c := f.mailer.last()
+	if c == "" {
+		t.Fatal("mock mailer should have recorded the code")
+	}
+	return c
+}
+
+func TestEmailRegisterAndPasswordLogin(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "student@peak.local"
+
+	// 注册验证码：debug_code 返回（开发模式）。
+	w := sendEmailCode(t, f, email, "register")
+	if w.Code != http.StatusOK {
+		t.Fatalf("send email code: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	debugCode, _ := decode(t, w)["data"].(map[string]any)["debug_code"].(string)
+	if debugCode == "" {
+		t.Fatal("debug_code should be present in dev mode")
+	}
+
+	// 错误验证码注册 → 401。
+	if w := post(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": "password123", "code": "000000",
+	}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("register with wrong code: status = %d, want 401", w.Code)
+	}
+
+	// 正确验证码注册成功，签发 JWT。
+	codeStr := emailCode(t, f)
+	w = post(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": "password123", "code": codeStr,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("register: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	data := decode(t, w)["data"].(map[string]any)
+	user := data["user"].(map[string]any)
+	if user["email"] != email {
+		t.Fatalf("user.email = %v, want %s", user["email"], email)
+	}
+	if user["phone"] != nil {
+		t.Fatalf("email user phone = %v, want null", user["phone"])
+	}
+	if _, err := auth.Parse(data["token"].(string), testSecret); err != nil {
+		t.Fatalf("parse issued token: %v", err)
+	}
+
+	// 邮箱注册用户可用密码登录。
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "password123",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("password login: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// 密码错误 → 401 且文案统一（不泄露具体原因）。
+	w = post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "wrong-password",
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password: status = %d, want 401", w.Code)
+	}
+	if msg := decode(t, w)["message"]; msg != "账号或密码不正确" {
+		t.Fatalf("message = %v", msg)
+	}
+
+	// 不存在的账号同样返回"账号或密码不正确"。
+	w = post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": "nobody@peak.local", "password": "password123",
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown account: status = %d, want 401", w.Code)
+	}
+	if msg := decode(t, w)["message"]; msg != "账号或密码不正确" {
+		t.Fatalf("unknown account message = %v", msg)
+	}
+
+	// 重复注册同一邮箱：发码阶段即被拒绝。
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate email code: status = %d, want 400", w.Code)
+	}
+}
+
+func TestPasswordResetFlow(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "reset@peak.local"
+
+	// 先注册。
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusOK {
+		t.Fatalf("send register code: %d", w.Code)
+	}
+	if w := post(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": "old-password-1", "code": emailCode(t, f),
+	}); w.Code != http.StatusOK {
+		t.Fatalf("register: %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// 申请重置验证码 → mock 通道收到 → 重置为新密码。
+	if w := sendEmailCode(t, f, email, "reset"); w.Code != http.StatusOK {
+		t.Fatalf("send reset code: %d, body = %s", w.Code, w.Body.String())
+	}
+	if w := post(t, f.r, "/api/users/auth/password/reset", map[string]string{
+		"email": email, "code": "000000", "password": "new-password-9",
+	}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("reset with wrong code: status = %d, want 401", w.Code)
+	}
+	if w := post(t, f.r, "/api/users/auth/password/reset", map[string]string{
+		"email": email, "code": emailCode(t, f), "password": "new-password-9",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("reset: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// 旧密码失效，新密码可登录。
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "old-password-1",
+	}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old password after reset: status = %d, want 401", w.Code)
+	}
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "new-password-9",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("new password login: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// 未注册邮箱申请重置 → 404。
+	if w := sendEmailCode(t, f, "ghost@peak.local", "reset"); w.Code != http.StatusNotFound {
+		t.Fatalf("reset unregistered email: status = %d, want 404", w.Code)
+	}
+}
+
+func TestPasswordValidation(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "short@peak.local"
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusOK {
+		t.Fatalf("send code: %d", w.Code)
+	}
+
+	// 短密码 → 400。
+	if w := post(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": "short", "code": emailCode(t, f),
+	}); w.Code != http.StatusBadRequest {
+		t.Fatalf("short password: status = %d, want 400", w.Code)
+	}
+}
+
+func TestPasswordLoginWithPhoneUser(t *testing.T) {
+	// 手机验证码注册的存量用户，也可用手机号+密码登录的前提是有密码；
+	// 无密码手机用户密码登录 → 401（文案与不存在账号一致）。
+	f := setup(t, devConfig(true))
+	phone := "13811112222"
+	ticket, _ := sendCode(t, f, phone)
+	if w := login(t, f, phone, "000000", ticket); w.Code != http.StatusOK {
+		t.Fatalf("sms login: %d", w.Code)
+	}
+	w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": phone, "password": "whatever-123",
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("no-password phone user: status = %d, want 401", w.Code)
+	}
+	if msg := decode(t, w)["message"]; msg != "账号或密码不正确" {
+		t.Fatalf("message = %v", msg)
+	}
+}
+
+func TestSendEmailCodeRateLimit(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "ratelimit@peak.local"
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusOK {
+		t.Fatalf("first send: %d", w.Code)
+	}
+	// 60 秒内重发 → 400。
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusBadRequest {
+		t.Fatalf("second send: status = %d, want 400 (rate limited)", w.Code)
+	}
+	// 非法邮箱 → 400。
+	if w := sendEmailCode(t, f, "not-an-email", "register"); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid email: status = %d, want 400", w.Code)
+	}
+	// 非法用途 → 400。
+	if w := sendEmailCode(t, f, "x@peak.local", "hack"); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid purpose: status = %d, want 400", w.Code)
 	}
 }
