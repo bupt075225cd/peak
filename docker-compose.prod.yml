@@ -1,7 +1,10 @@
 # 生产部署编排：后端微服务 + MySQL + Prometheus
 # 用法：
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml pull     # 拉取镜像仓库已构建镜像
+#   docker compose -f docker-compose.prod.yml up -d
+#   镜像 tag 通过 .env 的 IMAGE_TAG 指定（commit sha 或 latest，默认 latest）
 # 说明：
+#   - 业务镜像来自阿里云 ACR（CI 推送），私有仓库需先 docker login
 #   - 配置通过环境变量注入（config.yaml 使用 ${VAR} 占位）
 #   - 敏感信息（DB 密码、阿里云密钥）通过 .env 文件或环境注入，勿提交到仓库
 version: "3.8"
@@ -33,10 +36,9 @@ services:
   # （transient/ 临时区），question-service 用 S3_QUESTION_BUCKET（committed/
   # 正式区），提交拷贝通过对象存储服务端 CopyObject 跨桶完成；
   # 连接参数通过 S3_* 环境变量注入。
+  # 镜像由 CI 推送到阿里云 ACR；如需本地构建，把 image 换回对应 build: 配置
   gateway:
-    build:
-      context: .
-      dockerfile: apps/gateway/Dockerfile
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-gateway:${IMAGE_TAG:-latest}
     container_name: peak-gateway
     restart: unless-stopped
     depends_on:
@@ -59,9 +61,7 @@ services:
       - "8080:8080"
 
   question-service:
-    build:
-      context: .
-      dockerfile: apps/question-service/Dockerfile
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-question-service:${IMAGE_TAG:-latest}
     container_name: peak-question-service
     restart: unless-stopped
     depends_on:
@@ -89,9 +89,7 @@ services:
       - "8081"
 
   recognition-service:
-    build:
-      context: .
-      dockerfile: apps/recognition-service/Dockerfile
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-recognition-service:${IMAGE_TAG:-latest}
     container_name: peak-recognition-service
     restart: unless-stopped
     depends_on:
@@ -137,9 +135,7 @@ services:
       - "8082"
 
   user-service:
-    build:
-      context: .
-      dockerfile: apps/user-service/Dockerfile
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-user-service:${IMAGE_TAG:-latest}
     container_name: peak-user-service
     restart: unless-stopped
     depends_on:
@@ -161,9 +157,7 @@ services:
 
   # ── 前端（Nginx 托管静态资源 + 反代 /api）────────────────
   web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-web:${IMAGE_TAG:-latest}
     container_name: peak-web
     restart: unless-stopped
     depends_on:
