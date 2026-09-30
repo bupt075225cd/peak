@@ -387,7 +387,6 @@ function selectQuestion(idx: number) {
             </div>
             <div class="flex-1">
               <p class="font-medium text-ink">{{ progressText }}</p>
-              <p class="text-xs text-ink-faint">识别服务：{{ task?.provider || '-' }}</p>
             </div>
             <button
               v-if="task?.status === 'failed' || (task && errorMsg && !recognizing)"
