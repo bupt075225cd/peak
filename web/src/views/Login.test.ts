@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import Login from './Login.vue'
 import { logout, TOKEN_KEY } from '../composables/useAuth'
+import { SMS_LOGIN_ENABLED } from '../config/features'
 
 const { httpMethods } = vi.hoisted(() => ({
   httpMethods: { post: vi.fn(), get: vi.fn() },
@@ -54,12 +55,85 @@ beforeEach(() => {
   httpMethods.get.mockReset()
 })
 
-describe('Login.vue', () => {
+describe('Login.vue 默认状态', () => {
+  it('渲染密码登录表单', () => {
+    const { wrapper } = mountLogin()
+    expect(wrapper.find('#login-account').exists()).toBe(true)
+    expect(wrapper.find('#login-password').exists()).toBe(true)
+    expect(wrapper.text()).toContain('密码登录')
+  })
+
+  it('功能开关关闭时隐藏验证码登录 Tab 与手机号输入', () => {
+    const { wrapper } = mountLogin()
+    expect(wrapper.find('#login-phone').exists()).toBe(false)
+    expect(wrapper.findAll('button').some((b) => b.text().includes('验证码登录'))).toBe(false)
+    // 密码登录入口仍提供忘记密码与注册跳转。
+    expect(wrapper.text()).toContain('忘记密码？')
+    expect(wrapper.text()).toContain('邮箱注册')
+  })
+})
+
+describe('Login.vue 密码登录', () => {
+  it('密码登录成功写入令牌并跳转主页', async () => {
+    const { wrapper, router } = mountLogin()
+    httpMethods.post.mockResolvedValueOnce(
+      ok({ token: 'jwt-pwd', user: { id: 2, account: 'stu@peak.local', email: 'stu@peak.local', phone: null, name: '同学stu', email_verified: true } }),
+    )
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('password123')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/password/login', {
+      account: 'stu@peak.local', password: 'password123',
+    })
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('jwt-pwd')
+    expect(router.currentRoute.value.path).toBe('/home')
+    logout()
+  })
+
+  it('密码登录失败展示统一错误信息', async () => {
+    const { wrapper } = mountLogin()
+    httpMethods.post.mockRejectedValueOnce(fail('账号或密码不正确', 401))
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('wrong-pass')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('账号或密码不正确')
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+
+  it('触发防爆破限流时透传 429 提示且不清除登录流程', async () => {
+    const { wrapper } = mountLogin()
+    httpMethods.post.mockRejectedValueOnce(fail('尝试次数过多，账号已锁定，请约 15 分钟后再试', 429))
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('correct-pass-1')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('尝试次数过多，账号已锁定')
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+})
+
+// 验证码登录用例：短信服务接入（SMS_LOGIN_ENABLED=true）后自动生效。
+describe.runIf(SMS_LOGIN_ENABLED)('Login.vue 验证码登录', () => {
   it('渲染手机号与验证码输入', () => {
     const { wrapper } = mountLogin()
     expect(wrapper.find('#login-phone').exists()).toBe(true)
     expect(wrapper.find('#login-code').exists()).toBe(true)
     expect(wrapper.text()).toContain('自动创建账号')
+  })
+
+  it('切换到密码登录 Tab 展示账号与密码输入', async () => {
+    const { wrapper } = mountLogin()
+    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
+    await tab.trigger('click')
+
+    expect(wrapper.find('#login-account').exists()).toBe(true)
+    expect(wrapper.find('#login-password').exists()).toBe(true)
+    expect(wrapper.find('#login-phone').exists()).toBe(false)
   })
 
   it('手机号不合法时获取验证码按钮禁用', async () => {
@@ -108,7 +182,7 @@ describe('Login.vue', () => {
     logout()
   })
 
-  it('登录失败展示服务端错误信息', async () => {
+  it('验证码登录失败展示服务端错误信息', async () => {
     const { wrapper } = mountLogin()
     httpMethods.post
       .mockResolvedValueOnce(ok({ ticket: 't-1' }))
@@ -124,71 +198,6 @@ describe('Login.vue', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('验证码错误')
-    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
-  })
-
-  it('切换到密码登录 Tab 展示账号与密码输入', async () => {
-    const { wrapper } = mountLogin()
-    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
-    await tab.trigger('click')
-
-    expect(wrapper.find('#login-account').exists()).toBe(true)
-    expect(wrapper.find('#login-password').exists()).toBe(true)
-    // 切换后隐藏验证码登录表单。
-    expect(wrapper.find('#login-phone').exists()).toBe(false)
-    // 提供忘记密码与注册入口。
-    expect(wrapper.text()).toContain('忘记密码？')
-    expect(wrapper.text()).toContain('邮箱注册')
-  })
-
-  it('密码登录成功写入令牌并跳转主页', async () => {
-    const { wrapper, router } = mountLogin()
-    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
-    await tab.trigger('click')
-
-    httpMethods.post.mockResolvedValueOnce(
-      ok({ token: 'jwt-pwd', user: { id: 2, account: 'stu@peak.local', email: 'stu@peak.local', phone: null, name: '同学stu', email_verified: true } }),
-    )
-    await wrapper.find('#login-account').setValue('stu@peak.local')
-    await wrapper.find('#login-password').setValue('password123')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(httpMethods.post).toHaveBeenCalledWith('/users/auth/password/login', {
-      account: 'stu@peak.local', password: 'password123',
-    })
-    expect(localStorage.getItem(TOKEN_KEY)).toBe('jwt-pwd')
-    expect(router.currentRoute.value.path).toBe('/home')
-    logout()
-  })
-
-  it('密码登录失败展示统一错误信息', async () => {
-    const { wrapper } = mountLogin()
-    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
-    await tab.trigger('click')
-
-    httpMethods.post.mockRejectedValueOnce(fail('账号或密码不正确', 401))
-    await wrapper.find('#login-account').setValue('stu@peak.local')
-    await wrapper.find('#login-password').setValue('wrong-pass')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('账号或密码不正确')
-    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
-  })
-
-  it('触发防爆破限流时透传 429 提示且不清除登录流程', async () => {
-    const { wrapper } = mountLogin()
-    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
-    await tab.trigger('click')
-
-    httpMethods.post.mockRejectedValueOnce(fail('尝试次数过多，账号已锁定，请约 15 分钟后再试', 429))
-    await wrapper.find('#login-account').setValue('stu@peak.local')
-    await wrapper.find('#login-password').setValue('correct-pass-1')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('尝试次数过多，账号已锁定')
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
   })
 })

@@ -7,12 +7,14 @@ import {
 } from 'lucide-vue-next'
 import { sendSmsCode, smsLogin, passwordLogin } from '../api'
 import { useAuth } from '../composables/useAuth'
+import { SMS_LOGIN_ENABLED } from '../config/features'
 
 const router = useRouter()
 const { login } = useAuth()
 
 // 登录方式：sms（验证码）/ password（账号密码），Tab 切换。
-const mode = ref<'sms' | 'password'>('sms')
+// 短信服务未接入时（SMS_LOGIN_ENABLED=false）隐藏验证码登录，默认密码登录。
+const mode = ref<'sms' | 'password'>(SMS_LOGIN_ENABLED ? 'sms' : 'password')
 
 // ===== 验证码登录状态 =====
 const phone = ref('')
@@ -138,8 +140,8 @@ function goBack() {
         </p>
       </div>
 
-      <!-- 登录方式切换 Tab -->
-      <div class="mt-6 grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100" role="tablist">
+      <!-- 登录方式切换 Tab（短信服务接入后才展示） -->
+      <div v-if="SMS_LOGIN_ENABLED" class="mt-6 grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100" role="tablist">
         <button
           type="button"
           role="tab"
