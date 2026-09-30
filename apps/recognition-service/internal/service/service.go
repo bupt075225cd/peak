@@ -35,9 +35,9 @@ type RecognitionResult struct {
 	Geometry     provider.GeometryResult `json:"geometry"`
 	// RedrawFigures 几何重绘输出的子图列表：key 为独立 SVG 的存储 key，
 	// label 为该子图在题干中的图号（如"图1"）。一张原图含多个几何子图时逐个填充
-	// （配置了 geometry sidecar 才填充）。
+	// （启用了内置几何渲染时填充）。
 	RedrawFigures []RedrawFigure `json:"redraw_figures,omitempty"`
-	// RedrawReport 几何重绘求解报告（残差、重试次数、是否几何自洽）。
+	// RedrawReport 几何重绘报告（重试轮数、结构校验是否通过）。
 	RedrawReport *RedrawReport `json:"redraw_report,omitempty"`
 	// Questions 文档识别出的多道题（仅文档上传时填充）。
 	Questions []QuestionItem `json:"questions,omitempty"`

@@ -63,8 +63,7 @@ recognition:
 
 geometry:
   # 几何重绘开关：启用时由服务内置的 Go 渲染器（internal/geom）完成
-  # "VLM 坐标直出 + 文字避让 + 手写 SVG"，不依赖外部渲染服务。
-  # 旧的 Python sidecar（apps/geometry-sidecar）已停用，源码保留以便回滚。
+  # "VLM 坐标直出 + 文字避让 + 手写 SVG"，无外部依赖。
   enabled: "${GEOMETRY_ENABLED:-false}"
   # 结构校验失败回喂 VLM 修正的最大轮数（提取→渲染→修正）。
   max_attempts: "${GEOMETRY_MAX_ATTEMPTS:-3}"

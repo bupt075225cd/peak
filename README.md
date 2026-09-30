@@ -42,7 +42,6 @@ peak/
 │   ├── gateway/             # API 网关 (:8080)
 │   ├── question-service/    # 题目/错题服务 (:8081)
 │   ├── recognition-service/ # 识别服务 (:8082，含内置几何渲染 internal/geom)
-│   ├── geometry-sidecar/    # [已停用] 旧几何重绘 sidecar（Python FastAPI :8090，源码保留以便回滚）
 │   └── user-service/        # 用户服务（预留 :8083）
 ├── libs/                    # 公共库
 │   ├── config/              # 配置加载（YAML + 环境变量）
@@ -251,10 +250,6 @@ geometry:
   enabled: true      # 启用内置几何重绘（默认 false）
   max_attempts: 3    # 结构校验失败回喂修正最大轮数
 ```
-
-旧方案（Python sidecar：`apps/geometry-sidecar`，FastAPI + scipy 最小二乘 + matplotlib）
-**已停用**：不再接线、不再部署，源码保留在仓库以便回滚；如需回滚，恢复
-`geometry.sidecar_url` 接线与 `docker-compose.prod.yml` 中的 `geometry-sidecar` 服务即可。
 
 ### 文档识别（word/pdf）
 
