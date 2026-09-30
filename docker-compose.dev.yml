@@ -1,0 +1,12 @@
+# 开发调试环境的 Compose 覆盖文件：开启开发模式与超级验证码。
+# 与生产编排叠加使用（后者自动合并，本文件的值优先生效）：
+#   docker compose -f docker-compose.prod.yml -f docker-compose.dev.yml --env-file .env.production up -d
+# 生效后：
+#   - 登录可用超级验证码 000000（任意合法手机号，新号自动注册）
+#   - 发码响应附带 debug_code 字段回显真实验证码（SMS 本身是 mock，不会真实发短信）
+# 注意：仅限开发调试环境，切勿用于生产。
+services:
+  user-service:
+    environment:
+      LOG_DEV: "true"          # 开发模式总开关（超级验证码的前置条件）
+      AUTH_MASTER_CODE: "true" # 超级验证码 000000 开关（须与 LOG_DEV 同时开启）

@@ -89,9 +89,10 @@ make install-tools   # 安装 watchexec（文件监听）+ air（Go 热重载）
 | 命令 | 作用 | 场景 |
 |---|---|---|
 | `make check` | 静态检查：Go vet + 前端 vue-tsc 类型检查 | 改完代码秒级反馈 |
+| `make lint` | golangci-lint 逐模块检查（未安装会自动安装，与远端 CI 同版本） | 提交前代码质量检查 |
 | `make build` | 编译：Go 全部模块 + 前端构建 | 确认可编译 |
 | `make test` | 单元测试：前后端（含覆盖率） | 确认逻辑正确 |
-| `make ci` | 一键全跑 = check + build + test | **提交前执行**，等价 CI |
+| `make ci` | 一键全跑 = check + lint + build + test + 覆盖率门禁 | **提交前执行**，等价 CI |
 | `make watch` | 监听 `.go/.ts/.vue`，保存即自动 check | 开发中持续反馈 |
 | `make install-tools` | 安装辅助工具 | 首次环境准备 |
 | `make run-sqlite` | 编译并以 SQLite 空库一键启动全部服务（gateway/question/recognition） | 本地免 MySQL 调测，重启即清空数据 |
@@ -115,7 +116,7 @@ make ci
 | Hook | 触发时机 | 执行内容 | 失败后果 |
 |---|---|---|---|
 | `pre-commit` | `git commit` 前 | `make check`（Go vet + 前端类型检查，轻量） | 阻断提交 |
-| `pre-push` | `git push` 前 | `make ci`（check + build + test + 覆盖率门禁，等价远端 CI） | **阻断推送** |
+| `pre-push` | `git push` 前 | `make ci`（check + lint + build + test + 覆盖率门禁，等价远端 CI） | **阻断推送** |
 
 - 提交时仅做轻量静态检查；**推送前**才跑完整 `make ci`（含覆盖率门禁），确保与远端 GitHub Actions 结果一致，避免推送后才发现失败
 - 覆盖率门禁：Go 总体 70% + 逐包阈值、前端 80%（实现见 `scripts/coverage-gate.sh`）
@@ -319,11 +320,24 @@ export:
 
 ## 生产部署
 
-各服务提供多阶段 Dockerfile，通过 Docker Compose 编排部署，配置经环境变量注入。
+业务镜像由 CI 自动构建并推送到**阿里云 ACR**（`docker-push` job，见下文 CI 章节），
+生产编排 `docker-compose.prod.yml` 直接引用镜像仓库中的镜像，部署机**无需源码和构建环境**。
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+# 方式一：一键远程部署（在能 SSH 到目标主机的机器上执行）
+cp deploy/.env.production.example deploy/.env.production   # 填入真实配置
+./deploy/deploy-to-host.sh root@<host>        # 生产模式
+./deploy/deploy-to-host.sh -d root@<host>     # 开发调试模式（叠加 dev.yml，
+                                              # 开启超级验证码 000000 与 debug_code）
+
+# 方式二：手动部署（在部署机上，仓库中的 docker-compose.prod.yml + deploy/prometheus.yml）
+docker compose --env-file .env.production -f docker-compose.prod.yml pull
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
+
+- 镜像版本由 `.env.production` 的 `IMAGE_TAG` 控制（`latest` 或 commit sha，回滚即改此值重新 pull + up）
+- 私有镜像仓库需先在部署机 `docker login`（见 `deploy/deploy.env.example`）
+- 环境变量模板与逐项说明见 `deploy/.env.production.example`
 
 ### 识别服务存储后端（local / s3）
 
@@ -368,7 +382,7 @@ recognition-service（错题原图、重绘 SVG 等文件的存储位置）支�
 
 ```bash
 make test        # 前后端单元测试（含覆盖率）
-make ci          # 静态检查 + 编译 + 测试（等价 CI）
+make ci          # 静态检查 + lint + 编译 + 测试 + 覆盖率门禁（等价 CI）
 ```
 
 也可分别执行：
@@ -388,11 +402,14 @@ cd web && npm run test:cov
 
 ## 持续集成（CI）
 
-`.github/workflows/ci.yml` 定义了四类 job，`push` 到 `main` 或提交 PR 时自动触发：
+`.github/workflows/ci.yml` 定义了五类 job，`push` 到 `main` 或提交 PR 时自动触发：
 
 1. **Build**：Go 全模块编译
-2. **Static Analysis**：`go vet` + `golangci-lint`
+2. **Static Analysis**：`go vet` + `golangci-lint`（v1.64，逐模块）
 3. **Unit Test**：Go 测试 + 覆盖率门禁（总体 ≥70%、逐包阈值）
 4. **Web Unit Test**：前端类型检查 + Vitest 测试 + 覆盖率门禁（总体 ≥80%）
+5. **Docker Image Build & Push**：构建 5 个业务镜像（gateway / question / recognition / user / web）；
+   `push` 到 `main` 时推送到阿里云 ACR（tag 同时打 commit sha 与 `latest`），PR 事件只构建验证不推送。
+   推送需要仓库 Secrets：`ALIYUN_ACR_USERNAME` / `ALIYUN_ACR_PASSWORD`
 
 本地执行 `make ci` 即可得到与 CI 一致的结果。

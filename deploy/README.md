@@ -1,6 +1,6 @@
 # 生产部署指南
 
-本文档说明 Peak 各微服务在生产环境的部署方式。核心思路：**容器化 + 环境变量注入配置 + Docker Compose 编排**。
+本文档说明 Peak 各微服务在生产环境的部署方式。核心思路：**CI 构建镜像推送 ACR + 部署机拉取镜像 + 环境变量注入配置 + Docker Compose 编排**。
 
 ## 架构
 
@@ -26,18 +26,19 @@
 ## 前置要求
 
 - Docker 20.10+ 与 Docker Compose v2
-- 可访问镜像源（构建 Go 依赖时需网络）
+- 可访问阿里云 ACR（私有仓库需 `docker login`，凭证见 `deploy/deploy.env.example`）
 
-## 1. 构建镜像
+## 1. 获取镜像
 
-各服务已提供多阶段 Dockerfile，从仓库根目录构建：
+业务镜像由 CI（`docker-push` job）在每次 `push` 到 `main` 后自动构建并推送到阿里云 ACR，
+镜像地址形如 `crpi-xxx.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-<服务名>:<tag>`，
+tag 同时打 commit sha（精确版本）与 `latest`（最新版）。**部署机不需要源码与构建环境。**
 
-- 后端：`apps/{gateway,question-service,recognition-service}/Dockerfile`（Go workspace 上下文）
-- 前端：`web/Dockerfile`（Node 构建 + Nginx 托管）
+如需本地构建（如离线环境应急），各服务多阶段 Dockerfile 仍在仓库中：
 
 ```bash
-# 构建全部服务镜像
-docker compose -f docker-compose.prod.yml build
+# 从仓库根目录构建全部服务镜像
+docker compose -f docker-compose.prod.yml build   # 编排需临时加回 build: 配置
 
 # 或单独构建某个服务
 docker build -f apps/gateway/Dockerfile -t peak-gateway .
@@ -62,28 +63,34 @@ docker build -f web/Dockerfile -t peak-web ./web
 
 ### 敏感配置管理
 
-**切勿**将数据库密码、阿里云密钥写入 `config.yaml` 或提交到仓库。推荐用 `.env` 文件（已 gitignore）：
+**切勿**将数据库密码、阿里云密钥写入 `config.yaml` 或提交到仓库。生产部署使用
+`.env.production`（已 gitignore），模板见 [`deploy/.env.production.example`](.env.production.example)：
 
 ```bash
-# .env（不提交）
-MYSQL_ROOT_PASSWORD=your-strong-password
-MYSQL_DATABASE=peak
-ALIYUN_ACCESS_KEY_ID=xxx
-ALIYUN_ACCESS_SECRET=xxx
-ALIYUN_DASH_KEY=xxx
-RECOGNITION_PROVIDER=aliyun
+cp deploy/.env.production.example deploy/.env.production
+vi deploy/.env.production   # 填入 JWT_SECRET、MySQL 密码、S3 凭证、识别密钥、IMAGE_TAG 等
 ```
 
-Docker Compose 会自动读取同目录的 `.env` 文件。
+Docker Compose 通过 `--env-file .env.production` 读取。
 
 ## 3. 启动
 
 ```bash
-# 前台启动（调试）
-docker compose -f docker-compose.prod.yml up
+# 登录镜像仓库（私有仓库必须，一次即可）
+docker login --username=<ACR用户名> <ACR实例地址>
 
-# 后台启动 + 构建
-docker compose -f docker-compose.prod.yml up -d --build
+# 拉取镜像并后台启动
+docker compose --env-file .env.production -f docker-compose.prod.yml pull
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+```
+
+也可在能 SSH 到目标主机的机器上一键完成（上传文件 + 登录 + 拉取 + 启动）：
+
+```bash
+./deploy/deploy-to-host.sh root@<host>      # 生产模式
+./deploy/deploy-to-host.sh -d root@<host>   # 开发调试模式：额外上传并叠加
+                                            # docker-compose.dev.yml（LOG_DEV/AUTH_MASTER_CODE
+                                            # 置 true，超级验证码 000000 可登录）
 ```
 
 启动后服务分布：
@@ -107,15 +114,18 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 ## 5. 更新与回滚
 
+版本由 `.env.production` 中的 `IMAGE_TAG` 控制（CI 为每次 main 推送都打 commit sha tag）：
+
 ```bash
-# 拉取新代码后重建并滚动更新
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+# 更新到最新版
+vi .env.production   # IMAGE_TAG=latest（或目标 commit sha）
+docker compose --env-file .env.production -f docker-compose.prod.yml pull
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 
 # 查看运行状态
-docker compose -f docker-compose.prod.yml ps
+docker compose --env-file .env.production -f docker-compose.prod.yml ps
 
-# 回滚：切换到旧 commit 后重新构建
+# 回滚：把 IMAGE_TAG 改回旧 commit sha，重新 pull + up 即可
 ```
 
 ## 6. 前端部署
@@ -128,11 +138,8 @@ docker compose -f docker-compose.prod.yml ps
 
 ```bash
 # 作为 compose 的一部分整体部署（推荐）
-docker compose -f docker-compose.prod.yml up -d --build
-
-# 或单独构建/运行前端镜像
-docker build -f web/Dockerfile -t peak-web ./web
-docker run -d -p 80:80 --network peak_default peak-web
+docker compose --env-file .env.production -f docker-compose.prod.yml pull
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
 
 如需将前端与后端分离部署（前端走 CDN / 对象存储）：
