@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"peak/apps/user-service/internal/code"
+	"peak/apps/user-service/internal/guard"
 	"peak/apps/user-service/internal/mail"
 	"peak/apps/user-service/internal/repository"
 	"peak/apps/user-service/internal/service"
@@ -85,8 +86,13 @@ type fixture struct {
 	mailer *recordingMailer
 }
 
-// setup 构建带 SQLite 存储的测试服务与路由。
+// setup 构建带 SQLite 存储的测试服务与路由（默认防爆破参数）。
 func setup(t *testing.T, cfg service.Config) *fixture {
+	return setupWithGuard(t, cfg, guard.Config{})
+}
+
+// setupWithGuard 同 setup，但允许自定义防爆破参数（便于用小阈值快速测 IP 限频）。
+func setupWithGuard(t *testing.T, cfg service.Config, gcfg guard.Config) *fixture {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -102,7 +108,7 @@ func setup(t *testing.T, cfg service.Config) *fixture {
 	codes := code.NewStore(code.Config{})
 	sender := &recordingSender{}
 	mailer := &recordingMailer{}
-	svc := service.New(repos, codes, sender, mailer, cfg)
+	svc := service.New(repos, codes, sender, mailer, guard.NewGuard(gcfg), cfg)
 
 	r := gin.New()
 	New(svc).RegisterRoutes(r)
@@ -498,6 +504,134 @@ func TestPasswordValidation(t *testing.T) {
 		"email": email, "password": "short", "code": emailCode(t, f),
 	}); w.Code != http.StatusBadRequest {
 		t.Fatalf("short password: status = %d, want 400", w.Code)
+	}
+}
+
+// registerEmailUser 注册一个邮箱用户供密码登录用例使用。
+func registerEmailUser(t *testing.T, f *fixture, email, password string) {
+	t.Helper()
+	if w := sendEmailCode(t, f, email, "register"); w.Code != http.StatusOK {
+		t.Fatalf("send register code: %d", w.Code)
+	}
+	if w := post(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": password, "code": emailCode(t, f),
+	}); w.Code != http.StatusOK {
+		t.Fatalf("register: %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPasswordLoginLockoutAfterFiveFails(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "lockout@peak.local"
+	registerEmailUser(t, f, email, "correct-pass-1")
+
+	// 连续 4 次错误密码：401（未锁定）。
+	for i := 1; i <= 4; i++ {
+		w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+			"account": email, "password": "wrong-pass-000",
+		})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong attempt %d: status = %d, want 401, body = %s", i, w.Code, w.Body.String())
+		}
+	}
+
+	// 第 5 次失败触发锁定。
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "wrong-pass-000",
+	}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("5th wrong attempt: status = %d, want 401", w.Code)
+	}
+
+	// 锁定期间即使密码正确也被拒绝 → 429 + 明确提示。
+	w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "correct-pass-1",
+	})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked login: status = %d, want 429, body = %s", w.Code, w.Body.String())
+	}
+	if msg := decode(t, w)["message"]; msg != "尝试次数过多，账号已锁定，请约 15 分钟后再试" {
+		t.Fatalf("locked message = %v", msg)
+	}
+}
+
+func TestPasswordLoginSuccessResetsFailCounter(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "reset-counter@peak.local"
+	registerEmailUser(t, f, email, "good-password-9")
+
+	// 4 次失败（未达 5 次阈值）。
+	for i := 0; i < 4; i++ {
+		post(t, f.r, "/api/users/auth/password/login", map[string]string{
+			"account": email, "password": "wrong-pass-000",
+		})
+	}
+	// 登录成功清零计数。
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "good-password-9",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("correct login after 4 fails: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	// 再次 4 次失败仍不锁定（计数已清零）。
+	for i := 0; i < 4; i++ {
+		w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+			"account": email, "password": "wrong-pass-000",
+		})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("fail %d after reset: status = %d, want 401", i+1, w.Code)
+		}
+	}
+	if w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": email, "password": "good-password-9",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("correct login after second round: status = %d, want 200", w.Code)
+	}
+}
+
+func TestPasswordLoginIPRateLimit(t *testing.T) {
+	// 小阈值快速验证：同 IP 3 次尝试后第 4 次拒绝（成败均计入）。
+	f := setupWithGuard(t, devConfig(false), guard.Config{
+		MaxFails: 100, IPWindow: 15 * time.Minute, IPMaxAttempts: 3,
+	})
+
+	for i := 1; i <= 3; i++ {
+		w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+			"account": "nobody@peak.local", "password": "whatever-123",
+		})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i, w.Code)
+		}
+	}
+	w := post(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": "nobody@peak.local", "password": "whatever-123",
+	})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("4th attempt: status = %d, want 429, body = %s", w.Code, w.Body.String())
+	}
+	if msg := decode(t, w)["message"]; msg != "操作过于频繁，请稍后再试" {
+		t.Fatalf("ip limited message = %v", msg)
+	}
+}
+
+func TestPasswordResetGuardedByLock(t *testing.T) {
+	f := setup(t, devConfig(false))
+	email := "reset-lock@peak.local"
+	registerEmailUser(t, f, email, "before-reset-1")
+
+	// 连续失败 5 次密码登录触发账号锁定。
+	for i := 0; i < 5; i++ {
+		post(t, f.r, "/api/users/auth/password/login", map[string]string{
+			"account": email, "password": "wrong-pass-000",
+		})
+	}
+	// 锁定期间密码重置同样被拒（密码类接口共用防爆破）。
+	if w := sendEmailCode(t, f, email, "reset"); w.Code != http.StatusOK {
+		t.Fatalf("send reset code: %d", w.Code)
+	}
+	w := post(t, f.r, "/api/users/auth/password/reset", map[string]string{
+		"email": email, "code": emailCode(t, f), "password": "after-reset-2",
+	})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("reset while locked: status = %d, want 429, body = %s", w.Code, w.Body.String())
 	}
 }
 

@@ -10,10 +10,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"peak/apps/user-service/internal/code"
+	"peak/apps/user-service/internal/guard"
 	"peak/apps/user-service/internal/mail"
 	"peak/apps/user-service/internal/repository"
 	"peak/apps/user-service/internal/sms"
@@ -50,6 +52,7 @@ type Config struct {
 	TokenTTL   time.Duration
 	MasterCode bool // 超级验证码（仅开发模式且配置开启时由装配方传入 true）
 	Debug      bool // 开发模式：发码响应附带 debug_code 便于联调
+	Log        *zap.Logger // 结构化日志（密码类认证失败记录，供异常检测）；nil 时静默
 }
 
 // Service 认证服务。
@@ -58,13 +61,50 @@ type Service struct {
 	codes     *code.Store
 	sender    sms.Sender
 	mailer    mail.Sender
+	guard     *guard.Guard
 	cfg       Config
 	now       func() time.Time // 可注入时钟，便于测试
 }
 
 // New 创建认证服务。
-func New(repos repository.UserRepository, codes *code.Store, sender sms.Sender, mailer mail.Sender, cfg Config) *Service {
-	return &Service{repos: repos, codes: codes, sender: sender, mailer: mailer, cfg: cfg, now: time.Now}
+func New(repos repository.UserRepository, codes *code.Store, sender sms.Sender, mailer mail.Sender, g *guard.Guard, cfg Config) *Service {
+	return &Service{repos: repos, codes: codes, sender: sender, mailer: mailer, guard: g, cfg: cfg, now: time.Now}
+}
+
+// log 获取日志器，未注入时静默。
+func (s *Service) log() *zap.Logger {
+	if s.cfg.Log == nil {
+		return zap.NewNop()
+	}
+	return s.cfg.Log
+}
+
+// checkGuard 密码类认证的防爆破前置检查：账号锁定或 IP 超限均返回 429 语义。
+func (s *Service) checkGuard(account, ip string) error {
+	if err := s.guard.Check(account, ip); err != nil {
+		return errors.New(errors.CodeRateLimited, err.Error())
+	}
+	return nil
+}
+
+// recordAuthFailure 记录一次密码类认证失败：累计锁定计数并输出结构化 warn 日志。
+func (s *Service) recordAuthFailure(op, account, ip, reason string) {
+	locked := s.guard.OnFailure(account, ip)
+	s.log().Warn("auth failure",
+		zap.String("op", op),
+		zap.String("account", account),
+		zap.String("ip", ip),
+		zap.String("reason", reason),
+		zap.Bool("account_locked", locked))
+}
+
+// recordAuthSuccess 记录一次密码类认证成功：清零失败计数并输出 info 日志。
+func (s *Service) recordAuthSuccess(op, account, ip string) {
+	s.guard.OnSuccess(account)
+	s.log().Info("auth success",
+		zap.String("op", op),
+		zap.String("account", account),
+		zap.String("ip", ip))
 }
 
 // SendCodeResult 发码结果：ticket 供登录携带，debugCode 仅开发模式返回。
@@ -271,9 +311,13 @@ func (s *Service) EmailRegister(ctx context.Context, email, password, codeStr, i
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("peak-timing-equalizer"), bcrypt.DefaultCost)
 
 // PasswordLogin 密码登录：账号可为手机号或邮箱（与验证码登录并存）。
-// 统一返回"账号或密码不正确"，不区分账号不存在与密码错误。
+// 统一返回"账号或密码不正确"，不区分账号不存在与密码错误；
+// 前置防爆破检查（账号锁定/IP 限频），失败累计锁定并记录结构化日志。
 func (s *Service) PasswordLogin(ctx context.Context, account, password, ip string) (*LoginResult, error) {
 	account = strings.TrimSpace(account)
+	if err := s.checkGuard(account, ip); err != nil {
+		return nil, err
+	}
 	var (
 		user *domain.User
 		err  error
@@ -289,15 +333,18 @@ func (s *Service) PasswordLogin(ctx context.Context, account, password, ip strin
 	if err != nil {
 		if isNotFound(err) {
 			_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // 时序抹平
+			s.recordAuthFailure("password_login", account, ip, "account not found")
 			return nil, errors.New(errors.CodeUnauthorized, "账号或密码不正确")
 		}
 		return nil, errors.Wrap(errors.CodeInternal, "查询用户失败", err)
 	}
 	if user.PasswordHash == "" ||
 		bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		s.recordAuthFailure("password_login", account, ip, "wrong password")
 		return nil, errors.New(errors.CodeUnauthorized, "账号或密码不正确")
 	}
 
+	s.recordAuthSuccess("password_login", account, ip)
 	token, err := auth.Issue(user.ID, s.cfg.JWTSecret, s.cfg.TokenTTL)
 	if err != nil {
 		return nil, errors.Wrap(errors.CodeInternal, "签发令牌失败", err)
@@ -305,8 +352,8 @@ func (s *Service) PasswordLogin(ctx context.Context, account, password, ip strin
 	return &LoginResult{Token: token, User: user}, nil
 }
 
-// ResetPassword 通过邮箱验证码重置密码：消费重置验证码 → 更新密码哈希 →
-// 标记邮箱已验证（验证码即邮箱所有权证明）。
+// ResetPassword 通过邮箱验证码重置密码：防爆破前置检查 → 消费重置验证码 →
+// 更新密码哈希 → 标记邮箱已验证（验证码即邮箱所有权证明）。
 func (s *Service) ResetPassword(ctx context.Context, email, codeStr, newPassword, ip string) error {
 	if !emailRe.MatchString(email) {
 		return errors.New(errors.CodeInvalidArgument, "邮箱格式不正确")
@@ -314,7 +361,11 @@ func (s *Service) ResetPassword(ctx context.Context, email, codeStr, newPassword
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
+	if err := s.checkGuard(email, ip); err != nil {
+		return err
+	}
 	if err := s.codes.Verify(emailCodeKey(emailPurposeReset, email), codeStr); err != nil {
+		s.recordAuthFailure("password_reset", email, ip, err.Error())
 		return errors.New(errors.CodeUnauthorized, err.Error())
 	}
 	user, err := s.repos.GetByEmail(ctx, email)
@@ -336,6 +387,7 @@ func (s *Service) ResetPassword(ctx context.Context, email, codeStr, newPassword
 			return errors.Wrap(errors.CodeInternal, "更新邮箱状态失败", err)
 		}
 	}
+	s.recordAuthSuccess("password_reset", email, ip)
 	return nil
 }
 

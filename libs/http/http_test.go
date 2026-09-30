@@ -45,6 +45,7 @@ func TestFailMapping(t *testing.T) {
 		{errors.CodeForbidden, http.StatusForbidden},
 		{errors.CodeNotFound, http.StatusNotFound},
 		{errors.CodeConflict, http.StatusConflict},
+		{errors.CodeRateLimited, http.StatusTooManyRequests},
 		{errors.CodeInternal, http.StatusInternalServerError},
 		{errors.CodeUpstream, http.StatusInternalServerError},
 	}

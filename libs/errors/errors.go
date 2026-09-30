@@ -17,6 +17,7 @@ const (
 	CodeForbidden        Code = 1003
 	CodeNotFound         Code = 1004
 	CodeConflict         Code = 1005
+	CodeRateLimited      Code = 1006
 	CodeInternal         Code = 5000
 	CodeUpstream         Code = 5001
 	CodeRecognitionFail  Code = 5002

@@ -176,4 +176,19 @@ describe('Login.vue', () => {
     expect(wrapper.text()).toContain('账号或密码不正确')
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
   })
+
+  it('触发防爆破限流时透传 429 提示且不清除登录流程', async () => {
+    const { wrapper } = mountLogin()
+    const tab = wrapper.findAll('button').find((b) => b.text().includes('密码登录'))!
+    await tab.trigger('click')
+
+    httpMethods.post.mockRejectedValueOnce(fail('尝试次数过多，账号已锁定，请约 15 分钟后再试', 429))
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('correct-pass-1')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('尝试次数过多，账号已锁定')
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
 })

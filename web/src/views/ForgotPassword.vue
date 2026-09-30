@@ -5,6 +5,7 @@ import {
   BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, CheckCircle2, Eye, EyeOff,
 } from 'lucide-vue-next'
 import { sendEmailCode, resetPassword } from '../api'
+import { usePasswordStrength } from '../composables/usePasswordStrength'
 
 const router = useRouter()
 
@@ -26,6 +27,8 @@ let timer: ReturnType<typeof setInterval> | undefined
 const emailValid = computed(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim()))
 const passwordValid = computed(() => password.value.length >= 8)
 const confirmValid = computed(() => confirm.value === password.value)
+// 新密码强度实时指示（弱/中/强）。
+const { strength, barClass } = usePasswordStrength(password)
 const canSend = computed(() => emailValid.value && countdown.value === 0 && !sending.value)
 const canReset = computed(() => code.value.length > 0 && passwordValid.value && confirmValid.value && !resetting.value)
 
@@ -191,6 +194,17 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="password && !passwordValid" class="mt-1.5 text-xs text-red-600">密码至少 8 位</p>
+          <div v-else-if="password" class="mt-2">
+            <div class="flex gap-1.5" aria-hidden="true">
+              <div
+                v-for="i in 3"
+                :key="i"
+                class="h-1 flex-1 rounded-full transition-colors duration-300"
+                :class="i <= strength.score ? barClass.active : 'bg-slate-200'"
+              />
+            </div>
+            <p class="mt-1 text-xs" :class="barClass.text">密码强度：{{ strength.label }}</p>
+          </div>
         </div>
 
         <div>

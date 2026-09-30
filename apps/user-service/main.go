@@ -12,6 +12,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"peak/apps/user-service/internal/code"
+	"peak/apps/user-service/internal/guard"
 	"peak/apps/user-service/internal/handler"
 	"peak/apps/user-service/internal/mail"
 	"peak/apps/user-service/internal/repository"
@@ -64,22 +65,24 @@ func main() {
 		observability.RegisterDBStats(sqlDB, "user-service")
 	}
 
-	// 组装认证依赖：repository -> code store -> sms/mail sender -> service -> handler。
+	// 组装认证依赖：repository -> code store -> sms/mail sender -> guard -> service -> handler。
 	repos := repository.NewUserRepository(db)
 	codes := code.NewStore(code.Config{})
 	sender := newSender(cfg, zapLog)
 	mailer := newMailSender(cfg, zapLog)
+	bruteGuard := guard.NewGuard(guard.Config{})
 
 	tokenTTL, err := time.ParseDuration(cfg.String("auth.token_ttl", "168h"))
 	if err != nil {
 		panic(err)
 	}
-	svc := service.New(repos, codes, sender, mailer, service.Config{
+	svc := service.New(repos, codes, sender, mailer, bruteGuard, service.Config{
 		JWTSecret: cfg.String("auth.jwt_secret", ""),
 		TokenTTL:  tokenTTL,
 		// 超级验证码双开关：配置显式开启 且 仅开发模式生效；生产强制禁用。
 		MasterCode: cfg.Bool("auth.master_code", false) && cfg.Bool("log.development", true),
 		Debug:      cfg.Bool("log.development", true),
+		Log:        appLog.Logger,
 	})
 	h := handler.New(svc)
 
