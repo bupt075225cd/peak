@@ -270,10 +270,9 @@ services:
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      # 仅绑定主机回环地址：外网/内网其它机器不可直接访问，
-      # 运维经 SSH 隧道访问（ssh -L 3001:127.0.0.1:3001 root@<host>）。
       # 主机侧端口可通过 GRAFANA_PORT 覆盖（默认 3001，与主机上其他服务冲突时改此值）。
-      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+      # 安全依赖强制登录（匿名已关闭 + .env 注入强密码），无回环绑定。
+      - "${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
       - loki
