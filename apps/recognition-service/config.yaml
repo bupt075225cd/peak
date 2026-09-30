@@ -15,6 +15,12 @@ files:
 database:
   dialect: "${DB_DIALECT:-mysql}"  # mysql / postgres / sqlite
   dsn: "${DB_DSN:-root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local}"
+  # 连接池与慢查询（连接池指标经 /metrics 暴露，用于告警池饱和）。
+  slow_query_threshold: "${DB_SLOW_QUERY_THRESHOLD:-200ms}"  # 超过即记 Warn 日志
+  max_open_conns: "${DB_MAX_OPEN_CONNS:-25}"
+  max_idle_conns: "${DB_MAX_IDLE_CONNS:-10}"
+  conn_max_lifetime: "${DB_CONN_MAX_LIFETIME:-1h}"
+  conn_max_idle_time: "${DB_CONN_MAX_IDLE_TIME:-10m}"
 
 storage:
   # 存储后端类型：local（本地磁盘，默认，适合本地调试）/ s3（S3 兼容对象存储，适合 Docker/K8s 部署）。

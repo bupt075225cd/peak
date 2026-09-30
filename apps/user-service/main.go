@@ -51,12 +51,16 @@ func main() {
 			_ = os.MkdirAll(dir, 0o755)
 		}
 	}
-	db, err := domain.OpenDB(domain.DBDialect(dialect), dsn, gormLogLevel(cfg.Bool("log.development", true)))
+	db, err := domain.OpenDBFromConfig(cfg, gormLogLevel(cfg.Bool("log.development", true)))
 	if err != nil {
 		panic(err)
 	}
 	if err := domain.Migrate(db); err != nil {
 		panic(err)
+	}
+	// 暴露连接池指标（连接数/等待数/等待时长），用于告警连接池饱和。
+	if sqlDB, derr := db.DB(); derr == nil {
+		observability.RegisterDBStats(sqlDB, "user-service")
 	}
 
 	// 组装认证依赖：repository -> code store -> sms sender -> service -> handler。
@@ -80,6 +84,7 @@ func main() {
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()
 	engine.Use(observability.MetricsMiddleware())
+	engine.Use(observability.TracingMiddleware())
 	observability.RegisterMetricsEndpoint(engine)
 	engine.GET("/healthz", func(c *gin.Context) {
 		httpx.OK(c, gin.H{"status": "ok"})

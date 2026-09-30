@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -8,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"peak/libs/auth"
@@ -63,6 +67,9 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 		httpx.OK(c, gin.H{"status": "ok"})
 	})
 
+	// 前端监控上报（公开端点，见 publicPrefixes 白名单）。
+	registerMonitorReport(engine, g.log.Logger)
+
 	// 跨域处理。
 	engine.Use(corsMiddleware())
 
@@ -83,6 +90,7 @@ var publicPrefixes = []string{
 	"/api/users/auth/",        // 发码与验证码登录
 	"/api/recognition/files/", // 识别产物文件（SVG/原图）
 	"/api/mistakes/files/",    // 正式区配图（committed/）
+	"/api/monitor/",           // 前端监控上报（无用户数据读取，仅写入）
 	"/healthz",
 	"/metrics",
 }
@@ -152,10 +160,9 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	handler := func(c *gin.Context) {
-		// 透传 traceID；用户身份（X-User-Id/X-Real-IP）已由鉴权中间件写入请求头。
-		if tid := c.GetString("trace_id"); tid != "" {
-			c.Request.Header.Set("X-Trace-Id", tid)
-		}
+		// 透传追踪上下文（traceparent + X-Trace-Id 兼容）；
+		// 用户身份（X-User-Id/X-Real-IP）已由鉴权中间件写入请求头。
+		injectTraceContext(c)
 		// gin 的 ResponseWriter 未实现 http.CloseNotifier，
 		// 通过适配器补齐以兼容 httputil.ReverseProxy。
 		proxy.ServeHTTP(&closeNotifyWriter{ResponseWriter: c.Writer}, c.Request)
@@ -166,12 +173,49 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 	engine.Any(prefix+"/*path", handler)
 }
 
+// injectTraceContext 向下游请求注入追踪上下文：
+// - 请求上下文有激活 span（tracing 已启用）时，写标准 W3C traceparent，
+//   下游 span 以网关 span 为父，形成完整链路；
+// - 无激活 span 时，若 trace_id 为 32 位 hex 也可构造 traceparent（仅关联、不采样）；
+// - 始终透传自定义 X-Trace-Id 头，保持与旧后端/测试兼容。
+func injectTraceContext(c *gin.Context) {
+	tid := c.GetString("trace_id")
+	spanID := func() string {
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err != nil {
+			return ""
+		}
+		return hex.EncodeToString(b)
+	}
+	if sc := trace.SpanContextFromContext(c.Request.Context()); sc.IsValid() && spanID() != "" {
+		flags := "00"
+		if sc.IsSampled() {
+			flags = "01"
+		}
+		c.Request.Header.Set("traceparent",
+			fmt.Sprintf("00-%s-%s-%s", sc.TraceID(), spanID(), flags))
+	} else if isHex32(tid) && spanID() != "" {
+		c.Request.Header.Set("traceparent", "00-"+tid+"-"+spanID()+"-00")
+	}
+	if tid != "" {
+		c.Request.Header.Set("X-Trace-Id", tid)
+	}
+}
+
+func isHex32(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 // corsMiddleware 跨域处理（开发阶段全放开，生产通过配置收紧）。
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-Id, X-User-Id")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-Id, X-User-Id, traceparent, tracestate")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

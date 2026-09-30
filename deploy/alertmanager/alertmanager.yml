@@ -1,0 +1,18 @@
+# Alertmanager 配置：告警分组、去重与通知路由。
+# 默认只提供 webhook 占位（接入钉钉/飞书/企业微信机器人时，
+# 把 webhook_configs.url 换成对应的机器人地址或 prometheus-webhook-dingtalk 地址）。
+route:
+  receiver: default
+  group_by: ["alertname", "job"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default
+    webhook_configs:
+      # 占位：换成真实通知渠道后生效。
+      # 钉钉:    http://dingtalk-webhook:8060/dingtalk/<bot>/send
+      # 飞书:    https://open.feishu.cn/open-apis/bot/v2/hook/<token>
+      - url: "http://localhost:5001/"
+        send_resolved: true

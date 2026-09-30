@@ -314,9 +314,54 @@ export:
 
 ## 可观测性
 
-- **日志**：zap 结构化日志，统一 traceID
-- **指标**：Prometheus，各服务暴露 `/metrics`
-- **追踪**：OpenTelemetry，配置 `tracing.endpoint` 启用
+三支柱（Metrics / Logs / Traces）统一 Trace ID 贯通：**指标报警 → 点击 trace_id 跳 Tempo 链路 → 下钻 Loki 日志**。
+
+### 统一 Trace ID（前后端打通）
+
+- 前端 axios 拦截器为每个 API 请求注入 W3C `traceparent` 头；网关反代透传（并兼容旧的 `X-Trace-Id`）
+- 后端各服务经 OTel 中间件创建入口 span，日志（zap JSON）与指标维度自动携带同一 `trace_id`
+- 异步识别任务经 `context.WithoutCancel` 继承触发请求的 trace，任务链路可在 Tempo 中串联
+
+### 指标（Prometheus，各服务 `/metrics`）
+
+| 指标 | 说明 |
+| --- | --- |
+| `http_requests_total` / `http_request_duration_seconds` | QPS 与延迟分位（P50/P95/P99） |
+| `go_gc_duration_seconds` / `go_goroutines` / `go_memstats_*` | Go 运行时：GC 频率/耗时、goroutine、堆内存 |
+| `db_connections_*` / `db_wait_count_total` | DB 连接池与等待（池饱和告警） |
+| `recognition_task_total` / `recognition_task_duration_seconds` | 识别任务成败率与端到端耗时 |
+| `ai_call_total` / `ai_call_duration_seconds` | 第三方 AI（VLM）各能力调用的失败率与耗时 |
+| `mistake_ops_total` | 错题创建/导出业务量 |
+| `frontend_report_total` | 前端事件（PV/错误/Web Vitals） |
+
+### 链路（OpenTelemetry → Tempo）
+
+- HTTP 入口 span（含路由模板、状态码）、GORM SQL span（`db.statement` 参数化 SQL）、AI provider client span（`ai.<operation>`）
+- 配置 `tracing.endpoint`（如 `tempo:4317`）启用；留空自动 no-op，本地开发零开销
+
+### 日志（zap JSON → Alloy → Loki）
+
+- 容器 stdout JSON 日志由 Alloy 采集入 Loki（`container`/`job` 标签），支持按 `trace_id` 检索
+- 慢查询（`database.slow_query_threshold`，默认 200ms）以 Warn 级落日志
+
+### 前端监控（自建轻量 SDK，`web/src/monitor`）
+
+- **性能**：LCP / FID / CLS / TTFB（官方 `web-vitals`）
+- **错误**：全局 JS 错误、Promise 未处理拒绝、静态资源加载失败（捕获阶段监听）
+- **行为**：PV/UV（session 去重）、路由切换耗时、页面停留时长
+- **上报**：批量（20 条或 5s）+ 采样（错误 100%、行为 10%）+ `sendBeacon`/`fetch keepalive`，页面关闭兜底 flush；端点 `POST /api/monitor/report`（网关公开端点）
+
+### 存储与可视化（Grafana 全家桶，生产编排内置）
+
+| 组件 | 选型理由 |
+| --- | --- |
+| Prometheus | 事实标准，`libs/observability` 原生对接，零迁移成本（备选 VictoriaMetrics 写入压缩更优但需换生态） |
+| Loki + Alloy | 只索引标签、单机成本低、与 Tempo trace-to-logs 原生互通（备选 ELK 全文检索强但资源占用高 3-5 倍） |
+| Tempo | OTLP 原生接收、按 TraceID 检索与本项目查询模式匹配（备选 Jaeger UI 成熟但存储依赖 ES/Cassandra） |
+| Grafana + Alertmanager | 统一入口 + 告警分组通知 |
+
+- **预置看板**（Grafana `:3000`，provisioning 自动导入）：全局总览、Go 运行时、数据库连接池、识别业务、前端监控
+- **告警规则**（`deploy/prometheus/alerts.yml`）：服务宕机、5xx 率、P99 延迟、识别失败率、AI 错误率、DB 池等待、前端错误突增；通知渠道在 `deploy/alertmanager/alertmanager.yml` 配置 webhook
 
 ## 生产部署
 

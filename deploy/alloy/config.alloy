@@ -1,0 +1,37 @@
+// Grafana Alloy 配置：采集本机全部 Docker 容器的 stdout 日志（JSON 格式），
+// 打上 container 标签后推送到 Loki。生产日志为 zap JSON（含 trace_id 字段），
+// Grafana 的 Loki derived field 会把 trace_id 转为 Tempo 链路跳转链接。
+discovery.docker "linux" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.linux.targets
+
+  // 容器名（去掉前导斜杠）作为 container 标签。
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // compose 项目名作为 project 标签，便于区分环境。
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.default.receiver]
+  labels     = { job = "peak" }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

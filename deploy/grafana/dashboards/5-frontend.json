@@ -1,0 +1,59 @@
+{
+  "uid": "peak-frontend",
+  "title": "Peak · 前端监控（Web Vitals/错误/运营）",
+  "tags": ["peak", "frontend"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "PV 速率（按页面路径，运营）",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (path) (rate(frontend_report_total{type=\"pv\"}[5m]))", "legendFormat": "{{path}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "前端错误速率（js_error / unhandled_rejection / resource_error）",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (name) (rate(frontend_report_total{type=\"error\"}[15m]))", "legendFormat": "{{name}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Web Vitals 样本量（LCP/FID/CLS/TTFB 上报速率）",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (name) (rate(frontend_report_total{type=\"webvital\"}[15m]))", "legendFormat": "{{name}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "路由切换耗时 P75（Loki 量化 route_timing 事件）",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "quantile_over_time(0.75, {job=\"peak\", container=\"peak-gateway\"} | json | event_name=\"route_timing\" | unwrap data_ms [10m])" }],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "页面停留时长均值（运营留存参考）",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "avg_over_time({job=\"peak\", container=\"peak-gateway\"} | json | event_name=\"page_dwell\" | unwrap data_seconds | __error__=\"\" [15m])" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "logs",
+      "title": "前端错误事件日志（含堆栈，点 trace_id 跳 Tempo 链路）",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{job=\"peak\", container=\"peak-gateway\"} | json | event_type=\"error\" | line_format \"{{.path}} {{.event_name}} {{.data_message}} {{.client_trace_id}}\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

@@ -59,6 +59,12 @@ services:
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   question-service:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-question-service:${IMAGE_TAG:-latest}
@@ -87,6 +93,12 @@ services:
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     expose:
       - "8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   recognition-service:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-recognition-service:${IMAGE_TAG:-latest}
@@ -133,6 +145,12 @@ services:
       - recognition-data:/data
     expose:
       - "8082"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   user-service:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-user-service:${IMAGE_TAG:-latest}
@@ -154,6 +172,12 @@ services:
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     expose:
       - "8083"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   # ── 前端（Nginx 托管静态资源 + 反代 /api）────────────────
   web:
@@ -167,15 +191,99 @@ services:
       - "80:80"
 
   # ── 可观测性 ────────────────────────────────────────────
+  # Prometheus（指标）+ Alertmanager（告警）+ Loki/Alloy（日志）
+  # + Tempo（链路）+ Grafana（统一入口，预置看板与三支柱互跳）。
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     container_name: peak-prometheus
     restart: unless-stopped
     volumes:
-      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    expose:
+      - "9090"
+    depends_on:
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: peak-alertmanager
+    restart: unless-stopped
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    expose:
+      - "9093"
+
+  loki:
+    image: grafana/loki:3.1.1
+    container_name: peak-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./deploy/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    expose:
+      - "3100"
+
+  # Alloy：采集全部容器 stdout 日志推送 Loki（需挂载 docker.sock）。
+  alloy:
+    image: grafana/alloy:v1.1.1
+    container_name: peak-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+    volumes:
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    container_name: peak-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo-config.yml"]
+    volumes:
+      - ./deploy/tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
+      - tempo-data:/var/tempo
+    expose:
+      - "3200"
+      - "4317"  # OTLP gRPC：业务服务 TRACING_ENDPOINT 指向此处
+      - "4318"  # OTLP HTTP
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: peak-grafana
+    restart: unless-stopped
+    environment:
+      # 初始管理员密码通过 .env 注入（默认弱密码仅便于首次登录，请修改）。
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-peak123456}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # 匿名只读浏览（运营直接看板，无需登录）。
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
     ports:
-      - "9090:9090"
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
 
 volumes:
   mysql-data:
   recognition-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  alloy-data:
+  grafana-data:

@@ -40,6 +40,18 @@ scp -P "$PORT" docker-compose.prod.yml "$TARGET:$REMOTE_DIR/"
 if [ "$DEV" = "1" ]; then scp -P "$PORT" docker-compose.dev.yml "$TARGET:$REMOTE_DIR/"; fi
 scp -P "$PORT" deploy/prometheus.yml "$TARGET:$REMOTE_DIR/deploy/"
 scp -P "$PORT" deploy/.env.production "$TARGET:$REMOTE_DIR/.env.production"
+# 可观测栈配置：prometheus 告警规则 / loki / tempo / alloy / alertmanager / grafana provisioning
+ssh -p "$PORT" "$TARGET" "mkdir -p $REMOTE_DIR/deploy/prometheus $REMOTE_DIR/deploy/loki \
+  $REMOTE_DIR/deploy/tempo $REMOTE_DIR/deploy/alloy $REMOTE_DIR/deploy/alertmanager \
+  $REMOTE_DIR/deploy/grafana/provisioning/datasources $REMOTE_DIR/deploy/grafana/provisioning/dashboards \
+  $REMOTE_DIR/deploy/grafana/dashboards"
+scp -P "$PORT" deploy/prometheus/alerts.yml "$TARGET:$REMOTE_DIR/deploy/prometheus/"
+scp -P "$PORT" deploy/loki/loki-config.yml "$TARGET:$REMOTE_DIR/deploy/loki/"
+scp -P "$PORT" deploy/tempo/tempo-config.yml "$TARGET:$REMOTE_DIR/deploy/tempo/"
+scp -P "$PORT" deploy/alloy/config.alloy "$TARGET:$REMOTE_DIR/deploy/alloy/"
+scp -P "$PORT" deploy/alertmanager/alertmanager.yml "$TARGET:$REMOTE_DIR/deploy/alertmanager/"
+scp -P "$PORT" -r deploy/grafana/provisioning/. "$TARGET:$REMOTE_DIR/deploy/grafana/provisioning/"
+scp -P "$PORT" deploy/grafana/dashboards/* "$TARGET:$REMOTE_DIR/deploy/grafana/dashboards/" 2>/dev/null || true
 
 # 可选：在目标主机登录阿里云 ACR（私有仓库需要）
 if [ -f deploy/deploy.env ]; then

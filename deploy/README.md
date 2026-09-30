@@ -108,9 +108,31 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 
 ## 4. 健康检查与监控
 
-- **Prometheus**：各服务暴露 `/metrics`，Prometheus 通过服务名抓取（见 `deploy/prometheus.yml`）
+- **健康检查**：四个后端服务均实现 `/healthz`，prod 编排已配置容器 healthcheck（wget 探活，15s 间隔）
+- **指标**：各服务暴露 `/metrics`，Prometheus 通过服务名抓取（见 `deploy/prometheus.yml`）
 - **数据库**：mysql 服务配置了 healthcheck，`question-service`/`recognition-service` 依赖其 `service_healthy` 后才启动
-- **日志**：`docker compose logs -f <service>` 查看
+- **日志**：`docker compose logs -f <service>`；生产日志同时由 Alloy 采集入 Loki
+
+### 可观测栈（Grafana 全家桶）
+
+| 服务 | 端口 | 说明 |
+| --- | --- | --- |
+| grafana | **3000（对外）** | 统一看板入口：预置 5 块看板（全局/运行时/数据库/识别业务/前端），provisioning 自动导入 |
+| prometheus | 内网 9090 | 指标抓取 + 告警规则求值（`deploy/prometheus/alerts.yml`） |
+| alertmanager | 内网 9093 | 告警分组与通知（webhook 渠道见 `deploy/alertmanager/alertmanager.yml`） |
+| loki | 内网 3100 | 集中日志存储（容器 stdout，JSON，含 trace_id） |
+| alloy | 内网 | 日志采集代理（挂载 docker.sock，自动发现容器） |
+| tempo | 内网 4317/3200 | OTLP 链路接收（业务 `TRACING_ENDPOINT=tempo:4317`）与查询 |
+
+**三支柱互跳**：Grafana 内 Loki 的 `trace_id` 字段可点击跳转 Tempo 链路；Tempo 链路详情可跳回 Loki 按 trace_id 查日志。报警 → 链路 → 日志一条路径完成下钻。
+
+**日常排查路径**：
+
+1. Grafana「全局服务总览」看板发现 5xx 率或 P99 异常（或收到 Alertmanager 告警）
+2. 从响应头 `X-Trace-Id`（或前端事件中的 trace_id）到 Tempo 查询链路，确认卡在 SQL（`gorm.*` span 的 `db.statement`）还是第三方 AI（`ai.*` span）
+3. 到 Loki 用 `{container="peak-gateway"} | json | trace_id="<id>"` 拉出该请求全链路日志
+
+告警通知渠道默认是 webhook 占位，接入钉钉/飞书时修改 `deploy/alertmanager/alertmanager.yml` 后 `up -d alertmanager` 生效。
 
 ## 5. 更新与回滚
 

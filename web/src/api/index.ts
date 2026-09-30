@@ -1,17 +1,25 @@
 import axios from 'axios'
 import { TOKEN_KEY, logout } from '../composables/useAuth'
+import { requestTraceparent } from '../monitor'
 
 const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
 })
 
-// 请求拦截器：注入 Bearer 令牌；用户身份由网关校验 JWT 后注入，
-// 前端不再直接携带 X-User-Id。
+// 请求拦截器：注入 Bearer 令牌与 W3C traceparent；用户身份由网关校验
+// JWT 后注入，前端不再直接携带 X-User-Id。
+// traceparent 使每个 API 请求在前端事件与后端链路间共用同一 Trace ID：
+// 前端报"接口慢"时，可直接用该 ID 在 Tempo 中下钻后端 SQL/第三方调用耗时。
 export function authRequestInterceptor(config: import('axios').InternalAxiosRequestConfig) {
   const token = localStorage.getItem(TOKEN_KEY)
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  try {
+    config.headers.traceparent = requestTraceparent()
+  } catch {
+    /* trace 注入失败不影响业务请求 */
   }
   return config
 }

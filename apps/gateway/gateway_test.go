@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,6 +226,45 @@ func TestAuthMiddlewareInjectsRealIP(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Body.String() != "192.168.1.50" {
 		t.Fatalf("X-Real-IP = %s, want gateway ClientIP", w.Body.String())
+	}
+}
+
+func TestInjectTraceContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// 32 位 hex trace_id（无激活 span）：应构造不采样的 traceparent + 透传 X-Trace-Id。
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("trace_id", "4bf92f3577b34da6a3ce929d0e0e4736")
+		c.Next()
+	})
+	r.GET("/", func(c *gin.Context) {
+		injectTraceContext(c)
+		c.String(http.StatusOK, c.Request.Header.Get("traceparent")+"|"+c.Request.Header.Get("X-Trace-Id"))
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.HasPrefix(w.Body.String(), "00-4bf92f3577b34da6a3ce929d0e0e4736-") {
+		t.Fatalf("expected traceparent with hex trace id, got %s", w.Body.String())
+	}
+	if !strings.HasSuffix(w.Body.String(), "|4bf92f3577b34da6a3ce929d0e0e4736") {
+		t.Fatalf("expected X-Trace-Id passthrough, got %s", w.Body.String())
+	}
+
+	// 非 hex trace_id：仅透传 X-Trace-Id，不写 traceparent。
+	r2 := gin.New()
+	r2.Use(func(c *gin.Context) {
+		c.Set("trace_id", "trace-xyz")
+		c.Next()
+	})
+	r2.GET("/", func(c *gin.Context) {
+		injectTraceContext(c)
+		c.String(http.StatusOK, c.Request.Header.Get("traceparent")+"|"+c.Request.Header.Get("X-Trace-Id"))
+	})
+	w2 := httptest.NewRecorder()
+	r2.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w2.Body.String() != "|trace-xyz" {
+		t.Fatalf("expected only X-Trace-Id passthrough, got %s", w2.Body.String())
 	}
 }
 

@@ -1,5 +1,17 @@
+# Prometheus 配置：抓取全部业务服务 /metrics，告警推送到 Alertmanager。
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 告警规则（deploy/prometheus/alerts.yml）。
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# 告警发送到 Alertmanager（由 Alertmanager 负责分组/去重/通知渠道）。
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   # 生产环境：通过服务名访问容器网络
@@ -17,3 +29,8 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["recognition-service:8082"]
+
+  - job_name: "user-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["user-service:8083"]

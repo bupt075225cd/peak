@@ -38,6 +38,7 @@ func main() {
 	// 接入 Prometheus 指标。
 	engine := server.Engine()
 	engine.Use(observability.MetricsMiddleware())
+	engine.Use(observability.TracingMiddleware())
 	observability.RegisterMetricsEndpoint(engine)
 
 	gw := NewGateway(cfg, log)

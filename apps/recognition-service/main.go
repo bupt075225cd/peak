@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	gormlogger "gorm.io/gorm/logger"
 
@@ -37,17 +38,17 @@ func main() {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
-	// 初始化数据库。
-	db, err := domain.OpenDB(
-		domain.DBDialect(cfg.String("database.dialect", "mysql")),
-		cfg.String("database.dsn", ""),
-		gormLogLevel(cfg.Bool("log.development", true)),
-	)
+	// 初始化数据库（连接池 + 慢查询日志 + OTel SQL 追踪，均由配置驱动）。
+	db, err := domain.OpenDBFromConfig(cfg, gormLogLevel(cfg.Bool("log.development", true)))
 	if err != nil {
 		panic(err)
 	}
 	if err := domain.Migrate(db); err != nil {
 		panic(err)
+	}
+	// 暴露连接池指标（连接数/等待数/等待时长），用于告警连接池饱和。
+	if sqlDB, derr := db.DB(); derr == nil {
+		observability.RegisterDBStats(sqlDB, "recognition-service")
 	}
 
 	// 初始化存储：local=本地磁盘（默认，本地调试）/ s3=S3 兼容对象存储（Docker/K8s 部署）。
@@ -88,7 +89,12 @@ func main() {
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()
 	engine.Use(observability.MetricsMiddleware())
+	engine.Use(observability.TracingMiddleware())
 	observability.RegisterMetricsEndpoint(engine)
+	// 存活探针（轻量，不探测 DB；依赖健康由容器编排 restart 策略兜底）。
+	engine.GET("/healthz", func(c *gin.Context) {
+		httpx.OK(c, gin.H{"status": "ok"})
+	})
 	h.RegisterRoutes(engine)
 
 	addr := ":" + cfg.String("server.port", "8082")

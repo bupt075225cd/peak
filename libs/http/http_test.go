@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,6 +112,54 @@ func TestTraceIDMiddleware(t *testing.T) {
 	r.ServeHTTP(w3, req3)
 	if w3.Body.String() != "req-123" {
 		t.Fatalf("expected req-123, got %s", w3.Body.String())
+	}
+}
+
+func TestTraceIDFromTraceparent(t *testing.T) {
+	cases := []struct {
+		name string
+		tp   string
+		want string
+	}{
+		{"valid", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "4bf92f3577b34da6a3ce929d0e0e4736"},
+		{"non-zero version", "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", ""},
+		{"bad traceid", "00-xxxx-00f067aa0ba902b7-01", ""},
+		{"short traceid", "00-4bf92f35-00f067aa0ba902b7-01", ""},
+		{"bad parent", "00-4bf92f3577b34da6a3ce929d0e0e4736-zzz-01", ""},
+		{"missing parts", "00-4bf92f3577b34da6a3ce929d0e0e4736", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := TraceIDFromTraceparent(tc.tp); got != tc.want {
+			t.Fatalf("%s: TraceIDFromTraceparent(%q) = %q, want %q", tc.name, tc.tp, got, tc.want)
+		}
+	}
+}
+
+func TestTraceIDMiddlewareTraceparent(t *testing.T) {
+	r := setupRouter()
+	r.Use(TraceID())
+	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, c.GetString("trace_id")) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	r.ServeHTTP(w, req)
+	if w.Body.String() != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("expected traceid from traceparent, got %s", w.Body.String())
+	}
+	if w.Header().Get("X-Trace-Id") != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatal("expected X-Trace-Id response header aligned with traceparent")
+	}
+}
+
+func TestNewTraceIDFormat(t *testing.T) {
+	id := newTraceID()
+	if len(id) != 32 {
+		t.Fatalf("expected 32-char hex trace id, got %q", id)
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		t.Fatalf("expected hex trace id, got %q", id)
 	}
 }
 

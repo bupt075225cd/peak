@@ -9,12 +9,15 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"peak/libs/domain"
 	"peak/libs/errors"
 	"peak/libs/logger"
+	"peak/libs/observability"
 	"peak/libs/storage"
 
 	"peak/apps/recognition-service/internal/geom"
@@ -132,7 +135,8 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, imageID uint64,
 		return nil, err
 	}
 	// 异步执行（简化：go routine；生产可接入消息队列）。
-	go s.process(task.ID, storageKey)
+	// WithoutCancel：脱离请求生命周期，但保留 trace 上下文，任务链路可串联到触发请求。
+	go s.process(context.WithoutCancel(ctx), task.ID, storageKey)
 	return task, nil
 }
 
@@ -159,13 +163,13 @@ func (s *Service) RetryTask(ctx context.Context, userID, id uint64) error {
 	if err := s.db.WithContext(ctx).Save(&task).Error; err != nil {
 		return err
 	}
-	go s.process(task.ID, "")
+	go s.process(context.WithoutCancel(ctx), task.ID, "")
 	return nil
 }
 
 // process 执行识别流程，根据文件类型分流：图片走 OCR 流程，文档走解析流程。
-func (s *Service) process(taskID uint64, storageKey string) {
-	ctx := context.Background()
+// 全程记录业务指标（任务耗时/成败）与链路 span（可定位卡在哪个 VLM 阶段）。
+func (s *Service) process(ctx context.Context, taskID uint64, storageKey string) {
 	start := time.Now()
 
 	var task domain.RecognitionTask
@@ -176,6 +180,7 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	// 查询关联文件，判断是图片还是文档。
 	var img domain.Image
 	if err := s.db.First(&img, task.ImageID).Error; err != nil {
+		s.observeTask(ctx, domain.TaskFailed, start)
 		s.updateStatus(taskID, domain.TaskFailed, 0, "image not found")
 		return
 	}
@@ -196,6 +201,7 @@ func (s *Service) process(taskID uint64, storageKey string) {
 	}
 	if err != nil {
 		s.log.Error("recognition failed", zap.String("error", err.Error()))
+		s.observeTask(ctx, domain.TaskFailed, start)
 		s.updateStatus(taskID, domain.TaskFailed, 0, err.Error())
 		// 失败即时清理：任务失败后其重绘产物（geometry/task_<id>.）不会再被
 		// 任何错题引用，直接从存储删除，避免未提交流程在对象存储中留下孤儿文件。
@@ -213,10 +219,32 @@ func (s *Service) process(taskID uint64, storageKey string) {
 		"progress_text": "",
 		"result_json":   &resStr,
 	})
+	s.observeTask(ctx, domain.TaskSuccess, start)
 	s.log.Info("recognition task done",
 		zap.Uint64("task_id", taskID),
 		zap.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
+}
+
+// observeTask 记录识别任务的业务指标（端到端耗时 + 成败计数）。
+func (s *Service) observeTask(ctx context.Context, status string, start time.Time) {
+	_, span := observability.Tracer().Start(ctx, "recognition.task",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("recognition.provider", s.prov.Name()),
+			attribute.String("recognition.status", status)))
+	observability.FinishSpan(span, nil)
+	observability.RecognitionTaskDuration.WithLabelValues(s.prov.Name(), status).Observe(time.Since(start).Seconds())
+	observability.RecognitionTaskTotal.WithLabelValues(s.prov.Name(), status).Inc()
+}
+
+// callProvider 包裹一次第三方 AI provider 调用：创建 client span + 指标埋点，
+// 便于区分"慢在自家代码还是第三方 AI"、统计各能力调用的失败率与耗时分布。
+func (s *Service) callProvider(ctx context.Context, operation string, call func(context.Context) error) {
+	ctx, span := observability.StartAISpan(ctx, s.prov.Name(), operation)
+	start := time.Now()
+	err := call(ctx)
+	observability.ObserveAICall(s.prov.Name(), operation, err, start)
+	observability.FinishSpan(span, err)
 }
 
 // processImage 处理图片：整题解析（题干+学科+题型一次 VLM）∥ 几何识别（并发）→ 几何重绘。
@@ -244,14 +272,24 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	geoCh := make(chan geomOut, 1)
 	go func() {
 		gstart := time.Now()
-		g, gerr := s.prov.RecognizeGeometry(ctx, imageData)
+		var g *provider.GeometryResult
+		var gerr error
+		s.callProvider(ctx, "geometry_recognize", func(c context.Context) (err error) {
+			g, gerr = s.prov.RecognizeGeometry(c, imageData)
+			return gerr
+		})
 		s.logStage("geometry-recognize", gstart)
 		geoCh <- geomOut{res: g, err: gerr}
 	}()
 
 	// 整题解析：题干文本 + 学科 + 题型，一次 VLM 调用（关键步骤，失败则任务失败）。
 	parseStart := time.Now()
-	parse, perr := s.prov.ParseQuestion(ctx, imageData)
+	var parse *provider.QuestionParseResult
+	var perr error
+	s.callProvider(ctx, "parse_question", func(c context.Context) (err error) {
+		parse, perr = s.prov.ParseQuestion(c, imageData)
+		return perr
+	})
 	if perr != nil {
 		s.log.Error("parse question failed", zap.String("error", perr.Error()))
 		return nil, perr
@@ -360,7 +398,12 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			p = 94
 		}
 		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘几何图形（第 %d 次尝试）…", attempt))
-		spec, eerr := extractor.ExtractGeometrySpec(ctx, extractImage, result.StemText, correction)
+		var spec string
+		var eerr error
+		s.callProvider(ctx, "geometry_spec_extract", func(c context.Context) (err error) {
+			spec, eerr = extractor.ExtractGeometrySpec(c, extractImage, result.StemText, correction)
+			return eerr
+		})
 		if eerr != nil {
 			lastErr = eerr
 			s.log.Warn("geometry spec extract failed", zap.Int("attempt", attempt), zap.String("error", eerr.Error()))
@@ -528,7 +571,13 @@ func (s *Service) processDocument(ctx context.Context, taskID uint64, storageKey
 	filename := filenameFromKey(storageKey)
 
 	// 方案 B：优先走结构化拆题（含子问/几何），失败时回退到旧启发式拆分。
-	if structured, err := s.prov.ExtractStructured(ctx, data, filename); err == nil {
+	var structured *provider.StructuredResult
+	var serr error
+	s.callProvider(ctx, "document_structured", func(c context.Context) (err error) {
+		structured, serr = s.prov.ExtractStructured(c, data, filename)
+		return serr
+	})
+	if serr == nil {
 		s.updateStatus(taskID, domain.TaskProcessing, 60, "")
 		// 存图并映射 geometry_refs -> geometry_keys。
 		imgKeys := s.storeDocumentImages(ctx, taskID, structured.Images)
@@ -538,9 +587,14 @@ func (s *Service) processDocument(ctx context.Context, taskID uint64, storageKey
 	}
 
 	// 回退：解析文档内容项，用正则启发式拆分。
-	doc, err := s.prov.ExtractDocument(ctx, data, filename)
-	if err != nil {
-		return nil, err
+	var doc *provider.DocumentResult
+	var derr error
+	s.callProvider(ctx, "document_parse", func(c context.Context) (err error) {
+		doc, derr = s.prov.ExtractDocument(c, data, filename)
+		return derr
+	})
+	if derr != nil {
+		return nil, derr
 	}
 	s.updateStatus(taskID, domain.TaskProcessing, 40, "")
 

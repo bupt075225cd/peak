@@ -8,6 +8,7 @@ import (
 
 	"peak/libs/domain"
 	"peak/libs/errors"
+	"peak/libs/observability"
 
 	"peak/apps/question-service/internal/export"
 	"peak/apps/question-service/internal/repository"
@@ -73,7 +74,9 @@ func (s *Service) CreateMistake(ctx context.Context, m *domain.Mistake) error {
 	if m.RecordedAt.IsZero() {
 		m.RecordedAt = time.Now()
 	}
-	return s.repos.Mistake.Create(ctx, m)
+	err := s.repos.Mistake.Create(ctx, m)
+	observability.ObserveMistakeOp("create", err)
+	return err
 }
 
 // GetMistake 获取错题详情。

@@ -1,0 +1,62 @@
+{
+  "uid": "peak-recognition",
+  "title": "Peak · 识别业务（AI 调用与任务漏斗）",
+  "tags": ["peak", "recognition"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "识别任务完成速率（按结果状态）",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (status) (rate(recognition_task_total[5m]))", "legendFormat": "{{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "识别任务失败率（>30% 告警）",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (provider) (rate(recognition_task_total{status=\"failed\"}[30m])) / sum by (provider) (rate(recognition_task_total[30m]))", "legendFormat": "{{provider}}" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "任务端到端耗时 P50/P95（成功任务）",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(recognition_task_duration_seconds_bucket{status=\"success\"}[15m])))", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(recognition_task_duration_seconds_bucket{status=\"success\"}[15m])))", "legendFormat": "P95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "AI 调用速率（按能力/结果）",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (operation, status) (rate(ai_call_total[5m]))", "legendFormat": "{{operation}}/{{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "AI 调用耗时 P95（定位慢在哪个 VLM 能力）",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ai_call_duration_seconds_bucket[15m])))", "legendFormat": "{{operation}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "AI 调用错误率（按能力）",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (provider, operation) (rate(ai_call_total{status=\"error\"}[10m])) / sum by (provider, operation) (rate(ai_call_total[10m]))", "legendFormat": "{{provider}}/{{operation}}" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1 }, "overrides": [] }
+    }
+  ]
+}

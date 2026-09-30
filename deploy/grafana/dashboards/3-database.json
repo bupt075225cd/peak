@@ -1,0 +1,55 @@
+{
+  "uid": "peak-db",
+  "title": "Peak · 数据库连接池与依赖",
+  "tags": ["peak", "database"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "连接池：打开/使用中/空闲（按服务）",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "db_connections_open", "legendFormat": "{{job}} open" },
+        { "expr": "db_connections_in_use", "legendFormat": "{{job}} in-use" },
+        { "expr": "db_connections_idle", "legendFormat": "{{job}} idle" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "连接池饱和度（in-use / max_open，>80% 需扩池或查慢查询）",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "db_connections_in_use / db_connections_max_open", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.6 }, { "color": "red", "value": 0.8 }] } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "连接等待速率（>0 持续出现即告警 DBPoolWaitHigh）",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(db_wait_count_total[5m])", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "连接等待时长速率（排队消耗的时间）",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(db_wait_duration_seconds_total[5m])", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "logs",
+      "title": "慢查询日志（gorm Warn 级，slow_query_threshold 超限的 SQL）",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{job=\"peak\", container=~\"peak-(question|recognition|user)-service\"} | json | level=\"warn\" | line_format \"{{.trace_id}} {{.msg}} {{.error}}\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

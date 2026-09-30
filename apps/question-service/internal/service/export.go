@@ -7,6 +7,7 @@ import (
 
 	"peak/libs/domain"
 	"peak/libs/errors"
+	"peak/libs/observability"
 
 	"peak/apps/question-service/internal/export"
 )
@@ -64,6 +65,7 @@ func (s *Service) ExportMistakes(
 	}
 
 	result, err := s.exporter.Export(ctx, items, format)
+	observability.ObserveMistakeOp("export_"+string(format), err)
 	if err != nil {
 		return export.Result{}, errors.Wrap(errors.CodeInternal, "export mistakes", err)
 	}

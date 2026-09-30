@@ -1,0 +1,62 @@
+{
+  "uid": "peak-runtime",
+  "title": "Peak · Go 运行时（GC/goroutine/内存）",
+  "tags": ["peak", "runtime"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "goroutine 数量（突增常见于 goroutine 泄漏）",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "go_goroutines", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC 频率（次/秒）",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(go_gc_duration_seconds_count[5m])", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC 累计耗时占比（GC 消耗的 CPU 比例，>10% 需关注）",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(go_gc_duration_seconds_sum[5m])", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 0.5, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.1 }] } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "堆内存使用（heap in-use）",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "go_memstats_heap_inuse_bytes", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "堆分配速率（内存泄漏排查）",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(go_memstats_alloc_bytes_total[1m])", "legendFormat": "{{job}}" }],
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "进程 RSS 与线程数",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "process_resident_memory_bytes", "legendFormat": "{{job}} rss" },
+        { "expr": "go_threads", "legendFormat": "{{job}} threads" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [{ "matcher": { "id": "byName", "options": "* threads" }, "properties": [{ "id": "unit", "value": "short" }] }] }
+    }
+  ]
+}
