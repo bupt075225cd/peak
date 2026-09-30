@@ -114,6 +114,13 @@ jobs:
           working-directory: libs/errors
           args: --timeout=5m
 
+      - name: golangci-lint (libs/filesign)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: libs/filesign
+          args: --timeout=5m
+
       - name: golangci-lint (libs/http)
         uses: golangci/golangci-lint-action@v6
         with:

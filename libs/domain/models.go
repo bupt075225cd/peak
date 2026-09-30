@@ -98,6 +98,7 @@ type QuestionCategory struct {
 // RecognitionTask 识别任务（异步状态机）。
 type RecognitionTask struct {
 	ID           uint64         `gorm:"primaryKey" json:"id"`
+	UserID       uint64         `gorm:"index" json:"user_id"` // 归属用户（网关注入 X-User-Id）
 	ImageID      uint64         `gorm:"index" json:"image_id"`
 	Status       string         `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
 	Progress     int            `gorm:"default:0" json:"progress"`     // 0-100

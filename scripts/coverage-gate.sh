@@ -26,6 +26,7 @@ declare -A PER_PKG_MIN=(
   ["peak/libs/config"]=90
   ["peak/libs/domain"]=70
   ["peak/libs/errors"]=95
+  ["peak/libs/filesign"]=85
   ["peak/libs/http"]=60
   ["peak/libs/logger"]=90
   ["peak/libs/observability"]=60

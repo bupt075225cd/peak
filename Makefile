@@ -77,7 +77,7 @@ lint:
 	fi
 	@echo "==> golangci-lint (逐模块)"
 	@set -e; for m in apps/gateway apps/question-service apps/recognition-service apps/user-service \
-		libs/config libs/domain libs/errors libs/http libs/logger libs/observability libs/storage; do \
+		libs/config libs/domain libs/errors libs/filesign libs/http libs/logger libs/observability libs/storage; do \
 		$(GOLANGCI_LINT) run --timeout=5m ./$$m/... ; \
 	done
 	@echo "✓ golangci-lint 通过"

@@ -188,6 +188,28 @@ export async function retryTask(id: number): Promise<void> {
   await http.post(`/recognition/tasks/${id}/retry`)
 }
 
+// 批量获取识别产物（几何重绘 SVG 等）的短时签名访问 URL，返回 key -> url 映射。
+// <img> 无法携带 Authorization 头，图片一律走签名 URL 访问。
+export async function getRecognitionFileURLs(
+  taskId: number,
+  keys: string[],
+): Promise<Record<string, string>> {
+  const { data } = await http.post<ApiResponse<{ urls: Record<string, string> }>>(
+    '/recognition/file-urls',
+    { task_id: taskId, keys },
+  )
+  return (data.data as { urls?: Record<string, string> } | null)?.urls ?? {}
+}
+
+// 批量获取错题正式区配图（committed/）的短时签名访问 URL，返回 key -> url 映射。
+export async function getMistakeFileURLs(keys: string[]): Promise<Record<string, string>> {
+  const { data } = await http.post<ApiResponse<{ urls: Record<string, string> }>>(
+    '/mistakes/file-urls',
+    { keys },
+  )
+  return (data.data as { urls?: Record<string, string> } | null)?.urls ?? {}
+}
+
 // 查询分类。
 export async function listCategories(type?: string): Promise<Category[]> {
   const { data } = await http.get<ApiResponse<Category[]>>('/categories', {

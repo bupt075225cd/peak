@@ -133,6 +133,15 @@ function mockListResponse(data: Mistake[] = mockMistakes) {
 
 beforeEach(() => {
   httpMethods.get.mockReset()
+  // 默认处理 file-urls 签发请求（列表加载后组件会自动换取签名 URL）。
+  httpMethods.post.mockImplementation((url: string, body?: { keys?: string[] }) => {
+    if (url === '/mistakes/file-urls') {
+      const urls: Record<string, string> = {}
+      for (const k of body?.keys || []) urls[k] = `/signed/${k}`
+      return Promise.resolve(ok({ urls, expires_at: 0 }))
+    }
+    return Promise.resolve(ok(null))
+  })
   mockListResponse()
 })
 
@@ -532,9 +541,9 @@ describe('MistakeList.vue 配图', () => {
     expect(wrapper.findAll('figcaption').map((c) => c.text())).toEqual(['图1', '图2'])
 
     const html = wrapper.html()
-    expect(html).toContain('/api/recognition/files/geometry/task_1.svg')
-    expect(html).toContain('/api/recognition/files/geometry/task_1_2.svg')
-    expect(html).toContain('/api/recognition/files/geometry/task_2.svg')
+    expect(html).toContain('/signed/geometry/task_1.svg')
+    expect(html).toContain('/signed/geometry/task_1_2.svg')
+    expect(html).toContain('/signed/geometry/task_2.svg')
   })
 })
 

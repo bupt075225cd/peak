@@ -70,7 +70,7 @@ func main() {
 		panic(err)
 	}
 	svc := service.New(repos, exporter)
-	h := handler.New(svc, store, copier)
+	h := handler.New(svc, store, copier, db, cfg.String("files.sign_secret", ""))
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, h, type FunctionalCompone
 import { BookOpen, Plus, Search, Loader2, Download, Pencil } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import {
-  listMistakes, exportMistakes,
+  listMistakes, exportMistakes, getMistakeFileURLs,
   type Mistake, type ExportFormat, type QuestionImageRef,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
@@ -93,6 +93,7 @@ async function loadFirstPage() {
     total.value = res.total
     subjectCounts.value = res.subjectCounts
     sourceCounts.value = res.sourceCounts
+    void loadFileUrls(res.items)
   } catch (err) {
     console.error('加载错题失败', err)
   } finally {
@@ -114,6 +115,7 @@ async function loadMore() {
     total.value = res.total
     subjectCounts.value = res.subjectCounts
     sourceCounts.value = res.sourceCounts
+    void loadFileUrls(res.items)
   } catch (err) {
     console.error('加载更多错题失败', err)
   } finally {
@@ -196,13 +198,24 @@ function imageRefs(q: Mistake['question']): QuestionImageRef[] {
   }
 }
 
-// 配图访问地址：正式区（committed/）走错题服务的文件接口；
-// 无前缀的存量 key 回退识别服务文件接口。
+// 配图访问地址：短时签名 URL（key -> url 映射，列表加载后批量换取）。
+// <img> 无法携带 Authorization 头，直接拼文件路径会被网关 401。
+const fileUrls = ref<Record<string, string>>({})
+
 function figureUrl(key: string): string {
-  if (key.startsWith('committed/')) {
-    return `/api/mistakes/files/${key.slice('committed/'.length)}`
+  return fileUrls.value[key] || ''
+}
+
+// 为列表中全部配图批量换取签名 URL（每页追加后调用一次）。
+async function loadFileUrls(list: Mistake[]) {
+  const keys = [...new Set(list.flatMap((m) => imageRefs(m.question).map((r) => r.key)))]
+  if (keys.length === 0) return
+  try {
+    const urls = await getMistakeFileURLs(keys)
+    fileUrls.value = { ...fileUrls.value, ...urls }
+  } catch (err) {
+    console.error('获取配图访问链接失败', err)
   }
-  return `/api/recognition/files/${key}`
 }
 
 // 解析题目的 knowledge_points（JSON 字符串数组）为知识点标签列表。

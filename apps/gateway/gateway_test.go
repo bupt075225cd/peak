@@ -181,16 +181,31 @@ func TestAuthMiddlewarePublicPaths(t *testing.T) {
 	r := gin.New()
 	r.Use(gw.authMiddleware())
 	r.GET("/api/users/auth/sms/code", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/recognition/files/transient/geometry/task_1_1.svg", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/mistakes/files/committed/1.png", func(c *gin.Context) { c.Status(http.StatusOK) })
 	r.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
 	r.GET("/metrics", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// 白名单路径无需令牌。
-	for _, path := range []string{"/api/users/auth/sms/code", "/healthz", "/metrics"} {
+	for _, path := range []string{
+		"/api/users/auth/sms/code",
+		"/api/recognition/files/transient/geometry/task_1_1.svg",
+		"/api/mistakes/files/committed/1.png",
+		"/healthz",
+		"/metrics",
+	} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("public path %s: expected 200, got %d", path, w.Code)
 		}
+	}
+
+	// 非白名单的识别接口仍需鉴权。
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/recognition/tasks/1", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for protected path, got %d", w.Code)
 	}
 }
 

@@ -81,7 +81,9 @@ func main() {
 	// transient/ 临时区的清理由对象存储生命周期规则完成（按前缀 + 对象年龄过期），
 	// 应用层不再做周期 GC；本地存储调试时产物残留可忽略。
 
-	h := handler.New(svc, db, store)
+	// 文件访问签名密钥：与网关 JWT 密钥同源（仅本地签名用途，不做 JWT 校验）。
+	fileSecret := cfg.String("files.sign_secret", "")
+	h := handler.New(svc, db, store, fileSecret)
 
 	server := httpx.NewServer(appLog, cfg.Bool("log.development", true))
 	engine := server.Engine()

@@ -11,6 +11,7 @@ use (
 	./libs/config
 	./libs/domain
 	./libs/errors
+	./libs/filesign
 	./libs/http
 	./libs/logger
 	./libs/observability

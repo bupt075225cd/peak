@@ -11,11 +11,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm/logger"
+	"gorm.io/gorm"
+	logger "gorm.io/gorm/logger"
 
 	"peak/libs/domain"
+	"peak/libs/filesign"
 	"peak/libs/storage"
 
 	"peak/apps/question-service/internal/export"
@@ -35,11 +38,15 @@ func setupHandlerWithExporter(t *testing.T, exporter export.Service) *gin.Engine
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
-	return setupHandlerWithStorage(t, store, exporter)
+	r, _ := setupHandlerWithStorage(t, store, exporter)
+	return r
 }
 
-// setupHandlerWithStorage 构造带指定存储的处理器，供晋升/文件接口测试注入。
-func setupHandlerWithStorage(t *testing.T, store storage.FileStorage, exporter export.Service) *gin.Engine {
+const testFileSecret = "test-filesign-secret"
+
+// setupHandlerWithStorage 构造带指定存储的处理器，供晋升/文件接口测试注入；
+// 返回引擎与 db（file-urls 属主校验测试用）。
+func setupHandlerWithStorage(t *testing.T, store storage.FileStorage, exporter export.Service) (*gin.Engine, *gorm.DB) {
 	t.Helper()
 	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "h.db"), logger.Silent)
 	if err != nil {
@@ -50,12 +57,12 @@ func setupHandlerWithStorage(t *testing.T, store storage.FileStorage, exporter e
 	}
 	repos := repository.NewGormRepositories(db)
 	svc := service.New(repos, exporter)
-	h := New(svc, store, storage.NewCopier(store, store, ""))
+	h := New(svc, store, storage.NewCopier(store, store, ""), db, testFileSecret)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	h.RegisterRoutes(r)
-	return r
+	return r, db
 }
 
 func doRequest(t *testing.T, r *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
@@ -571,7 +578,7 @@ func TestCreateQuestionPromotesTransientImages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := setupHandlerWithStorage(t, store, nil)
+	r, _ := setupHandlerWithStorage(t, store, nil)
 
 	// web 实际发送的 image 是字符串化的 JSON 数组（JSON.stringify 后的引用列表）。
 	refs, _ := json.Marshal([]map[string]any{
@@ -624,15 +631,86 @@ func TestGetMistakeFileServesCommittedOnly(t *testing.T) {
 	if err := store.Put(ctx, "transient/geometry/b.svg", []byte("<svg/>")); err != nil {
 		t.Fatal(err)
 	}
-	r := setupHandlerWithStorage(t, store, nil)
+	r, _ := setupHandlerWithStorage(t, store, nil)
 
-	w := doRequest(t, r, http.MethodGet, "/api/mistakes/files/geometry/a.svg", nil)
+	signed := func(key string) string {
+		return filesign.SignedURL(testFileSecret, "/api/mistakes/files/", key, time.Now().Add(time.Minute))
+	}
+
+	w := doRequest(t, r, http.MethodGet, signed("geometry/a.svg"), nil)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<svg/>") {
 		t.Fatalf("committed file: %d %s", w.Code, w.Body.String())
 	}
+	// 缺少签名 -> 401。
+	w = doRequest(t, r, http.MethodGet, "/api/mistakes/files/geometry/a.svg", nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without signature, got %d", w.Code)
+	}
 	// 非 committed/ 前缀一律 404/错误，防止读到临时区。
-	w = doRequest(t, r, http.MethodGet, "/api/mistakes/files/../../transient/geometry/b.svg", nil)
+	w = doRequest(t, r, http.MethodGet, signed("../../transient/geometry/b.svg"), nil)
 	if w.Code == http.StatusOK {
 		t.Fatal("transient file should not be served")
+	}
+}
+
+func TestGetMistakeFileURLs(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Put(ctx, "committed/geometry/a.svg", []byte("<svg/>")); err != nil {
+		t.Fatal(err)
+	}
+	r, db := setupHandlerWithStorage(t, store, nil)
+
+	// 用户 1 的错题，question.image 引用 committed/geometry/a.svg。
+	if err := db.WithContext(ctx).Create(&domain.Mistake{
+		UserID:   1,
+		Question: &domain.Question{Image: `[{"key":"committed/geometry/a.svg","label":"图1"}]`},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	fileURLs := func(uid uint64, keys []string) *httptest.ResponseRecorder {
+		var buf bytes.Buffer
+		_ = json.NewEncoder(&buf).Encode(map[string]any{"keys": keys})
+		req := httptest.NewRequest(http.MethodPost, "/api/mistakes/file-urls", &buf)
+		req.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// 属主签发成功。
+	w := fileURLs(1, []string{"committed/geometry/a.svg"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Urls map[string]string `json:"urls"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	u := resp.Data.Urls["committed/geometry/a.svg"]
+	if u == "" {
+		t.Fatal("missing url")
+	}
+	// 签发出的 URL 可直接访问。
+	w = doRequest(t, r, http.MethodGet, u, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<svg/>") {
+		t.Fatalf("signed url fetch: %d %s", w.Code, w.Body.String())
+	}
+
+	// 他人 -> 403。
+	if w = fileURLs(2, []string{"committed/geometry/a.svg"}); w.Code != http.StatusForbidden {
+		t.Fatalf("foreign user: expected 403, got %d", w.Code)
+	}
+	// 非本人 key -> 403。
+	if w = fileURLs(1, []string{"committed/other.png"}); w.Code != http.StatusForbidden {
+		t.Fatalf("foreign key: expected 403, got %d", w.Code)
 	}
 }

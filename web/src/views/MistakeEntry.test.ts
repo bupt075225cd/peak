@@ -39,6 +39,15 @@ beforeEach(() => {
     { id: 1, parent_id: null, name: '二次函数', type: 'tag', sort_order: 1 },
   ]
   httpMethods.get.mockResolvedValue(ok(cats))
+  // 默认处理 file-urls 签发请求（识别完成后组件会自动换取签名 URL）。
+  httpMethods.post.mockImplementation((url: string, body?: { task_id?: number; keys?: string[] }) => {
+    if (url === '/recognition/file-urls') {
+      const urls: Record<string, string> = {}
+      for (const k of body?.keys || []) urls[k] = `/signed/${body?.task_id}/${k}`
+      return Promise.resolve(ok({ urls, expires_at: 0 }))
+    }
+    return Promise.resolve(ok(null))
+  })
   if (!URL.createObjectURL) URL.createObjectURL = vi.fn(() => 'blob:mock')
   // jsdom 未实现 alert，stub 之，避免保存成功路径里 alert 抛错中断 reset
   vi.stubGlobal('alert', vi.fn())
@@ -431,8 +440,8 @@ describe('MistakeEntry.vue', () => {
 
     // 每张子图都单独展示，并带回图号（重绘会丢失原图标注）。
     await vi.waitFor(() => {
-      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5.svg')
-      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_5_2.svg')
+      expect(wrapper.html()).toContain('/signed/5/geometry/task_5.svg')
+      expect(wrapper.html()).toContain('/signed/5/geometry/task_5_2.svg')
     })
     expect(wrapper.text()).toContain('2 张')
     expect(wrapper.findAll('figcaption').map((c) => c.text())).toEqual(['图1', '图2'])
@@ -488,7 +497,7 @@ describe('MistakeEntry.vue', () => {
     })
     await recognizeWithResult(wrapper, task)
     await vi.waitFor(() => {
-      expect(wrapper.html()).toContain('/api/recognition/files/geometry/task_7_3.svg')
+      expect(wrapper.html()).toContain('/signed/7/geometry/task_7_3.svg')
     })
 
     // 选年级 → 保存。

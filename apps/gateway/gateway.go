@@ -76,8 +76,13 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 }
 
 // 公开路径白名单：登录/发码接口与健康检查不要求 JWT。
+// 文件下发路径（识别产物 SVG/原图、正式区配图）同样放行：前端以
+// <img src> 加载，无法携带 Authorization 头；这两个端点本身不按用户
+// 隔离校验，放行仅恢复 JWT 接入前的可达性，后续可改预签名 URL 收紧。
 var publicPrefixes = []string{
-	"/api/users/auth/", // 发码与验证码登录
+	"/api/users/auth/",        // 发码与验证码登录
+	"/api/recognition/files/", // 识别产物文件（SVG/原图）
+	"/api/mistakes/files/",    // 正式区配图（committed/）
 	"/healthz",
 	"/metrics",
 }

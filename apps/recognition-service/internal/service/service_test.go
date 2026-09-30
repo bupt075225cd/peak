@@ -43,7 +43,7 @@ func TestCreateAndGetTask(t *testing.T) {
 	ctx := context.Background()
 
 	key := "original/test.jpg"
-	task, err := svc.CreateTask(ctx, 1, key)
+	task, err := svc.CreateTask(ctx, 1, 1, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestCreateAndGetTask(t *testing.T) {
 		t.Fatalf("expected pending, got %s", task.Status)
 	}
 
-	got, err := svc.GetTask(ctx, task.ID)
+	got, err := svc.GetTask(ctx, 1, task.ID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestProcessTaskSuccess(t *testing.T) {
 		t.Fatalf("create image: %v", err)
 	}
 
-	task, err := svc.CreateTask(ctx, img.ID, key)
+	task, err := svc.CreateTask(ctx, 1, img.ID, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestProcessTaskSuccess(t *testing.T) {
 	// 等待异步处理完成。
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := svc.GetTask(ctx, task.ID)
+		got, _ := svc.GetTask(ctx, 1, task.ID)
 		if got.Status == domain.TaskSuccess {
 			if got.ResultJSON == nil || *got.ResultJSON == "" {
 				t.Fatal("expected result json")
@@ -102,7 +102,7 @@ func waitTask(t *testing.T, svc *Service, ctx context.Context, id uint64) *domai
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := svc.GetTask(ctx, id)
+		got, _ := svc.GetTask(ctx, 1, id)
 		if got.Status == domain.TaskSuccess || got.Status == domain.TaskFailed {
 			return got
 		}
@@ -160,7 +160,7 @@ func TestProcessImageMathRedrawProducesMultiSVG(t *testing.T) {
 	if err := db.Create(img).Error; err != nil {
 		t.Fatalf("create image: %v", err)
 	}
-	task, err := svc.CreateTask(ctx, img.ID, key)
+	task, err := svc.CreateTask(ctx, 1, img.ID, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestProcessImageNoRedrawEngineSkips(t *testing.T) {
 	if err := db.Create(img).Error; err != nil {
 		t.Fatalf("create image: %v", err)
 	}
-	task, err := svc.CreateTask(ctx, img.ID, key)
+	task, err := svc.CreateTask(ctx, 1, img.ID, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -241,14 +241,14 @@ func TestProcessTaskReadImageFailed(t *testing.T) {
 		t.Fatalf("create image: %v", err)
 	}
 
-	task, err := svc.CreateTask(ctx, img.ID, "original/missing.jpg")
+	task, err := svc.CreateTask(ctx, 1, img.ID, "original/missing.jpg")
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := svc.GetTask(ctx, task.ID)
+		got, _ := svc.GetTask(ctx, 1, task.ID)
 		if got.Status == domain.TaskFailed {
 			if got.ErrorMessage == "" {
 				t.Fatal("expected error message")
@@ -262,7 +262,7 @@ func TestProcessTaskReadImageFailed(t *testing.T) {
 
 func TestGetTaskNotFound(t *testing.T) {
 	svc, _ := setupService(t)
-	_, err := svc.GetTask(context.Background(), 9999)
+	_, err := svc.GetTask(context.Background(), 1, 9999)
 	if err == nil {
 		t.Fatal("expected error for missing task")
 	}
@@ -276,7 +276,7 @@ func TestRetryTask(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建一个必然失败的任务（图片缺失）。
-	task, err := svc.CreateTask(ctx, 1, "original/none.jpg")
+	task, err := svc.CreateTask(ctx, 1, 1, "original/none.jpg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestRetryTask(t *testing.T) {
 	// 等待失败。
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := svc.GetTask(ctx, task.ID)
+		got, _ := svc.GetTask(ctx, 1, task.ID)
 		if got.Status == domain.TaskFailed {
 			break
 		}
@@ -292,10 +292,10 @@ func TestRetryTask(t *testing.T) {
 	}
 
 	// 重试。
-	if err := svc.RetryTask(ctx, task.ID); err != nil {
+	if err := svc.RetryTask(ctx, 1, task.ID); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	got, _ := svc.GetTask(ctx, task.ID)
+	got, _ := svc.GetTask(ctx, 1, task.ID)
 	if got.RetryCount != 1 {
 		t.Fatalf("expected retry count 1, got %d", got.RetryCount)
 	}
@@ -306,7 +306,7 @@ func TestRetryTask(t *testing.T) {
 
 func TestRetryTaskNotFound(t *testing.T) {
 	svc, _ := setupService(t)
-	err := svc.RetryTask(context.Background(), 9999)
+	err := svc.RetryTask(context.Background(), 1, 9999)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -366,7 +366,7 @@ func runGeometryTask(t *testing.T, prov provider.Provider) RecognitionResult {
 	if err := db.Create(img).Error; err != nil {
 		t.Fatalf("create image: %v", err)
 	}
-	task, err := svc.CreateTask(ctx, img.ID, key)
+	task, err := svc.CreateTask(ctx, 1, img.ID, key)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}

@@ -119,9 +119,10 @@ func New(db *gorm.DB, store storage.FileStorage, prov provider.Provider, log *lo
 	return s
 }
 
-// CreateTask 创建识别任务并异步执行。
-func (s *Service) CreateTask(ctx context.Context, imageID uint64, storageKey string) (*domain.RecognitionTask, error) {
+// CreateTask 创建识别任务并异步执行。userID 为归属用户（0 视为非法，由调用方校验）。
+func (s *Service) CreateTask(ctx context.Context, userID uint64, imageID uint64, storageKey string) (*domain.RecognitionTask, error) {
 	task := &domain.RecognitionTask{
+		UserID:   userID,
 		ImageID:  imageID,
 		Status:   domain.TaskPending,
 		Progress: 0,
@@ -135,19 +136,19 @@ func (s *Service) CreateTask(ctx context.Context, imageID uint64, storageKey str
 	return task, nil
 }
 
-// GetTask 查询任务状态。
-func (s *Service) GetTask(ctx context.Context, id uint64) (*domain.RecognitionTask, error) {
+// GetTask 查询任务状态。仅返回属于 userID 的任务，否则按不存在处理。
+func (s *Service) GetTask(ctx context.Context, userID, id uint64) (*domain.RecognitionTask, error) {
 	var task domain.RecognitionTask
-	if err := s.db.WithContext(ctx).First(&task, id).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&task).Error; err != nil {
 		return nil, errors.Wrap(errors.CodeNotFound, "task not found", err)
 	}
 	return &task, nil
 }
 
-// RetryTask 重试失败任务。
-func (s *Service) RetryTask(ctx context.Context, id uint64) error {
+// RetryTask 重试失败任务。仅允许任务属主操作。
+func (s *Service) RetryTask(ctx context.Context, userID, id uint64) error {
 	var task domain.RecognitionTask
-	if err := s.db.WithContext(ctx).First(&task, id).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&task).Error; err != nil {
 		return errors.Wrap(errors.CodeNotFound, "task not found", err)
 	}
 	task.Status = domain.TaskPending

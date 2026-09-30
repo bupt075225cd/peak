@@ -7,6 +7,11 @@ log:
 tracing:
   endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
 
+# 文件访问 URL 签名密钥：file-urls 签发与 files 流式端点校验共用；
+# 取 JWT_SECRET（与网关一致），仅作 HMAC 签名用途，本服务不做 JWT 校验。
+files:
+  sign_secret: "${JWT_SECRET:-peak-dev-secret}"
+
 storage:
   # question-service 使用专属桶/目录存放 committed/ 正式区；
   # recognition-service 的桶为源（见 storage.source），提交时跨桶对象拷贝。

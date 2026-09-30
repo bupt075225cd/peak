@@ -5,6 +5,7 @@ import {
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
+  getRecognitionFileURLs,
   type RecognitionTask, type RecognitionResult, type QuestionItem, type QuestionImageRef,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
@@ -33,9 +34,23 @@ const selectedGeometryKeys = ref<string[]>([])
 const redrawFigures = ref<QuestionImageRef[]>([])
 const redrawConsistent = ref(true)
 
-// 配图访问地址：识别服务的文件接口。
+// 配图访问地址：识别产物的短时签名 URL（key -> url 映射，识别完成后加载）。
+// <img> 无法携带 Authorization 头，直接拼文件路径会被网关 401。
+const fileUrls = ref<Record<string, string>>({})
+
 function figureUrl(key: string): string {
-  return `/api/recognition/files/${key}`
+  return fileUrls.value[key] || ''
+}
+
+// 为识别产物（重绘 SVG、文档子图）批量换取签名 URL。
+async function loadFileUrls(keys: string[]) {
+  const unique = [...new Set(keys.filter((k) => k))]
+  if (!task.value || unique.length === 0) return
+  try {
+    fileUrls.value = await getRecognitionFileURLs(task.value.id, unique)
+  } catch (err) {
+    console.error('获取配图访问链接失败', err)
+  }
 }
 
 // 年级（学科、题型由识别自动回填，见 applyResult/selectQuestion）。
@@ -173,6 +188,11 @@ function applyResult(t: RecognitionTask) {
     redrawConsistent.value = result.redraw_report ? result.redraw_report.consistent !== false : true
   }
   warningMsg.value = result.warning || ''
+  // 为全部产物图（重绘 SVG + 文档子图）换取签名访问 URL。
+  void loadFileUrls([
+    ...redrawFigures.value.map((f) => f.key),
+    ...questions.value.flatMap((q) => (q.sub_questions || []).flatMap((sq) => sq.geometry_keys || [])),
+  ])
 }
 
 async function handleRetry() {
@@ -420,7 +440,7 @@ function selectQuestion(idx: number) {
                     <img
                       v-for="(gk, k) in sq.geometry_keys"
                       :key="k"
-                      :src="`/api/recognition/files/${gk}`"
+                      :src="figureUrl(gk)"
                       class="h-20 rounded-lg border border-slate-200 object-contain bg-white"
                       alt="几何图"
                     />

@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"mime/multipart"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"peak/libs/domain"
 	"peak/libs/errors"
+	"peak/libs/filesign"
 	httpx "peak/libs/http"
 	"peak/libs/storage"
 
@@ -25,11 +27,13 @@ type Handler struct {
 	svc     *service.Service
 	db      *gorm.DB
 	storage storage.FileStorage
+	// fileSecret 文件访问 URL 签名密钥（与签发、校验共用，取 JWT_SECRET 即可）。
+	fileSecret string
 }
 
 // New 创建处理器。
-func New(svc *service.Service, db *gorm.DB, store storage.FileStorage) *Handler {
-	return &Handler{svc: svc, db: db, storage: store}
+func New(svc *service.Service, db *gorm.DB, store storage.FileStorage, fileSecret string) *Handler {
+	return &Handler{svc: svc, db: db, storage: store, fileSecret: fileSecret}
 }
 
 // RegisterRoutes 注册路由。
@@ -39,15 +43,38 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/tasks", h.createTask)
 		api.GET("/tasks/:id", h.getTask)
 		api.POST("/tasks/:id/retry", h.retryTask)
+		api.POST("/file-urls", h.fileURLs)
 		api.GET("/files/*key", h.getFile)
 	}
 }
 
+// userID 从网关注入的 X-User-Id 头解析用户 ID（0 表示未登录）。
+func userID(c *gin.Context) uint64 {
+	uid, _ := strconv.ParseUint(c.GetHeader("X-User-Id"), 10, 64)
+	return uid
+}
+
+// requireUserID 校验登录态，未登录时写入错误响应并返回 false。
+func requireUserID(c *gin.Context) (uint64, bool) {
+	uid := userID(c)
+	if uid == 0 {
+		httpx.Fail(c, errors.New(errors.CodeUnauthorized, "未登录"))
+		return 0, false
+	}
+	return uid, true
+}
+
 // getFile 按存储 key 读取文件（几何重绘 SVG、文档内嵌图等），返回原始字节。
+// 需要携带 file-urls 签发的短时签名（?exp=&sig=）：<img> 无法携带 JWT，
+// 以签名 URL 代替登录态，泄露后随过期自动失效。
 func (h *Handler) getFile(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "empty key"))
+		return
+	}
+	if err := filesign.VerifyRequest(h.fileSecret, key, c.Request, time.Now()); err != nil {
+		httpx.Fail(c, errors.New(errors.CodeUnauthorized, "文件访问签名无效或已过期"))
 		return
 	}
 	data, err := h.storage.Get(c.Request.Context(), key)
@@ -111,8 +138,12 @@ func (h *Handler) createTask(c *gin.Context) {
 		return
 	}
 
-	// 创建识别任务。
-	task, err := h.svc.CreateTask(c.Request.Context(), img.ID, key)
+	// 创建识别任务（需登录态）。
+	uid, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	task, err := h.svc.CreateTask(c.Request.Context(), uid, img.ID, key)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -141,14 +172,18 @@ func (h *Handler) resolveUpload(c *gin.Context) (file *multipart.FileHeader, ima
 	return nil, "", "", errors.New(errors.CodeInvalidArgument, "image or document is required")
 }
 
-// getTask 查询任务状态。
+// getTask 查询任务状态（仅任务属主可见）。
 func (h *Handler) getTask(c *gin.Context) {
+	uid, ok := requireUserID(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "invalid id"))
 		return
 	}
-	task, err := h.svc.GetTask(c.Request.Context(), id)
+	task, err := h.svc.GetTask(c.Request.Context(), uid, id)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -156,16 +191,61 @@ func (h *Handler) getTask(c *gin.Context) {
 	httpx.OK(c, task)
 }
 
-// retryTask 重试失败任务。
+// retryTask 重试失败任务（仅任务属主）。
 func (h *Handler) retryTask(c *gin.Context) {
+	uid, ok := requireUserID(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "invalid id"))
 		return
 	}
-	if err := h.svc.RetryTask(c.Request.Context(), id); err != nil {
+	if err := h.svc.RetryTask(c.Request.Context(), uid, id); err != nil {
 		httpx.Fail(c, err)
 		return
 	}
 	httpx.OK(c, nil)
+}
+
+// fileURLs 为任务产物签发短时签名访问 URL。
+// 请求体：{"task_id":13,"keys":["transient/geometry/task_13_1.svg",...]}
+// 仅允许任务属主签发，且 key 必须属于该任务（原图 key 或几何重绘产物）。
+func (h *Handler) fileURLs(c *gin.Context) {
+	uid, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		TaskID uint64   `json:"task_id"`
+		Keys   []string `json:"keys"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Keys) == 0 {
+		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "task_id and keys are required"))
+		return
+	}
+	task, err := h.svc.GetTask(c.Request.Context(), uid, req.TaskID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	// 任务的原图 key（供文档内嵌图等场景）。
+	var originalKey string
+	var img domain.Image
+	if err := h.db.WithContext(c.Request.Context()).First(&img, task.ImageID).Error; err == nil {
+		originalKey = img.StorageKey
+	}
+	geometryPrefix := fmt.Sprintf("transient/geometry/task_%d_", task.ID)
+
+	urls := make(map[string]string, len(req.Keys))
+	exp := time.Now().Add(filesign.DefaultTTL)
+	for _, key := range req.Keys {
+		if key != originalKey && !strings.HasPrefix(key, geometryPrefix) {
+			httpx.Fail(c, errors.New(errors.CodeForbidden, "文件不属于该任务"))
+			return
+		}
+		urls[key] = filesign.SignedURL(h.fileSecret, "/api/recognition/files/", key, exp)
+	}
+	httpx.OK(c, gin.H{"urls": urls, "expires_at": exp.Unix()})
 }
