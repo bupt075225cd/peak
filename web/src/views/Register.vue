@@ -2,11 +2,12 @@
 import { ref, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, UserPlus, Eye, EyeOff,
+  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, UserPlus, Eye, EyeOff, MailCheck,
 } from 'lucide-vue-next'
 import { sendEmailCode, emailRegister } from '../api'
 import { useAuth } from '../composables/useAuth'
 import { usePasswordStrength } from '../composables/usePasswordStrength'
+import { maskEmail } from '../utils/email'
 
 const router = useRouter()
 const { login } = useAuth()
@@ -21,6 +22,9 @@ const sending = ref(false)
 const registering = ref(false)
 const errorMsg = ref('')
 const countdown = ref(0)
+// 发码成功后记录目标邮箱（脱敏展示提示条）；用户改邮箱后提示自动隐藏。
+const sentTo = ref('')
+const codeInput = ref<HTMLInputElement>()
 let timer: ReturnType<typeof setInterval> | undefined
 
 // 邮箱与密码校验（与后端规则一致：密码 8-64 位）。
@@ -33,7 +37,7 @@ const canSend = computed(() => emailValid.value && countdown.value === 0 && !sen
 const canRegister = computed(() =>
   emailValid.value && passwordValid.value && confirmValid.value && code.value.length > 0 && !registering.value)
 
-// 发送注册验证码：成功后展示 debug_code（开发模式）并进入 60 秒倒计时。
+// 发送注册验证码：成功后展示"已发送"提示（脱敏邮箱）并聚焦验证码框，进入 60 秒倒计时。
 async function handleSendCode() {
   if (!canSend.value) return
   sending.value = true
@@ -41,6 +45,7 @@ async function handleSendCode() {
   try {
     const res = await sendEmailCode(email.value.trim(), 'register')
     debugCode.value = res.debugCode ?? ''
+    sentTo.value = email.value.trim()
     countdown.value = 60
     timer = setInterval(() => {
       countdown.value--
@@ -49,6 +54,7 @@ async function handleSendCode() {
         timer = undefined
       }
     }, 1000)
+    codeInput.value?.focus()
   } catch (err) {
     errorMsg.value = extractError(err, '验证码发送失败，请稍后重试')
   } finally {
@@ -183,6 +189,7 @@ onUnmounted(() => {
               <ShieldCheck class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
               <input
                 id="reg-code"
+                ref="codeInput"
                 v-model="code"
                 type="text"
                 inputmode="numeric"
@@ -204,6 +211,15 @@ onUnmounted(() => {
               <span v-else-if="countdown > 0">重新发送({{ countdown }}s)</span>
               <span v-else>获取验证码</span>
             </button>
+          </div>
+
+          <!-- 已发送提示：确认邮箱去向、管理到达延迟预期（改邮箱后自动隐藏） -->
+          <div v-if="sentTo && sentTo === email.trim()" class="mt-2 flex items-start gap-2 p-3 rounded-xl bg-blue-50 text-blue-700">
+            <MailCheck class="w-4 h-4 mt-0.5 shrink-0" />
+            <p class="text-xs leading-relaxed">
+              验证码已发送至 <span class="font-medium">{{ maskEmail(sentTo) }}</span>，5 分钟内有效。没收到？请检查垃圾邮件文件夹，或
+              {{ countdown > 0 ? `${countdown} 秒后` : '' }}点击重新发送。
+            </p>
           </div>
         </div>
 

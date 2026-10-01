@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, CheckCircle2, Eye, EyeOff,
+  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, CheckCircle2, Eye, EyeOff, MailCheck,
 } from 'lucide-vue-next'
 import { sendEmailCode, resetPassword } from '../api'
 import { usePasswordStrength } from '../composables/usePasswordStrength'
+import { maskEmail } from '../utils/email'
 
 const router = useRouter()
 
@@ -21,6 +22,7 @@ const sending = ref(false)
 const resetting = ref(false)
 const errorMsg = ref('')
 const countdown = ref(0)
+const codeInput = ref<HTMLInputElement>()
 let timer: ReturnType<typeof setInterval> | undefined
 
 // 邮箱与密码校验（与后端规则一致：密码 8-64 位）。
@@ -32,7 +34,7 @@ const { strength, barClass } = usePasswordStrength(password)
 const canSend = computed(() => emailValid.value && countdown.value === 0 && !sending.value)
 const canReset = computed(() => code.value.length > 0 && passwordValid.value && confirmValid.value && !resetting.value)
 
-// 发送重置验证码，成功后进入第二步。
+// 发送重置验证码，成功后进入第二步并聚焦验证码框。
 async function handleSendCode() {
   if (!canSend.value) return
   sending.value = true
@@ -49,6 +51,8 @@ async function handleSendCode() {
       }
     }, 1000)
     step.value = 2
+    await nextTick()
+    codeInput.value?.focus()
   } catch (err) {
     errorMsg.value = extractError(err, '验证码发送失败，请稍后重试')
   } finally {
@@ -101,7 +105,7 @@ onUnmounted(() => {
         </div>
         <h1 class="mt-4 text-xl font-semibold text-ink">找回密码</h1>
         <p class="mt-1 text-sm text-ink-soft">
-          {{ step === 1 ? '输入注册时绑定的邮箱，我们将发送验证码' : step === 2 ? `验证码已发送至 ${email}` : '' }}
+          {{ step === 1 ? '输入注册时绑定的邮箱，我们将发送验证码' : step === 2 ? `验证码已发送至 ${maskEmail(email)}` : '' }}
         </p>
       </div>
 
@@ -146,6 +150,7 @@ onUnmounted(() => {
               <ShieldCheck class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
               <input
                 id="fp-code"
+                ref="codeInput"
                 v-model="code"
                 type="text"
                 inputmode="numeric"
@@ -167,6 +172,15 @@ onUnmounted(() => {
               <span v-else-if="countdown > 0">重新发送({{ countdown }}s)</span>
               <span v-else>重新发送</span>
             </button>
+          </div>
+
+          <!-- 已发送提示：管理到达延迟预期，减少"收不到"困惑 -->
+          <div class="mt-2 flex items-start gap-2 p-3 rounded-xl bg-blue-50 text-blue-700">
+            <MailCheck class="w-4 h-4 mt-0.5 shrink-0" />
+            <p class="text-xs leading-relaxed">
+              验证码 5 分钟内有效。没收到？邮件可能在 1 分钟内到达，请检查垃圾邮件文件夹，或
+              {{ countdown > 0 ? `${countdown} 秒后` : '' }}点击重新发送。
+            </p>
           </div>
         </div>
 
