@@ -167,6 +167,15 @@ services:
       AUTH_TOKEN_TTL: ${AUTH_TOKEN_TTL:-168h}
       # 超级验证码仅限开发模式，生产编排强制关闭
       AUTH_MASTER_CODE: "false"
+      # 邮件通道：注册验证码/找回密码发信，须通过 .env 注入
+      # （MAIL_PROVIDER=resend 时 RESEND_API_KEY 必填；=smtp 时 SMTP_HOST/USERNAME/PASSWORD 必填）
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-mock}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-Peak <no-reply@peak.local>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Peak <no-reply@peak.local>}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     expose:
       - "8083"

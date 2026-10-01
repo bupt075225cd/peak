@@ -112,9 +112,14 @@ func newSender(cfg *config.Loader, log *zap.Logger) sms.Sender {
 	}
 }
 
-// newMailSender 按配置创建邮件发送通道：mock（开发，写日志）或 smtp（生产）。
+// newMailSender 按配置创建邮件发送通道：mock（开发，写日志）、resend 或 smtp（生产）。
 func newMailSender(cfg *config.Loader, log *zap.Logger) mail.Sender {
 	switch cfg.String("mail.provider", "mock") {
+	case "resend":
+		return mail.NewResendSender(mail.ResendConfig{
+			APIKey: cfg.String("mail.resend.api_key", ""),
+			From:   cfg.String("mail.resend.from", ""),
+		})
 	case "smtp":
 		return mail.NewSMTPSender(mail.SMTPConfig{
 			Host:     cfg.String("mail.smtp.host", ""),

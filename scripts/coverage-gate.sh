@@ -23,6 +23,7 @@ declare -A PER_PKG_MIN=(
   ["peak/libs/auth"]=75
   ["peak/apps/user-service/internal/code"]=85
   ["peak/apps/user-service/internal/handler"]=85
+  ["peak/apps/user-service/internal/mail"]=85
   ["peak/libs/config"]=90
   ["peak/libs/domain"]=70
   ["peak/libs/errors"]=95
