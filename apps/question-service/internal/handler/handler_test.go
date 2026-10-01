@@ -520,6 +520,66 @@ func TestMistakeCreateRequiresSource(t *testing.T) {
 	}
 }
 
+// TestMistakeCreateUsesHeaderUserID 回归测试：创建错题时归属以 X-User-Id 为准，
+// 请求体里的 user_id（如前端写死的值）不应生效，否则列表按真实身份过滤会查不到。
+func TestMistakeCreateUsesHeaderUserID(t *testing.T) {
+	r := setupHandler(t)
+
+	w := doRequest(t, r, http.MethodPost, "/api/questions", map[string]any{"subject": "math"})
+	var qresp struct {
+		Data domain.Question `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &qresp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 请求体 user_id=999（伪造），网关注入 X-User-Id=3，归属应为 3。
+	req := httptest.NewRequest(http.MethodPost, "/api/mistakes", bytes.NewBufferString(
+		`{"user_id":999,"question_id":`+uintToString(qresp.Data.ID)+`,"source":"期中考试"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-Id", "3")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create mistake: %d %s", w.Code, w.Body.String())
+	}
+	var mresp struct {
+		Data domain.Mistake `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &mresp); err != nil {
+		t.Fatal(err)
+	}
+	if mresp.Data.UserID != 3 {
+		t.Fatalf("user_id = %d, want 3 (X-User-Id)", mresp.Data.UserID)
+	}
+
+	// 以身份 3 查列表应能查到；身份 1 应查不到。
+	listTotal := func(uid string) int64 {
+		req := httptest.NewRequest(http.MethodGet, "/api/mistakes", nil)
+		req.Header.Set("X-User-Id", uid)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list as %s: %d %s", uid, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				Total int64 `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Data.Total
+	}
+	if got := listTotal("3"); got != 1 {
+		t.Fatalf("total for user 3 = %d, want 1", got)
+	}
+	if got := listTotal("1"); got != 0 {
+		t.Fatalf("total for user 1 = %d, want 0", got)
+	}
+}
+
 func TestMistakeDeleteNotFound(t *testing.T) {
 	r := setupHandler(t)
 	w := doRequest(t, r, http.MethodDelete, "/api/mistakes/9999", nil)

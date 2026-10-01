@@ -243,8 +243,8 @@ async function handleSave() {
       question_type: questionType.value || '解答题',
     })
     // 第二步：创建错题记录，关联刚创建的题目。
+    // 不传 user_id：归属由网关校验 JWT 后注入的 X-User-Id 在服务端确定。
     await createMistake({
-      user_id: 1,
       question_id: question.id,
       source: source.value.trim(),
     })

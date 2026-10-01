@@ -176,6 +176,12 @@ func (h *Handler) createMistake(c *gin.Context) {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, err.Error()))
 		return
 	}
+	// 归属以网关校验 JWT 后注入的 X-User-Id 为准，杜绝前端伪造/写死 user_id
+	// 导致错题归属错误（列表按同一身份过滤，会造成"录了但看不到"）。
+	// 头缺失（如本地直连后端调试）时回退请求体值，保持兼容。
+	if uid, _ := strconv.ParseUint(c.GetHeader("X-User-Id"), 10, 64); uid > 0 {
+		m.UserID = uid
+	}
 	if err := h.svc.CreateMistake(c.Request.Context(), &m); err != nil {
 		httpx.Fail(c, err)
 		return
@@ -234,6 +240,11 @@ func (h *Handler) updateMistake(c *gin.Context) {
 		return
 	}
 	m.ID = id
+	// 与 createMistake 同口径：归属以网关注入的 X-User-Id 为准，
+	// 防止请求体篡改把错题改到其他用户名下。
+	if uid, _ := strconv.ParseUint(c.GetHeader("X-User-Id"), 10, 64); uid > 0 {
+		m.UserID = uid
+	}
 	if err := h.svc.UpdateMistake(c.Request.Context(), &m); err != nil {
 		httpx.Fail(c, err)
 		return

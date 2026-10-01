@@ -229,11 +229,11 @@ describe('MistakeEntry.vue', () => {
       }))
     })
     await vi.waitFor(() => {
-      expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', expect.objectContaining({
-        user_id: 1,
+      expect(httpMethods.post).toHaveBeenCalledWith('/mistakes', {
+        // 不传 user_id：归属由网关校验 JWT 后在服务端确定。
         question_id: 42,
         source: '期中考试',
-      }))
+      })
     })
     // 保存成功后 reset() 清空题干，题目信息随之隐藏
     await vi.waitFor(() => {
