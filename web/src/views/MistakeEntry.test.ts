@@ -450,6 +450,25 @@ describe('MistakeEntry.vue', () => {
     expect(wrapper.text()).not.toContain('擦除手写')
   })
 
+  it('重绘结构校验未通过时展示偏差提示', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const task = mathGeoResult(9, {
+      redraw_figures: [{ key: 'geometry/task_9.svg', label: '图1' }],
+      redraw_report: { max_hard: 0.5, max_soft: 0.9, attempts: 3, consistent: false },
+    })
+    await recognizeWithResult(wrapper, task)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('几何图形')
+    })
+    expect(wrapper.text()).toContain('结构校验未通过，仅供参考')
+  })
+
   it('识别结果无重绘 key 时不展示重绘区域，保存 image 为空数组', async () => {
     const router = buildRouter()
     router.push('/entry')

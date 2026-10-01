@@ -24,6 +24,7 @@ import {
   type Category,
 } from './index'
 import { logout, TOKEN_KEY } from '../composables/useAuth'
+import { requestTraceparent } from '../monitor'
 
 // 模块加载时 api/index.ts 会调用 axios.create() 创建 http 实例，
 // 因此必须在 vi.mock 工厂里同步提供 create 的返回，确保加载即可用。
@@ -43,6 +44,10 @@ vi.mock('axios', () => ({
       defaults: { headers: { common: {} } },
     }),
   },
+}))
+
+vi.mock('../monitor', () => ({
+  requestTraceparent: vi.fn(() => '00-trace-parent'),
 }))
 
 beforeEach(() => {
@@ -288,6 +293,15 @@ describe('api/index.ts 鉴权拦截器', () => {
     const config = { headers: {} as Record<string, string> }
     const res = authRequestInterceptor(config as never)
     expect((res.headers as Record<string, string>).Authorization).toBeUndefined()
+  })
+
+  it('trace 注入失败时不影响请求头构造', () => {
+    vi.mocked(requestTraceparent).mockImplementationOnce(() => {
+      throw new Error('trace boom')
+    })
+    const config = { headers: {} as Record<string, string> }
+    const res = authRequestInterceptor(config as never)
+    expect((res.headers as Record<string, string>).traceparent).toBeUndefined()
   })
 
   it('authResponseErrorInterceptor 对 401 清除登录态并跳转登录页', async () => {

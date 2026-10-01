@@ -149,6 +149,37 @@ describe('App.vue（已登录）', () => {
     expect(wrapper.text()).toContain('昵称不能为空')
   })
 
+  it('修改昵称失败时展示服务端错误信息', async () => {
+    const { wrapper } = await mountLoggedIn()
+    await flushPromises()
+
+    await wrapper.find('[data-test="user-menu-trigger"]').trigger('click')
+    await wrapper.find('[data-test="edit-name-trigger"]').trigger('click')
+    httpMethods.put.mockRejectedValueOnce({
+      response: { data: { message: '昵称包含敏感词' } },
+    })
+    await wrapper.find('[data-test="nickname-input"]').setValue('坏昵称')
+    await wrapper.find('[data-test="nickname-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('昵称包含敏感词')
+  })
+
+  it('退出登录后回到未登录形态', async () => {
+    const { wrapper, router } = await mountLoggedIn()
+    await flushPromises()
+
+    await wrapper.find('[data-test="user-menu-trigger"]').trigger('click')
+    const logoutBtn = wrapper.findAll('button').find((b) => b.text().includes('退出登录'))
+    expect(logoutBtn).toBeDefined()
+    await logoutBtn!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/home')
+    expect(localStorage.getItem('peak_token')).toBeNull()
+    expect(wrapper.text()).not.toContain('录入错题')
+  })
+
   it('渲染用户信息占位', async () => {
     const { wrapper } = await mountLoggedIn()
     await flushPromises()
