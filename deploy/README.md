@@ -28,6 +28,15 @@
 - Docker 20.10+ 与 Docker Compose v2
 - 可访问阿里云 ACR（私有仓库需 `docker login`，凭证见 `deploy/deploy.env.example`）
 
+### 资源要求
+
+观测栈（Prometheus/Alertmanager/Loki/Alloy/Tempo/Grafana）为**可选部署**，两种模式：
+
+| 模式 | 容器数 | 最低配置 | 说明 |
+|---|---|---|---|
+| 默认（轻量） | 6 个业务容器 | 2C / 4G / 40G | mysql + 4 后端 + web，无观测栈 |
+| 含观测栈 | 12 个容器 | 4C / 8G / 80G SSD | 增加观测栈，数据卷持续增长 |
+
 ## 1. 获取镜像
 
 业务镜像由 CI（`docker-push` job）在每次 `push` 到 `main` 后自动构建并推送到阿里云 ACR，
@@ -59,7 +68,7 @@ docker build -f web/Dockerfile -t peak-web ./web
 | 数据库方言 | `DB_DIALECT` | mysql | mysql/postgres/sqlite |
 | 识别 Provider | `RECOGNITION_PROVIDER` | mock | mock/aliyun |
 | 阿里云密钥 | `ALIYUN_ACCESS_KEY_ID` 等 | 空 | 生产必填（aliyun 模式） |
-| 追踪端点 | `TRACING_ENDPOINT` | 空 | 留空则不启用 OTel |
+| 追踪端点 | `TRACING_ENDPOINT` | 空 | 留空则不启用 OTel（观测栈未部署时保持留空） |
 
 ### 敏感配置管理
 
@@ -79,18 +88,23 @@ Docker Compose 通过 `--env-file .env.production` 读取。
 # 登录镜像仓库（私有仓库必须，一次即可）
 docker login --username=<ACR用户名> <ACR实例地址>
 
-# 拉取镜像并后台启动
+# 拉取镜像并后台启动（默认轻量模式：只启动 6 个业务容器）
 docker compose --env-file .env.production -f docker-compose.prod.yml pull
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+
+# 需要观测栈时，追加 --profile observability（GRAFANA_ADMIN_PASSWORD 必须已设强密码）
+# docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
 ```
 
 也可在能 SSH 到目标主机的机器上一键完成（上传文件 + 登录 + 拉取 + 启动）：
 
 ```bash
-./deploy/deploy-to-host.sh root@<host>      # 生产模式
-./deploy/deploy-to-host.sh -d root@<host>   # 开发调试模式：额外上传并叠加
-                                            # docker-compose.dev.yml（LOG_DEV/AUTH_MASTER_CODE
-                                            # 置 true，超级验证码 000000 可登录）
+./deploy/deploy-to-host.sh root@<host>          # 生产模式（轻量，不含观测栈）
+./deploy/deploy-to-host.sh --obs root@<host>    # 生产模式 + 观测栈
+./deploy/deploy-to-host.sh -d root@<host>       # 开发调试模式：额外上传并叠加
+                                                # docker-compose.dev.yml（LOG_DEV/AUTH_MASTER_CODE
+                                                # 置 true，超级验证码 000000 可登录）
+./deploy/deploy-to-host.sh -d --obs root@<host> # 开发调试 + 观测栈（可任意组合）
 ```
 
 启动后服务分布：
@@ -102,18 +116,37 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 | question-service | 8081 | 仅内网 |
 | recognition-service | 8082 | 仅内网 |
 | mysql | 3306 | 仅内网 |
-| prometheus | 9090 | `http://<host>:9090` |
+| prometheus | 9090 | `http://<host>:9090`（仅 `--obs` 开启观测栈时） |
 
 > 前端 `web` 容器内 Nginx 已配置将 `/api` 反代到 `gateway:8080`，因此生产环境浏览器直接访问 `http://<host>/` 即可同时访问前端与后端 API。
 
 ## 4. 健康检查与监控
 
 - **健康检查**：四个后端服务均实现 `/healthz`，prod 编排已配置容器 healthcheck（wget 探活，15s 间隔）
-- **指标**：各服务暴露 `/metrics`，Prometheus 通过服务名抓取（见 `deploy/prometheus.yml`）
+- **指标**：各服务暴露 `/metrics`，Prometheus 通过服务名抓取（见 `deploy/prometheus.yml`；仅观测栈开启时被抓取）
 - **数据库**：mysql 服务配置了 healthcheck，`question-service`/`recognition-service` 依赖其 `service_healthy` 后才启动
-- **日志**：`docker compose logs -f <service>`；生产日志同时由 Alloy 采集入 Loki
+- **日志**：`docker compose logs -f <service>`；开启观测栈后由 Alloy 采集入 Loki
 
-### 可观测栈（Grafana 全家桶）
+### 可观测栈（Grafana 全家桶，可选部署）
+
+> 观测栈整体归入 Compose profile `observability`，**默认不部署**（业务功能零损失：
+> `/metrics` 端点仍在但不被抓取，日志仍可 `docker compose logs` 查看）。
+> 开启/关闭方式：
+
+```bash
+# 开启（首次）：上传观测配置 + 激活 profile
+./deploy/deploy-to-host.sh --obs root@<host>
+# 或手动：docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
+
+# 关闭（仅停观测栈，业务容器不受影响）：按服务名 stop
+# ⚠ 注意：down 是项目级操作，无论是否带 --profile 都会拆除全部容器（含业务），勿用 down 关观测栈
+docker compose --env-file .env.production -f docker-compose.prod.yml stop prometheus alertmanager loki alloy tempo grafana
+# 重新开启：
+# docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
+# 关闭后建议把 .env.production 中 TRACING_ENDPOINT 改回留空（业务侧上报目标消失）
+```
+
+组成与端口（开启时生效）：
 
 | 服务 | 端口 | 说明 |
 | --- | --- | --- |
@@ -131,7 +164,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
 
 > 注意：管理员密码只在数据卷首次初始化时生效；已初始化后如需改密，登入 Grafana 修改，或
-> `docker compose down grafana && docker volume rm peak_grafana-data`（会丢失看板收藏等本地改动，provisioning 内容会自动重建）。
+> `docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml down grafana && docker volume rm peak_grafana-data`（会丢失看板收藏等本地改动，provisioning 内容会自动重建）。
 
 **三支柱互跳**：Grafana 内 Loki 的 `trace_id` 字段可点击跳转 Tempo 链路；Tempo 链路详情可跳回 Loki 按 trace_id 查日志。报警 → 链路 → 日志一条路径完成下钻。
 
@@ -141,7 +174,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 2. 从响应头 `X-Trace-Id`（或前端事件中的 trace_id）到 Tempo 查询链路，确认卡在 SQL（`gorm.*` span 的 `db.statement`）还是第三方 AI（`ai.*` span）
 3. 到 Loki 用 `{container="peak-gateway"} | json | trace_id="<id>"` 拉出该请求全链路日志
 
-告警通知渠道默认是 webhook 占位，接入钉钉/飞书时修改 `deploy/alertmanager/alertmanager.yml` 后 `up -d alertmanager` 生效。
+告警通知渠道默认是 webhook 占位，接入钉钉/飞书时修改 `deploy/alertmanager/alertmanager.yml` 后 `--profile observability up -d alertmanager` 生效。
 
 ## 5. 更新与回滚
 
@@ -195,6 +228,6 @@ cd web && npm install && npm run build
 - [ ] 配置阿里云密钥（若使用 `aliyun` provider）
 - [ ] 设置 `LOG_DEV=false`
 - [ ] 为 gateway 配置 TLS（通过前置 Nginx/负载均衡器）
-- [ ] 接入 OpenTelemetry（`TRACING_ENDPOINT`）
+- [ ] 按需开启观测栈并接入 OpenTelemetry（`--profile observability` + `TRACING_ENDPOINT=tempo:4317`）
 - [ ] 配置 MySQL 备份策略
 - [ ] 使用 `restart: unless-stopped` 保障服务自愈（已默认配置）

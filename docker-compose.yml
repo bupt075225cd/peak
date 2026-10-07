@@ -16,9 +16,11 @@ services:
       timeout: 5s
       retries: 10
 
-  # Prometheus（可观测性，预留）
+  # Prometheus（可观测性，可选）：归入 observability profile，
+  # 默认 docker compose up -d 不启动；需要时 --profile observability
   prometheus:
     image: prom/prometheus:latest
+    profiles: ["observability"]
     container_name: peak-prometheus
     ports:
       - "9090:9090"

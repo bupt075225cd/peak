@@ -197,11 +197,16 @@ services:
     ports:
       - "80:80"
 
-  # ── 可观测性 ────────────────────────────────────────────
+  # ── 可观测性（可选部署）─────────────────────────────────
+  # 全部观测 service 归入 observability profile：
+  #   默认 docker compose up -d 只启动业务容器（不拉取观测镜像、不占资源）；
+  #   需要观测能力时：docker compose --profile observability up -d
+  # 开启观测栈时 .env 必须设置 GRAFANA_ADMIN_PASSWORD（强密码，Grafana 不接受空值）。
   # Prometheus（指标）+ Alertmanager（告警）+ Loki/Alloy（日志）
   # + Tempo（链路）+ Grafana（统一入口，预置看板与三支柱互跳）。
   prometheus:
     image: prom/prometheus:v2.54.1
+    profiles: ["observability"]
     container_name: peak-prometheus
     restart: unless-stopped
     volumes:
@@ -216,6 +221,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
+    profiles: ["observability"]
     container_name: peak-alertmanager
     restart: unless-stopped
     volumes:
@@ -225,6 +231,7 @@ services:
 
   loki:
     image: grafana/loki:3.1.1
+    profiles: ["observability"]
     container_name: peak-loki
     restart: unless-stopped
     command: -config.file=/etc/loki/loki-config.yml
@@ -237,6 +244,7 @@ services:
   # Alloy：采集全部容器 stdout 日志推送 Loki（需挂载 docker.sock）。
   alloy:
     image: grafana/alloy:v1.1.1
+    profiles: ["observability"]
     container_name: peak-alloy
     restart: unless-stopped
     command:
@@ -252,6 +260,7 @@ services:
 
   tempo:
     image: grafana/tempo:2.6.0
+    profiles: ["observability"]
     container_name: peak-tempo
     restart: unless-stopped
     command: ["-config.file=/etc/tempo/tempo-config.yml"]
@@ -265,12 +274,15 @@ services:
 
   grafana:
     image: grafana/grafana:11.2.0
+    profiles: ["observability"]
     container_name: peak-grafana
     restart: unless-stopped
     environment:
-      # 强制登录：管理员账号经 .env 注入强密码（必填，无默认弱口令）。
+      # 强制登录：管理员账号经 .env 注入（仅开启 observability profile 时生效）。
+      # 默认部署不启动 grafana，故不做 :? 阻断校验（Compose 解析期插值会波及全部 service）。
+      # ⚠ 开启观测栈时必须设置强密码，否则 Grafana 会回退默认 admin/admin 弱口令。
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
       GF_USERS_ALLOW_SIGN_UP: "false"
       # 关闭匿名访问：所有看板/Explore 查询均需登录。
       GF_AUTH_ANONYMOUS_ENABLED: "false"
