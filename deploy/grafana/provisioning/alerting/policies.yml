@@ -1,0 +1,11 @@
+# Grafana 通知策略（provisioning）：全部告警默认路由到 peak-webhook 渠道。
+# 按文件夹（Peak Alerts）+ 告警名分组通知；需要分级路由（critical/warning 分流）时在
+# Grafana UI → Alerting → Notification policies 中添加嵌套策略，或在本文件增加 nested_policies。
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: peak-webhook
+    group_by:
+      - grafana_folder
+      - alertname

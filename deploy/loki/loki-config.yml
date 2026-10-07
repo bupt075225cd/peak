@@ -27,8 +27,8 @@ schema_config:
         period: 24h
 
 limits_config:
-  # 保留 14 天后自动删除旧数据（磁盘有限的单机部署）。
-  retention_period: 336h
+  # 保留 7 天后自动删除旧数据（轻量单机部署，控制磁盘占用）。
+  retention_period: 168h
   reject_old_samples: true
   reject_old_samples_max_age: 24h
 

@@ -6,8 +6,7 @@
 #   ./deploy-to-host.sh [-d] [--obs] <user>@<host> [端口]
 #   -d     开发调试模式：额外上传并叠加 docker-compose.dev.yml
 #          （开启 LOG_DEV/AUTH_MASTER_CODE，超级验证码 000000 可登录）
-#   --obs  同时部署可选观测栈（Prometheus/Alertmanager/Loki/Alloy/Tempo/Grafana，
-#          Compose profiles: observability）。默认只部署 6 个业务容器。
+#   --obs  同时部署可选观测栈（Prometheus/Loki/Alloy/Grafana，Compose profiles: observability）。
 # 前置：
 #   1) 已能 ssh <user>@<host>（密钥或交互输密码均可）
 #   2) deploy/.env.production 已按模板填好真实值
@@ -54,19 +53,15 @@ if [ "$DEV" = "1" ]; then scp -P "$PORT" docker-compose.dev.yml "$TARGET:$REMOTE
 scp -P "$PORT" deploy/.env.production "$TARGET:$REMOTE_DIR/.env.production"
 
 # 可观测栈配置：仅 --obs 时上传（默认轻量部署，远端不留观测配置）
-# prometheus 告警规则 / loki / tempo / alloy / alertmanager / grafana provisioning
+# prometheus / loki / alloy 配置 + grafana provisioning（看板、数据源、告警规则）
 if [ "$OBS" = "1" ]; then
   scp -P "$PORT" deploy/prometheus.yml "$TARGET:$REMOTE_DIR/deploy/"
-  ssh -p "$PORT" "$TARGET" "mkdir -p $REMOTE_DIR/deploy/prometheus $REMOTE_DIR/deploy/loki \
-    $REMOTE_DIR/deploy/tempo $REMOTE_DIR/deploy/alloy $REMOTE_DIR/deploy/alertmanager \
+  ssh -p "$PORT" "$TARGET" "mkdir -p $REMOTE_DIR/deploy/loki $REMOTE_DIR/deploy/alloy \
     $REMOTE_DIR/deploy/grafana/provisioning/datasources $REMOTE_DIR/deploy/grafana/provisioning/dashboards \
-    $REMOTE_DIR/deploy/grafana/dashboards"
-  scp -P "$PORT" deploy/prometheus/alerts.yml "$TARGET:$REMOTE_DIR/deploy/prometheus/"
+    $REMOTE_DIR/deploy/grafana/provisioning/alerting $REMOTE_DIR/deploy/grafana/dashboards"
   scp -P "$PORT" deploy/loki/loki-config.yml "$TARGET:$REMOTE_DIR/deploy/loki/"
-  scp -P "$PORT" deploy/tempo/tempo-config.yml "$TARGET:$REMOTE_DIR/deploy/tempo/"
   scp -P "$PORT" deploy/alloy/config.alloy "$TARGET:$REMOTE_DIR/deploy/alloy/"
-  scp -P "$PORT" deploy/alertmanager/alertmanager.yml "$TARGET:$REMOTE_DIR/deploy/alertmanager/"
-  # grafana provisioning + 看板整体传输（tar 管道，避免 scp -r 目录嵌套与 "/." 兼容问题）
+  # grafana provisioning（含数据源/看板/告警三件套）+ 看板整体传输（tar 管道，避免 scp -r 目录嵌套与 "/." 兼容问题）
   tar -C deploy -cf - grafana | ssh -p "$PORT" "$TARGET" "tar -C $REMOTE_DIR/deploy -xf -"
 fi
 
@@ -90,7 +85,7 @@ else
   echo "✓ 部署完成，访问 http://<主机IP>:80"
 fi
 if [ "$OBS" = "1" ]; then
-  echo "✓ 观测栈已启动：Grafana http://<主机IP>:3001（Prometheus 内网 9090 / Tempo OTLP 4317）"
+  echo "✓ 观测栈已启动：Grafana http://<主机IP>:3001（看板 + 告警，Prometheus/Loki/Alloy 内网）"
 else
   echo "ℹ 观测栈未部署（默认轻量模式）；如需开启：./deploy-to-host.sh --obs <user>@<host>"
 fi

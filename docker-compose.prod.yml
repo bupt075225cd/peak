@@ -202,32 +202,23 @@ services:
   #   默认 docker compose up -d 只启动业务容器（不拉取观测镜像、不占资源）；
   #   需要观测能力时：docker compose --profile observability up -d
   # 开启观测栈时 .env 必须设置 GRAFANA_ADMIN_PASSWORD（强密码，Grafana 不接受空值）。
-  # Prometheus（指标）+ Alertmanager（告警）+ Loki/Alloy（日志）
-  # + Tempo（链路）+ Grafana（统一入口，预置看板与三支柱互跳）。
+  # Prometheus（指标）+ Loki/Alloy（日志）+ Grafana（统一入口：看板 + 内置告警）。
+  # 告警由 Grafana Unified Alerting 求值与通知（provisioning 见 deploy/grafana/provisioning/alerting/），
+  # 不再使用独立的 Prometheus 规则求值 + Alertmanager。
   prometheus:
     image: prom/prometheus:v2.54.1
     profiles: ["observability"]
     container_name: peak-prometheus
     restart: unless-stopped
+    # 指标本地保留 7 天（轻量单机部署，控制磁盘占用）
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     expose:
       - "9090"
-    depends_on:
-      alertmanager:
-        condition: service_started
-
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    profiles: ["observability"]
-    container_name: peak-alertmanager
-    restart: unless-stopped
-    volumes:
-      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    expose:
-      - "9093"
 
   loki:
     image: grafana/loki:3.1.1
@@ -258,20 +249,6 @@ services:
     depends_on:
       - loki
 
-  tempo:
-    image: grafana/tempo:2.6.0
-    profiles: ["observability"]
-    container_name: peak-tempo
-    restart: unless-stopped
-    command: ["-config.file=/etc/tempo/tempo-config.yml"]
-    volumes:
-      - ./deploy/tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
-      - tempo-data:/var/tempo
-    expose:
-      - "3200"
-      - "4317"  # OTLP gRPC：业务服务 TRACING_ENDPOINT 指向此处
-      - "4318"  # OTLP HTTP
-
   grafana:
     image: grafana/grafana:11.2.0
     profiles: ["observability"]
@@ -297,13 +274,11 @@ services:
     depends_on:
       - prometheus
       - loki
-      - tempo
 
 volumes:
   mysql-data:
   recognition-data:
   prometheus-data:
   loki-data:
-  tempo-data:
   alloy-data:
   grafana-data:

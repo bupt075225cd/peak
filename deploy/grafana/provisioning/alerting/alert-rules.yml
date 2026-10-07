@@ -1,0 +1,427 @@
+# Grafana 告警规则（provisioning，随容器自动导入，替代原 deploy/prometheus/alerts.yml）。
+# 由 Grafana Unified Alerting 直接查 Prometheus 数据源求值（uid: prom），
+# 阈值放在 threshold 条件中；原规则的 `for` 等待时间映射为 `for` 字段（pending period）。
+# 阈值为初始经验值，可在 Grafana → Alerting 中按实际流量调整。
+apiVersion: 1
+
+groups:
+  # ── 可用性 ──────────────────────────────────────────────
+  - orgId: 1
+    name: availability
+    folder: Peak Alerts
+    interval: 1m
+    rules:
+      # 服务宕机：抓取目标不可达 1 分钟（up < 1）。
+      - uid: peak-service-down
+        title: ServiceDown
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "服务 {{ $labels.job }} 不可达"
+          description: "{{ $labels.job }} 的 /metrics 抓取失败超过 1 分钟，实例 {{ $labels.instance }} 可能已崩溃或被 OOM。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: up{job=~"gateway|question-service|recognition-service|user-service"}
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+  # ── HTTP ────────────────────────────────────────────────
+  - orgId: 1
+    name: http
+    folder: Peak Alerts
+    interval: 1m
+    rules:
+      # 5xx 错误率：5 分钟窗口内 5xx 占比超 5%。
+      - uid: peak-http-5xx-rate
+        title: HTTP5xxRateHigh
+        for: 5m
+        noDataState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} 5xx 错误率超 5%"
+          description: "{{ $labels.job }} 近 5 分钟 5xx 占比 {{ if $value }}{{ $value | humanizePercentage }}{{ else }}N/A{{ end }}。到 Grafana → Loki 用 {container=\"peak-gateway\"} 按 status=5xx 检索失败请求日志。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: sum by (job) (rate(http_requests_total{status="5xx"}[5m])) / sum by (job) (rate(http_requests_total[5m]))
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.05
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+      # P99 延迟：5 分钟窗口内 P99 超 2s。
+      - uid: peak-http-p99-latency
+        title: HTTPP99LatencyHigh
+        for: 10m
+        noDataState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} P99 延迟超 2s"
+          description: "{{ $labels.job }} 近 5 分钟 P99 为 {{ $value }}s。用响应头 X-Trace-Id / 前端事件 trace_id 到 Loki 检索该请求全链路日志，定位卡在 SQL 还是第三方 AI。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: histogram_quantile(0.99, sum by (le, job) (rate(http_request_duration_seconds_bucket[5m])))
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 2
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+  # ── 业务 ────────────────────────────────────────────────
+  - orgId: 1
+    name: business
+    folder: Peak Alerts
+    interval: 1m
+    rules:
+      # 识别任务失败率：30 分钟窗口内失败占比超 30%（AI 抖动或渠道故障的信号）。
+      - uid: peak-recognition-fail-rate
+        title: RecognitionTaskFailureRateHigh
+        for: 10m
+        noDataState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "识别服务 {{ $labels.provider }} 任务失败率超 30%"
+          description: "近 30 分钟 provider={{ $labels.provider }} 失败率 {{ if $value }}{{ $value | humanizePercentage }}{{ else }}N/A{{ end }}。检查 AI 调用指标 ai_call_total 与 Loki 中识别服务错误日志。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 2100
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: sum by (provider) (rate(recognition_task_total{status="failed"}[30m])) / sum by (provider) (rate(recognition_task_total[30m]))
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.3
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+      # AI 调用错误率：第三方 AI 接口单能力错误率超 50%。
+      - uid: peak-ai-call-error-rate
+        title: AICallErrorRateHigh
+        for: 5m
+        noDataState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI 调用 {{ $labels.provider }}/{{ $labels.operation }} 错误率超 50%"
+          description: "第三方 AI 接口 {{ $labels.operation }} 持续失败，可能为额度耗尽/限流/模型故障。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: sum by (provider, operation) (rate(ai_call_total{status="error"}[10m])) / sum by (provider, operation) (rate(ai_call_total[10m]))
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+  # ── 数据库 ──────────────────────────────────────────────
+  - orgId: 1
+    name: database
+    folder: Peak Alerts
+    interval: 1m
+    rules:
+      # 连接池等待：每秒新增等待超 0.5 次，说明池接近饱和。
+      - uid: peak-db-pool-wait
+        title: DBPoolWaitHigh
+        for: 5m
+        noDataState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} 数据库连接池出现等待"
+          description: "连接池等待计数持续增长，请求在排队等连接。检查慢查询（gorm 慢查询日志）与 max_open_conns 配置。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: rate(db_wait_count_total{job=~".*service"}[5m])
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C
+
+  # ── 前端 ────────────────────────────────────────────────
+  - orgId: 1
+    name: frontend
+    folder: Peak Alerts
+    interval: 1m
+    rules:
+      # 前端错误突增：JS 错误 / 资源加载失败事件速率超 0.5 条/秒。
+      - uid: peak-frontend-error-spike
+        title: FrontendErrorSpike
+        for: 10m
+        noDataState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "前端错误上报突增"
+          description: "前端 js_error/unhandled_rejection/resource_error 速率 {{ $value }}/s。到 Loki 按 event_type=error 检索详细堆栈。"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1200
+              to: 0
+            datasourceUid: prom
+            model:
+              datasource:
+                type: prometheus
+                uid: prom
+              editorMode: code
+              expr: sum(rate(frontend_report_total{type="error"}[15m]))
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: C
+              type: threshold
+        condition: C

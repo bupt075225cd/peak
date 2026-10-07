@@ -30,7 +30,7 @@
 
 ### 资源要求
 
-观测栈（Prometheus/Alertmanager/Loki/Alloy/Tempo/Grafana）为**可选部署**，两种模式：
+观测栈（Prometheus/Loki/Alloy/Grafana，4 容器）为**可选部署**，两种模式：
 
 | 模式 | 容器数 | 最低配置 | 说明 |
 |---|---|---|---|
@@ -140,22 +140,23 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 
 # 关闭（仅停观测栈，业务容器不受影响）：按服务名 stop
 # ⚠ 注意：down 是项目级操作，无论是否带 --profile 都会拆除全部容器（含业务），勿用 down 关观测栈
-docker compose --env-file .env.production -f docker-compose.prod.yml stop prometheus alertmanager loki alloy tempo grafana
+docker compose --env-file .env.production -f docker-compose.prod.yml stop prometheus loki alloy grafana
 # 重新开启：
 # docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
-# 关闭后建议把 .env.production 中 TRACING_ENDPOINT 改回留空（业务侧上报目标消失）
 ```
 
-组成与端口（开启时生效）：
+组成与端口（开启时生效，共 4 个容器）：
 
 | 服务 | 端口 | 说明 |
 | --- | --- | --- |
-| grafana | **3001（对外）** | 统一看板入口（强制登录）：预置 5 块看板（全局/运行时/数据库/识别业务/前端），provisioning 自动导入 |
-| prometheus | 内网 9090 | 指标抓取 + 告警规则求值（`deploy/prometheus/alerts.yml`） |
-| alertmanager | 内网 9093 | 告警分组与通知（webhook 渠道见 `deploy/alertmanager/alertmanager.yml`） |
-| loki | 内网 3100 | 集中日志存储（容器 stdout，JSON，含 trace_id） |
+| grafana | **3001（对外）** | 统一入口（强制登录）：预置 5 块看板 + 内置告警（Unified Alerting，provisioning 自动导入） |
+| prometheus | 内网 9090 | 指标抓取与存储（保留 7 天），不含告警求值 |
+| loki | 内网 3100 | 集中日志存储（容器 stdout，JSON，含 trace_id；保留 7 天） |
 | alloy | 内网 | 日志采集代理（挂载 docker.sock，自动发现容器） |
-| tempo | 内网 4317/3200 | OTLP 链路接收（业务 `TRACING_ENDPOINT=tempo:4317`）与查询 |
+
+> 链路追踪（Tempo）与独立告警组件（Alertmanager）已移除：追踪上报保持关闭
+> （`TRACING_ENDPOINT` 留空），告警改由 Grafana 内置 Unified Alerting 求值与通知
+> （规则与渠道 provisioning 见 `deploy/grafana/provisioning/alerting/`）。
 
 **Grafana 访问**：强制账号登录（匿名访问已关闭，密码经 `.env` 的 `GRAFANA_ADMIN_PASSWORD` 注入，无默认弱口令），内网直接访问：
 
@@ -166,15 +167,15 @@ docker compose --env-file .env.production -f docker-compose.prod.yml stop promet
 > 注意：管理员密码只在数据卷首次初始化时生效；已初始化后如需改密，登入 Grafana 修改，或
 > `docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml down grafana && docker volume rm peak_grafana-data`（会丢失看板收藏等本地改动，provisioning 内容会自动重建）。
 
-**三支柱互跳**：Grafana 内 Loki 的 `trace_id` 字段可点击跳转 Tempo 链路；Tempo 链路详情可跳回 Loki 按 trace_id 查日志。报警 → 链路 → 日志一条路径完成下钻。
+**告警（Grafana 内置，替代原 Alertmanager）**：7 条阈值告警规则（服务存活/5xx 率/P99 延迟/识别失败率/AI 错误率/连接池等待/前端错误）随 provisioning 自动导入，在 Grafana → Alerting → Alert rules 中查看与调整。通知渠道默认是 webhook 占位，接入钉钉/飞书/邮件时修改 `deploy/grafana/provisioning/alerting/contact-points.yml` 后重启 grafana 容器生效。
+
+**日志串联排查**：业务日志 JSON 仍含 `trace_id` 字段（响应头 `X-Trace-Id` 同源），可按字段值在 Loki 串联单请求全部日志：
 
 **日常排查路径**：
 
-1. Grafana「全局服务总览」看板发现 5xx 率或 P99 异常（或收到 Alertmanager 告警）
-2. 从响应头 `X-Trace-Id`（或前端事件中的 trace_id）到 Tempo 查询链路，确认卡在 SQL（`gorm.*` span 的 `db.statement`）还是第三方 AI（`ai.*` span）
-3. 到 Loki 用 `{container="peak-gateway"} | json | trace_id="<id>"` 拉出该请求全链路日志
-
-告警通知渠道默认是 webhook 占位，接入钉钉/飞书时修改 `deploy/alertmanager/alertmanager.yml` 后 `--profile observability up -d alertmanager` 生效。
+1. Grafana「全局服务总览」看板发现 5xx 率或 P99 异常（或收到 Grafana 告警通知）
+2. 从响应头 `X-Trace-Id`（或前端事件中的 trace_id）到 Loki 用 `{container="peak-gateway"} | json | trace_id="<id>"` 拉出该请求全链路日志
+3. 结合指标看板（SQL/AI 耗时、错误率）定位是慢查询还是第三方 AI 抖动
 
 ## 5. 更新与回滚
 
@@ -228,6 +229,6 @@ cd web && npm install && npm run build
 - [ ] 配置阿里云密钥（若使用 `aliyun` provider）
 - [ ] 设置 `LOG_DEV=false`
 - [ ] 为 gateway 配置 TLS（通过前置 Nginx/负载均衡器）
-- [ ] 按需开启观测栈并接入 OpenTelemetry（`--profile observability` + `TRACING_ENDPOINT=tempo:4317`）
+- [ ] 按需开启观测栈并配置告警通知渠道（`--profile observability` + `deploy/grafana/provisioning/alerting/contact-points.yml`）
 - [ ] 配置 MySQL 备份策略
 - [ ] 使用 `restart: unless-stopped` 保障服务自愈（已默认配置）

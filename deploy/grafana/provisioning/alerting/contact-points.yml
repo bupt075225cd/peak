@@ -1,0 +1,20 @@
+# Grafana 告警通知渠道（provisioning，随容器自动导入）。
+# 轻量方案：告警求值与通知由 Grafana Unified Alerting 承担（替代原 Prometheus + Alertmanager）。
+#
+# ⚠ 当前 webhook 为占位地址（发送失败仅记录日志，不影响 Grafana 运行）。
+#   接入真实渠道时替换 url 即可：
+#   - 飞书: https://open.feishu.cn/open-apis/bot/v2/hook/<token>
+#   - 钉钉: https://oapi.dingtalk.com/robot/send?access_token=<token>（需加签则用 Grafana 集成「钉钉」类型）
+#   - 邮件: 改 type: email 并在 grafana.ini 配置 SMTP（compose 中加 GF_SMTP_* 环境变量）
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: peak-webhook
+    receivers:
+      - uid: peak-webhook
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: http://alert-webhook.placeholder.invalid/peak
+          httpMethod: POST

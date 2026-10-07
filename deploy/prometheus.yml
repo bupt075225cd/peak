@@ -1,17 +1,7 @@
-# Prometheus 配置：抓取全部业务服务 /metrics，告警推送到 Alertmanager。
+# Prometheus 配置：仅负责指标抓取与存储（保留 7 天）。
+# 告警求值与通知由 Grafana Unified Alerting 承担（deploy/grafana/provisioning/alerting/）。
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
-
-# 告警规则（deploy/prometheus/alerts.yml）。
-rule_files:
-  - /etc/prometheus/alerts.yml
-
-# 告警发送到 Alertmanager（由 Alertmanager 负责分组/去重/通知渠道）。
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   # 生产环境：通过服务名访问容器网络

@@ -1,7 +1,6 @@
 # Grafana 数据源自动注册（provisioning，免手工配置）。
-# 三个数据源互跳配置：
-#   Loki 日志行中的 trace_id → 点击跳 Tempo 链路
-#   Tempo 链路 → 可跳回 Loki 按 trace_id 查日志
+# 轻量方案：指标（Prometheus）+ 日志（Loki）两个数据源；
+# 链路追踪（Tempo）已移除，日志中 trace_id 字段仍保留，可按字段值检索串联单请求日志。
 apiVersion: 1
 
 datasources:
@@ -24,30 +23,3 @@ datasources:
     url: http://loki:3100
     jsonData:
       maxLines: 1000
-      # 日志行中的 trace_id 字段 → Tempo 链路跳转（报警下钻入口）。
-      derivedFields:
-        - name: TraceID
-          # 匹配 zap JSON 中的 "trace_id":"<32hex>" 或 client_trace_id
-          matcherRegex: '"(?:client_)?trace_id"\s*:\s*"([a-f0-9]{32})"'
-          datasourceUid: tempo
-          url: "$${__value.raw}"
-
-  # ── 链路 ────────────────────────────────────────────────
-  - name: Tempo
-    type: tempo
-    uid: tempo
-    access: proxy
-    url: http://tempo:3200
-    jsonData:
-      httpMethod: GET
-      # 链路详情 → Loki 按 trace_id 查该请求全部日志。
-      traceToLogs:
-        datasourceUid: loki
-        tags: ["trace_id"]
-        spanStartEndTimeShift: "-1h"
-        lokiSearch: true
-      # 服务图与 span 搜索。
-      serviceMap:
-        datasourceUid: prom
-      nodeGraph:
-        enabled: true

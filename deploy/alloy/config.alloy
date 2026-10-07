@@ -1,6 +1,6 @@
 // Grafana Alloy 配置：采集本机全部 Docker 容器的 stdout 日志（JSON 格式），
 // 打上 container 标签后推送到 Loki。生产日志为 zap JSON（含 trace_id 字段），
-// Grafana 的 Loki derived field 会把 trace_id 转为 Tempo 链路跳转链接。
+// 可在 Grafana/Loki 中按 trace_id 检索串联单请求日志。
 discovery.docker "linux" {
   host             = "unix:///var/run/docker.sock"
   refresh_interval = "5s"
