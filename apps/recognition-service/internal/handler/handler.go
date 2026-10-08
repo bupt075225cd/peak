@@ -236,12 +236,14 @@ func (h *Handler) fileURLs(c *gin.Context) {
 	if err := h.db.WithContext(c.Request.Context()).First(&img, task.ImageID).Error; err == nil {
 		originalKey = img.StorageKey
 	}
+	// 几何重绘产物 key：单子图为 task_<id>.svg，多子图为 task_<id>_<i>.svg。
+	geometrySingle := fmt.Sprintf("transient/geometry/task_%d.svg", task.ID)
 	geometryPrefix := fmt.Sprintf("transient/geometry/task_%d_", task.ID)
 
 	urls := make(map[string]string, len(req.Keys))
 	exp := time.Now().Add(filesign.DefaultTTL)
 	for _, key := range req.Keys {
-		if key != originalKey && !strings.HasPrefix(key, geometryPrefix) {
+		if key != originalKey && key != geometrySingle && !strings.HasPrefix(key, geometryPrefix) {
 			httpx.Fail(c, errors.New(errors.CodeForbidden, "文件不属于该任务"))
 			return
 		}

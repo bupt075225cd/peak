@@ -304,6 +304,7 @@ func TestFileURLs(t *testing.T) {
 	}
 
 	keys := []string{
+		"transient/geometry/task_" + strconv.FormatUint(task.ID, 10) + ".svg",
 		"transient/geometry/task_" + strconv.FormatUint(task.ID, 10) + "_1.svg",
 		"transient/original/123_a.jpg",
 	}
