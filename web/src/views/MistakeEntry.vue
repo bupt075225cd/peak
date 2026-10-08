@@ -95,14 +95,25 @@ function pickImage() {
   fileInput.value?.click()
 }
 
+// 上传体积上限（MB）：与 nginx client_max_body_size 保持一致。
+// 前端先拦截可立即给出明确原因；否则请求会被 nginx 以 413 拒掉，
+// 用户只能看到笼统的"图片上传失败，请重试"。
+const MAX_UPLOAD_MB = 5
+
 // 目前只支持上传图片：非图片文件直接提示，不发起识别。
 // MIME 可能为空（部分拖拽来源），因此再按扩展名兜底判断。
 function ensureImage(file: File): boolean {
   const isImage =
     file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(file.name)
-  if (isImage) return true
-  errorMsg.value = '目前仅支持上传图片（JPG、PNG 等）'
-  return false
+  if (!isImage) {
+    errorMsg.value = '目前仅支持上传图片（JPG、PNG 等）'
+    return false
+  }
+  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+    errorMsg.value = `图片大小不能超过 ${MAX_UPLOAD_MB}MB（当前 ${(file.size / 1024 / 1024).toFixed(1)}MB），请压缩或裁剪后再上传`
+    return false
+  }
+  return true
 }
 
 function onFileChange(e: Event) {
