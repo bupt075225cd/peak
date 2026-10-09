@@ -32,6 +32,9 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 - polygons：多边形，points 为点名数组，fill 为 true 时淡色填充。
 - circles：圆，center 为圆心点名；radius 与 through 二选一（through 指圆上一点）。
 - arcs：圆弧，radius 必填；角度单位为度，0° 指向 x 轴正方向，角度增大方向与 y 轴正向一致。
+  半圆必须用 arcs 表达，严禁用整圆 circles 代替：先在 points 中补充直径的中点（hidden:true）作圆心，
+  radius 取直径长度的一半，start_angle/end_angle 只覆盖半圆弧
+  （水平直径、弧朝上时为 180→360，弧朝下时为 0→180，竖直直径、弧朝右时为 270→90）。
 - right_angles：直角标记，vertex 为直角顶点，a/b 为两条边上的点。
 - angle_marks：角的弧线标记，vertex/a/b 为角的顶点与两条边上的点，count 为弧线条数（1~3），不要填 label。
   忠实原图：仅当原图中确实画有角的弧线标记时才输出；原图没有弧线标记就不要输出，不要臆造。

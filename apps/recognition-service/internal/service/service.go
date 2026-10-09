@@ -418,6 +418,8 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			continue
 		}
 		s.verifyAngleMarks(ctx, taskID, extractImage, parsed)
+		// 题干-图形语义核对：半圆被画成整圆等结构合法但语义错误的情况。
+		geom.CheckSemicircle(parsed, result.StemText)
 
 		panels = panels[:0]
 		renderFailed := false
