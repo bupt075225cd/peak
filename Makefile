@@ -148,7 +148,7 @@ run-sqlite:
 	go build -o $(PEAK_BIN)/recognition-service ./apps/recognition-service
 	go build -o $(PEAK_BIN)/user-service ./apps/user-service
 	@echo "==> 启动服务（sqlite 空库）"
-	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db STORAGE_ROOT=$(PEAK_DATA)/storage nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
+	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db STORAGE_ROOT=$(PEAK_DATA)/storage STORAGE_SOURCE_ROOT=$(PEAK_DATA)/storage nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
 	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db STORAGE_ROOT=$(PEAK_DATA)/storage RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
 	cd $(USER_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/user.db JWT_SECRET=$(JWT_SECRET) AUTH_MASTER_CODE=$(AUTH_MASTER_CODE) nohup $(PEAK_BIN)/user-service > $(PEAK_RUN)/user.log 2>&1 & echo $$! > $(PEAK_RUN)/user.pid
 	cd $(GATEWAY_DIR) && exec env JWT_SECRET=$(JWT_SECRET) nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
