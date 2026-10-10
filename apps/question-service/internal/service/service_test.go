@@ -249,6 +249,53 @@ func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDeleteMistakeNotFound(t *testing.T) {
+	svc := setupService(t)
+	// 不存在或不属于该用户的错题统一映射为业务 NotFound。
+	_, err := svc.DeleteMistake(context.Background(), 1, 9999)
+	if err == nil {
+		t.Fatal("expected error for missing mistake")
+	}
+	if errors.CodeOf(err) != errors.CodeNotFound {
+		t.Fatalf("expected CodeNotFound, got %d", errors.CodeOf(err))
+	}
+}
+
+func TestDeleteMistakeReturnsPurgeError(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "test.db")
+	db, err := domain.OpenDB(domain.DialectSQLite, dsn, 1)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := domain.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	svc := New(repository.NewGormRepositories(db), nil)
+	ctx := context.Background()
+
+	q := &domain.Question{Subject: "math"}
+	if err := svc.CreateQuestion(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	m := &domain.Mistake{UserID: 1, QuestionID: q.ID, Source: "s"}
+	if err := svc.CreateMistake(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+
+	// 破坏题目-分类关联表，使事务内的清理步骤失败（非 NotFound 错误），
+	// 验证错误原样透传而不是被误判为 NotFound。
+	if err := db.Exec("DROP TABLE question_categories").Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.DeleteMistake(ctx, 1, m.ID)
+	if err == nil {
+		t.Fatal("expected purge error")
+	}
+	if errors.CodeOf(err) == errors.CodeNotFound {
+		t.Fatalf("expected non-NotFound error, got %v", err)
+	}
+}
+
 func TestGetMistakeNotFound(t *testing.T) {
 	svc := setupService(t)
 	_, err := svc.GetMistake(context.Background(), 9999)
