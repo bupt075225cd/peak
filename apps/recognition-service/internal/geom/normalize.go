@@ -3,11 +3,17 @@ package geom
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 )
 
 // maxValidateIssues 单次结构校验最多报告的问题条数（避免回喂文本过长）。
 const maxValidateIssues = 12
+
+// numericLabelRe 纯数值长度标注（如 "2.6"、"2.6m"、"2.6米"）。
+// 已知长度以题干文字为准，图上不标数值长度，渲染前直接剔除。
+var numericLabelRe = regexp.MustCompile(
+	`(?i)^[≈≈~]?\s*\d+(?:\.\d+)?\s*(mm|cm|dm|km|m|米|厘米|毫米|分米|千米)?[。.。]?$`)
 
 // Normalize 对模型输出做健壮性处理：补齐画布、裁剪坐标、剔除引用了不存在点的图元。
 func (s *Spec) Normalize() {
@@ -143,6 +149,10 @@ func (s *Spec) Normalize() {
 	for _, l := range s.Labels {
 		l.Text = strings.TrimSpace(l.Text)
 		if l.Text == "" {
+			continue
+		}
+		// 图上不标数值长度：纯数值（可带单位）标注直接剔除，保留代数式/结论等文字。
+		if numericLabelRe.MatchString(l.Text) {
 			continue
 		}
 		l.X = clampF(l.X, 0, w)
