@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -96,6 +97,9 @@ type Service struct {
 	geometryRender bool
 	// geometryMaxAttempts 结构校验失败回喂修正的最大轮数（提取→渲染→修正）。
 	geometryMaxAttempts int
+	// wg 跟踪在途的异步识别流程，Wait 供测试收尾等待，避免后台协程
+	// 与临时目录清理（t.TempDir）竞态。
+	wg sync.WaitGroup
 }
 
 // Option 服务可选依赖。
@@ -136,7 +140,11 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, imageID uint64,
 	}
 	// 异步执行（简化：go routine；生产可接入消息队列）。
 	// WithoutCancel：脱离请求生命周期，但保留 trace 上下文，任务链路可串联到触发请求。
-	go s.process(context.WithoutCancel(ctx), task.ID, storageKey)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.process(context.WithoutCancel(ctx), task.ID, storageKey)
+	}()
 	return task, nil
 }
 
@@ -163,9 +171,17 @@ func (s *Service) RetryTask(ctx context.Context, userID, id uint64) error {
 	if err := s.db.WithContext(ctx).Save(&task).Error; err != nil {
 		return err
 	}
-	go s.process(context.WithoutCancel(ctx), task.ID, "")
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.process(context.WithoutCancel(ctx), task.ID, "")
+	}()
 	return nil
 }
+
+// Wait 等待全部在途的异步识别流程结束。测试收尾时调用，
+// 避免后台协程在 t.TempDir 清理后仍写文件/数据库导致的竞态。
+func (s *Service) Wait() { s.wg.Wait() }
 
 // process 执行识别流程，根据文件类型分流：图片走 OCR 流程，文档走解析流程。
 // 全程记录业务指标（任务耗时/成败）与链路 span（可定位卡在哪个 VLM 阶段）。

@@ -64,7 +64,10 @@ func setupServiceWithProvider(t *testing.T, prov provider.Provider) (*Service, s
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
-	return New(db, store, prov, logger.NewNop()), store
+	svc := New(db, store, prov, logger.NewNop())
+	// 等待在途的异步识别流程结束，避免与 t.TempDir 清理竞态。
+	t.Cleanup(svc.Wait)
+	return svc, store
 }
 
 // buildTestDocx 构造含两个文本段落的简单 docx。

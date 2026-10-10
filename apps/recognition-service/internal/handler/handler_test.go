@@ -41,6 +41,8 @@ func setupHandler(t *testing.T) (*gin.Engine, *service.Service, storage.FileStor
 		t.Fatalf("storage: %v", err)
 	}
 	svc := service.New(db, store, provider.NewMockProvider(), logger.NewNop())
+	// 等待在途的异步识别流程结束，避免与 t.TempDir 清理竞态。
+	t.Cleanup(svc.Wait)
 	h := New(svc, db, store, testFileSecret)
 
 	gin.SetMode(gin.TestMode)

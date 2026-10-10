@@ -35,6 +35,9 @@ func setupService(t *testing.T) (*Service, *gorm.DB) {
 		t.Fatalf("storage: %v", err)
 	}
 	svc := New(db, store, provider.NewMockProvider(), logger.NewNop())
+	// 等待在途的异步识别流程结束，避免后台协程在 t.TempDir 清理后
+	// 仍写文件/数据库导致 "directory not empty" 竞态失败。
+	t.Cleanup(svc.Wait)
 	return svc, db
 }
 
