@@ -158,8 +158,107 @@ func TestMistakeRepoCRUD(t *testing.T) {
 		t.Fatal("expected empty for other user")
 	}
 
-	if err := repos.Mistake.Delete(ctx, m.ID); err != nil {
+	if _, err := repos.Mistake.Purge(ctx, userID, m.ID); err != nil {
 		t.Fatal(err)
+	}
+
+	// 越权/不存在的删除应返回 NotFound。
+	if _, err := repos.Mistake.Purge(ctx, userID, m.ID); err == nil {
+		t.Fatal("expected error for already-purged mistake")
+	}
+}
+
+// TestMistakeRepoPurgeCascade 验证级联删除：题目被多道错题引用时保留，
+// 最后一道错题删除时题目、分类关联、图片记录与识别任务一并清理，
+// 并返回需物理删除的正式区文件 key。
+func TestMistakeRepoPurgeCascade(t *testing.T) {
+	db, err := domain.OpenDB(domain.DialectSQLite, filepath.Join(t.TempDir(), "purge.db"), logger.Silent)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := domain.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := NewGormRepositories(db)
+	userID := uint64(1)
+	ctx := context.Background()
+
+	q := &domain.Question{Subject: "math", Image: `[{"key":"committed/img/a.png"}]`}
+	if err := repos.Question.Create(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	cat := &domain.Category{Name: "二次函数", Type: domain.CategoryTypeKnowledge}
+	if err := repos.Category.Create(ctx, cat); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithContext(ctx).Exec(
+		"INSERT INTO question_categories (question_id, category_id) VALUES (?, ?)", q.ID, cat.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	m1 := &domain.Mistake{UserID: userID, QuestionID: q.ID, Source: "期中考试"}
+	m2 := &domain.Mistake{UserID: userID, QuestionID: q.ID, Source: "练习册"}
+	for _, m := range []*domain.Mistake{m1, m2} {
+		if err := repos.Mistake.Create(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mid := m1.ID
+	img := &domain.Image{MistakeID: &mid, StorageKey: "committed/img/a.png", ImageType: "original"}
+	if err := repos.Image.Create(ctx, img); err != nil {
+		t.Fatal(err)
+	}
+	task := &domain.RecognitionTask{UserID: userID, ImageID: img.ID, Status: domain.TaskSuccess}
+	if err := db.WithContext(ctx).Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 删除第一道错题：题目仍被 m2 引用，应保留。
+	keys, err := repos.Mistake.Purge(ctx, userID, m1.ID)
+	if err != nil {
+		t.Fatalf("purge m1: %v", err)
+	}
+	if len(keys) != 1 || keys[0] != "committed/img/a.png" {
+		t.Fatalf("keys = %v, want [committed/img/a.png]", keys)
+	}
+	if _, err := repos.Question.Get(ctx, q.ID); err != nil {
+		t.Fatalf("question should survive while referenced: %v", err)
+	}
+
+	// 删除最后一道错题：题目、分类关联、图片记录、识别任务级联清理。
+	if _, err := repos.Mistake.Purge(ctx, userID, m2.ID); err != nil {
+		t.Fatalf("purge m2: %v", err)
+	}
+	var count int64
+	db.Unscoped().Model(&domain.Question{}).Where("id = ?", q.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("question should be hard-deleted")
+	}
+	db.Unscoped().Model(&domain.Image{}).Where("id = ?", img.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("image record should be deleted")
+	}
+	db.Unscoped().Model(&domain.RecognitionTask{}).Where("id = ?", task.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("recognition task should be deleted")
+	}
+	db.Raw(
+		"SELECT COUNT(*) FROM question_categories WHERE question_id = ?", q.ID).Scan(&count)
+	if count != 0 {
+		t.Fatal("question_categories rows should be deleted")
+	}
+
+	// 越权删除他人错题应失败。
+	foreign := &domain.Question{Subject: "math"}
+	if err := repos.Question.Create(ctx, foreign); err != nil {
+		t.Fatal(err)
+	}
+	fm := &domain.Mistake{UserID: userID + 1, QuestionID: foreign.ID, Source: "x"}
+	if err := repos.Mistake.Create(ctx, fm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repos.Mistake.Purge(ctx, userID, fm.ID); err == nil {
+		t.Fatal("expected error when purging another user's mistake")
 	}
 }
 

@@ -208,16 +208,22 @@ func TestMistakeHandlerFlow(t *testing.T) {
 		t.Fatalf("list mistakes: expected 200, got %d", w.Code)
 	}
 
-	// 更新。
-	w = doRequest(t, r, http.MethodPut, "/api/mistakes/"+uintToString(mid), map[string]any{
-		"wrong_reason": "concept",
-	})
+	// 更新（归属以 X-User-Id 为准；整条覆盖保存，需带全不可丢字段）。
+	ureq := httptest.NewRequest(http.MethodPut, "/api/mistakes/"+uintToString(mid),
+		bytes.NewBufferString(`{"wrong_reason":"concept","question_id":`+uintToString(qid)+`,"source":"期中考试"}`))
+	ureq.Header.Set("Content-Type", "application/json")
+	ureq.Header.Set("X-User-Id", "1")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, ureq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update mistake: expected 200, got %d", w.Code)
 	}
 
-	// 删除。
-	w = doRequest(t, r, http.MethodDelete, "/api/mistakes/"+uintToString(mid), nil)
+	// 删除（归属校验：X-User-Id 与错题 user_id 一致才允许删除）。
+	dreq := httptest.NewRequest(http.MethodDelete, "/api/mistakes/"+uintToString(mid), nil)
+	dreq.Header.Set("X-User-Id", "1")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, dreq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete mistake: expected 200, got %d", w.Code)
 	}
@@ -582,9 +588,97 @@ func TestMistakeCreateUsesHeaderUserID(t *testing.T) {
 
 func TestMistakeDeleteNotFound(t *testing.T) {
 	r := setupHandler(t)
+	// 不存在或非本人错题一律 404（不暴露错题存在性）。
 	w := doRequest(t, r, http.MethodDelete, "/api/mistakes/9999", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+// TestDeleteMistakePurgesStorageFiles 删除错题应级联清理关联记录，
+// 并把正式区（committed/）配图文件从存储中物理删除。
+func TestDeleteMistakePurgesStorageFiles(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, db := setupHandlerWithStorage(t, store, nil)
+
+	// 预置正式区配图文件（存量无前缀引用按 committed/ 路径访问）。
+	ctx := context.Background()
+	for _, key := range []string{"committed/img/a.png", "committed/img/b.svg"} {
+		if err := store.Put(ctx, key, []byte("data")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	refs, _ := json.Marshal([]map[string]any{
+		{"key": "committed/img/a.png", "label": "图1"},
+		{"key": "img/b.svg"}, // 存量旧数据：无前缀引用
+	})
+	w := doRequest(t, r, http.MethodPost, "/api/questions", map[string]any{
+		"subject": "数学", "stem_text": "题干", "answer": "答案", "image": string(refs),
+	})
+	var qresp struct {
+		Data domain.Question `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &qresp); err != nil {
+		t.Fatal(err)
+	}
+
+	w = doRequest(t, r, http.MethodPost, "/api/mistakes", map[string]any{
+		"user_id": 1, "question_id": qresp.Data.ID, "source": "期中考试",
+	})
+	var mresp struct {
+		Data domain.Mistake `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &mresp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 预置错题关联的图片记录与识别任务。
+	mid := mresp.Data.ID
+	img := &domain.Image{MistakeID: &mid, StorageKey: "committed/img/a.png", ImageType: "original"}
+	if err := db.Create(img).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := &domain.RecognitionTask{UserID: 1, ImageID: img.ID, Status: domain.TaskSuccess}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	dreq := httptest.NewRequest(http.MethodDelete, "/api/mistakes/"+uintToString(mid), nil)
+	dreq.Header.Set("X-User-Id", "1")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, dreq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 存储文件应被物理删除。
+	for _, key := range []string{"committed/img/a.png", "committed/img/b.svg"} {
+		if _, err := store.Get(ctx, key); err == nil {
+			t.Fatalf("%s should be deleted", key)
+		}
+	}
+
+	// 数据库关联记录应被级联清理：错题/题目/图片/识别任务。
+	var count int64
+	db.Unscoped().Model(&domain.Mistake{}).Where("id = ?", mid).Count(&count)
+	if count != 0 {
+		t.Fatal("mistake should be hard-deleted")
+	}
+	db.Unscoped().Model(&domain.Question{}).Where("id = ?", qresp.Data.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("question should be hard-deleted")
+	}
+	db.Unscoped().Model(&domain.Image{}).Where("mistake_id = ?", mid).Count(&count)
+	if count != 0 {
+		t.Fatal("image records should be deleted")
+	}
+	db.Unscoped().Model(&domain.RecognitionTask{}).Where("id = ?", task.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("recognition task should be deleted")
 	}
 }
 

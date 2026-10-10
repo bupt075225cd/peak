@@ -25,7 +25,10 @@ type MistakeRepository interface {
 	// ListByIDs 按 id 批量查询指定用户的错题（含题目关联），用于导出场景。
 	ListByIDs(ctx context.Context, userID uint64, ids []uint64) ([]domain.Mistake, error)
 	Update(ctx context.Context, m *domain.Mistake) error
-	Delete(ctx context.Context, id uint64) error
+	// Purge 彻底删除错题及其关联数据（错题记录、题目及其分类关联、图片记录、
+	// 识别任务），返回需要从存储中物理删除的正式区文件 key。
+	// 错题不存在或不属于该用户时返回 gorm.ErrRecordNotFound。
+	Purge(ctx context.Context, userID, id uint64) ([]string, error)
 }
 
 // CategoryRepository 分类数据访问接口。

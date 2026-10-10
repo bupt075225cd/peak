@@ -323,6 +323,12 @@ export async function updateMistake(id: number, payload: Record<string, unknown>
   return data.data as Mistake
 }
 
+// 删除错题：后端会级联清理题目、图片记录、识别任务等关联数据，
+// 并删除存储（本地/S3）中的正式区配图文件。
+export async function deleteMistake(id: number): Promise<void> {
+  await http.delete(`/mistakes/${id}`)
+}
+
 // 错题列表查询参数：分页 + 服务端筛选。
 export interface MistakeListParams {
   offset?: number

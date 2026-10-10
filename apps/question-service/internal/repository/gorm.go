@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"gorm.io/gorm"
@@ -231,8 +232,110 @@ func (r *gormMistakeRepo) Update(ctx context.Context, m *domain.Mistake) error {
 	return r.db.WithContext(ctx).Save(m).Error
 }
 
-func (r *gormMistakeRepo) Delete(ctx context.Context, id uint64) error {
-	return r.db.WithContext(ctx).Delete(&domain.Mistake{}, id).Error
+// Purge 在单个事务内彻底删除错题及其全部关联数据：
+//   - 错题记录、错题关联的图片记录与识别任务（硬删除）；
+//   - 题目在无其他错题引用时一并硬删除，并清理题目-分类关联。
+//
+// 返回需要从存储中物理删除的正式区文件 key（由 handler 尽力删除，
+// 文件删除失败不影响数据库清理结果）。错题不存在或不属于该用户返回
+// gorm.ErrRecordNotFound，由上层转译为业务 NotFound。
+func (r *gormMistakeRepo) Purge(ctx context.Context, userID, id uint64) ([]string, error) {
+	var keys []string
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		keys = nil
+
+		// 1. 定位错题：带 user_id 过滤，避免越权删除他人错题。
+		var m domain.Mistake
+		if err := tx.Where("user_id = ? AND id = ?", userID, id).First(&m).Error; err != nil {
+			return err
+		}
+
+		// 2. 关联题目与配图引用（提交后均为 committed/ 正式区 key）。
+		var q domain.Question
+		if err := tx.First(&q, m.QuestionID).Error; err != nil {
+			return err
+		}
+		keys = committedImageKeys(q.Image)
+
+		// 3. 错题关联的图片记录及其识别任务。
+		var imgIDs []uint64
+		if err := tx.Unscoped().Model(&domain.Image{}).
+			Where("mistake_id = ?", m.ID).Pluck("id", &imgIDs).Error; err != nil {
+			return err
+		}
+		if len(imgIDs) > 0 {
+			if err := tx.Unscoped().Where("image_id IN ?", imgIDs).
+				Delete(&domain.RecognitionTask{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Unscoped().Where("mistake_id = ?", m.ID).
+			Delete(&domain.Image{}).Error; err != nil {
+			return err
+		}
+
+		// 4. 题目是否仍被其他（未删除的）错题引用：决定题目是否级联删除。
+		var refs int64
+		if err := tx.Model(&domain.Mistake{}).
+			Where("question_id = ? AND id <> ?", q.ID, m.ID).
+			Count(&refs).Error; err != nil {
+			return err
+		}
+
+		// 5. 删除错题记录本身。
+		if err := tx.Unscoped().Delete(&domain.Mistake{}, m.ID).Error; err != nil {
+			return err
+		}
+
+		// 6. 无其他引用时硬删除题目，并清理题目-分类多对多关联。
+		if refs == 0 {
+			if err := tx.Exec("DELETE FROM question_categories WHERE question_id = ?", q.ID).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Delete(&domain.Question{}, q.ID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// committedImageKeys 从 question.image JSON 引用列表提取需物理删除的正式区 key。
+//
+// 提交后引用均带 committed/ 前缀；存量无前缀的旧数据按正式区访问路径
+// （committed/<key>，与 getMistakeFile 的读取路径一致）补齐；
+// transient/ 临时区引用属识别服务存储，不在本服务存储内，跳过。
+// 脏数据（JSON 解析失败）不阻断删除流程。
+func committedImageKeys(imageJSON string) []string {
+	if strings.TrimSpace(imageJSON) == "" {
+		return nil
+	}
+	var refs []struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(imageJSON), &refs); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(refs))
+	for _, r := range refs {
+		k := strings.TrimSpace(r.Key)
+		if k == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(k, domain.CommittedPrefix):
+			keys = append(keys, k)
+		case strings.HasPrefix(k, domain.TransientPrefix):
+			// 未晋升的临时区产物，不在本服务存储内。
+		default:
+			keys = append(keys, domain.CommittedPrefix+k)
+		}
+	}
+	return keys
 }
 
 // ---- Category ----

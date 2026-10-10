@@ -5,7 +5,7 @@ import MistakeList from './MistakeList.vue'
 import type { ApiResponse, Mistake } from '../api'
 
 const { httpMethods } = vi.hoisted(() => ({
-  httpMethods: { post: vi.fn(), get: vi.fn(), put: vi.fn() },
+  httpMethods: { post: vi.fn(), get: vi.fn(), put: vi.fn(), delete: vi.fn() },
 }))
 
 vi.mock('axios', () => ({
@@ -569,6 +569,16 @@ describe('MistakeList.vue 编辑错题', () => {
 
   const inputValue = (el: Element) => (el as HTMLInputElement | HTMLTextAreaElement).value
 
+  // 打开卡片「⋯」菜单并点击指定菜单项（编辑/删除均收在菜单内）。
+  async function openMenuAndClick(wrapper: ReturnType<typeof mountList>, itemText: string) {
+    const more = wrapper.findAll('button').find((b) => b.attributes('aria-label')?.includes('更多操作'))
+    expect(more, 'more button').toBeDefined()
+    await more!.trigger('click')
+    const item = wrapper.findAll('[role="menuitem"]').find((b) => b.text().includes(itemText))
+    expect(item, `menu item ${itemText}`).toBeDefined()
+    await item!.trigger('click')
+  }
+
   it('点击卡片「编辑」打开弹窗，并预填已有错误原因与重做记录', async () => {
     mockListResponse([
       {
@@ -581,7 +591,7 @@ describe('MistakeList.vue 编辑错题', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '编辑').trigger('click')
+    await openMenuAndClick(wrapper, '编辑')
     await flushPromises()
 
     expect(wrapper.text()).toContain('编辑错题')
@@ -614,7 +624,7 @@ describe('MistakeList.vue 编辑错题', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '编辑').trigger('click')
+    await openMenuAndClick(wrapper, '编辑')
     await flushPromises()
 
     await wrapper.find('[data-testid="edit-wrong-reason"]').setValue('概念不清')
@@ -646,7 +656,7 @@ describe('MistakeList.vue 编辑错题', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '编辑').trigger('click')
+    await openMenuAndClick(wrapper, '编辑')
     await flushPromises()
     await wrapper.find('[data-testid="edit-wrong-reason"]').setValue('不该保存')
 
@@ -661,7 +671,7 @@ describe('MistakeList.vue 编辑错题', () => {
     const wrapper = mountList()
     await flushPromises()
 
-    await buttonByText(wrapper, '编辑').trigger('click')
+    await openMenuAndClick(wrapper, '编辑')
     await flushPromises()
 
     // 来源必填，先补上以启用「保存」按钮。
@@ -674,5 +684,107 @@ describe('MistakeList.vue 编辑错题', () => {
 
     expect(httpMethods.put).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请选择每次重做的结果')
+  })
+})
+
+describe('MistakeList.vue 更多菜单', () => {
+  it('点击「⋯」展开菜单，点击外部收起，不触发任何请求', async () => {
+    mockListResponse()
+    const router = buildRouter()
+    router.push('/list')
+    const wrapper = mount(MistakeList, {
+      global: { plugins: [router], stubs: { teleport: true } },
+    })
+    await flushPromises()
+
+    const more = wrapper.findAll('button').find((b) => b.attributes('aria-label')?.includes('更多操作'))
+    await more!.trigger('click')
+    expect(wrapper.findAll('[role="menuitem"]').map((b) => b.text().trim())).toEqual(['编辑', '删除'])
+
+    // 点击菜单外的透明遮罩收起菜单。
+    await wrapper.find('.fixed.inset-0').trigger('click')
+    expect(wrapper.findAll('[role="menuitem"]').length).toBe(0)
+    expect(httpMethods.delete).not.toHaveBeenCalled()
+  })
+})
+
+describe('MistakeList.vue 删除错题', () => {
+  beforeEach(() => {
+    httpMethods.delete.mockReset()
+  })
+
+  // 弹窗用 Teleport 渲染到 body，stub 掉后可在组件树内查询。
+  function mountList() {
+    const router = buildRouter()
+    router.push('/list')
+    return mount(MistakeList, {
+      global: { plugins: [router], stubs: { teleport: true } },
+    })
+  }
+
+  // 经「⋯」菜单触发删除（区别于弹窗内的确认/取消按钮）。
+  async function openMenuAndDelete(wrapper: ReturnType<typeof mountList>) {
+    const more = wrapper.findAll('button').find((b) => b.attributes('aria-label')?.includes('更多操作'))
+    expect(more, 'more button').toBeDefined()
+    await more!.trigger('click')
+    const item = wrapper.findAll('[role="menuitem"]').find((b) => b.text().includes('删除'))
+    expect(item, 'menu item 删除').toBeDefined()
+    await item!.trigger('click')
+  }
+
+  // 删除确认弹窗容器。
+  function dialog(wrapper: ReturnType<typeof mountList>) {
+    return wrapper.find('[aria-label="删除错题确认"]')
+  }
+
+  it('点击「删除」弹出确认框，确认后调用 DELETE 并刷新列表', async () => {
+    mockListResponse()
+    httpMethods.delete.mockResolvedValueOnce(ok(null))
+    const wrapper = mountList()
+    await flushPromises()
+    expect(wrapper.text()).toContain('共 3 道错题')
+
+    // 点删除先出现确认弹窗，不直接发请求。
+    await openMenuAndDelete(wrapper)
+    expect(wrapper.text()).toContain('删除错题')
+    expect(httpMethods.delete).not.toHaveBeenCalled()
+
+    const confirmBtn = dialog(wrapper).findAll('button').find((b) => b.text().trim() === '删除')
+    await confirmBtn!.trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.delete).toHaveBeenCalledWith('/mistakes/1')
+    // 删除后重新加载第一页，总数与列表以服务端为准。
+    expect(httpMethods.get).toHaveBeenLastCalledWith('/mistakes', { params: { offset: 0, limit: 20 } })
+    expect(wrapper.text()).not.toContain('删除错题')
+  })
+
+  it('删除失败时在弹窗内提示，且不关闭弹窗', async () => {
+    mockListResponse()
+    httpMethods.delete.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountList()
+    await flushPromises()
+
+    await openMenuAndDelete(wrapper)
+    const confirmBtn = dialog(wrapper).findAll('button').find((b) => b.text().trim() === '删除')
+    await confirmBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('删除失败，请重试')
+    expect(wrapper.text()).toContain('删除错题')
+  })
+
+  it('取消删除不发送请求', async () => {
+    mockListResponse()
+    const wrapper = mountList()
+    await flushPromises()
+
+    await openMenuAndDelete(wrapper)
+    const cancelBtn = dialog(wrapper).findAll('button').find((b) => b.text().trim() === '取消')
+    await cancelBtn!.trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.delete).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('删除错题')
   })
 })

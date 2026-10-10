@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -258,9 +259,19 @@ func (h *Handler) deleteMistake(c *gin.Context) {
 		httpx.Fail(c, err)
 		return
 	}
-	if err := h.svc.DeleteMistake(c.Request.Context(), id); err != nil {
+	// 归属校验：只允许删除当前用户自己的错题（不存在/他人错题均返回 404）。
+	uid, _ := strconv.ParseUint(c.GetHeader("X-User-Id"), 10, 64)
+	keys, err := h.svc.DeleteMistake(c.Request.Context(), uid, id)
+	if err != nil {
 		httpx.Fail(c, err)
 		return
+	}
+	// 数据库记录已清理，正式区配图文件尽力删除：单个失败不影响响应，
+	// 残留对象由运维侧按前缀清理兜底。
+	for _, key := range keys {
+		if derr := h.store.Delete(c.Request.Context(), key); derr != nil {
+			log.Printf("delete committed file %q: %v", key, derr)
+		}
 	}
 	httpx.OK(c, nil)
 }

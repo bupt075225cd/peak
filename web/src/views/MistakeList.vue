@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, h, type FunctionalComponent } from 'vue'
-import { BookOpen, Plus, Search, Loader2, Download, Pencil } from 'lucide-vue-next'
+import { BookOpen, Plus, Search, Loader2, Download, Pencil, Trash2, MoreHorizontal } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import {
-  listMistakes, exportMistakes, getMistakeFileURLs,
+  listMistakes, exportMistakes, getMistakeFileURLs, deleteMistake,
   type Mistake, type ExportFormat, type QuestionImageRef,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
@@ -240,10 +240,23 @@ function closeViewer() {
   viewerOpen.value = false
 }
 
-// 编辑弹窗状态：点击卡片「编辑」按钮打开，保存后原地更新列表条目。
+// 编辑弹窗状态：点击卡片「⋯」菜单中的「编辑」打开，保存后原地更新列表条目。
 const editOpen = ref(false)
 const editingMistake = ref<Mistake | null>(null)
+
+// 「⋯」更多菜单：记录当前展开菜单的错题 id（null 表示全部收起）。
+const menuOpenFor = ref<number | null>(null)
+
+function toggleMenu(id: number) {
+  menuOpenFor.value = menuOpenFor.value === id ? null : id
+}
+
+function closeMenu() {
+  menuOpenFor.value = null
+}
+
 function openEdit(item: Mistake) {
+  closeMenu()
   editingMistake.value = item
   editOpen.value = true
 }
@@ -257,6 +270,47 @@ function closeEdit() {
 function onMistakeSaved(updated: Mistake) {
   items.value = items.value.map((m) => (m.id === updated.id ? { ...m, ...updated } : m))
   closeEdit()
+}
+
+// ---- 删除 ----
+
+// 删除确认弹窗状态：后端会级联删除题目、配图文件等数据，不可恢复，
+// 必须显式确认后才执行。
+const deleteConfirmOpen = ref(false)
+const deletingItem = ref<Mistake | null>(null)
+const deleting = ref(false)
+const deleteError = ref('')
+
+function askDelete(item: Mistake) {
+  closeMenu()
+  deletingItem.value = item
+  deleteError.value = ''
+  deleteConfirmOpen.value = true
+}
+
+function closeDeleteConfirm() {
+  if (deleting.value) return
+  deleteConfirmOpen.value = false
+  deletingItem.value = null
+}
+
+async function confirmDelete() {
+  const item = deletingItem.value
+  if (!item || deleting.value) return
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    await deleteMistake(item.id)
+    deleteConfirmOpen.value = false
+    deletingItem.value = null
+    // 重新加载第一页：总数、分面计数（学科/来源）由服务端口径刷新。
+    await loadFirstPage()
+  } catch (err) {
+    console.error('删除错题失败', err)
+    deleteError.value = '删除失败，请重试'
+  } finally {
+    deleting.value = false
+  }
 }
 
 // ---- 导出 ----
@@ -576,15 +630,48 @@ async function resolveExportError(err: unknown): Promise<string> {
                     </figure>
                   </div>
                 </div>
-                <!-- 编辑：修正错误原因/来源、维护重做记录 -->
-                <button
-                  type="button"
-                  class="shrink-0 inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-ink-soft hover:border-primary-light hover:bg-surface-tint hover:text-primary transition-colors"
-                  :aria-label="`编辑第 ${item.id} 道错题`"
-                  @click="openEdit(item)"
-                >
-                  <Pencil class="w-3.5 h-3.5" /> 编辑
-                </button>
+                <!-- 更多操作：⋯ 菜单收纳「编辑」与「删除」（红色项防误触）；
+                     菜单外的透明遮罩负责点击外部收起 -->
+                <div class="shrink-0 relative">
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-ink-faint hover:bg-surface-tint hover:text-ink transition-colors"
+                    :aria-label="`更多操作（第 ${item.id} 道错题）`"
+                    :aria-expanded="menuOpenFor === item.id"
+                    aria-haspopup="menu"
+                    @click="toggleMenu(item.id)"
+                  >
+                    <MoreHorizontal class="w-5 h-5" />
+                  </button>
+                  <div
+                    v-if="menuOpenFor === item.id"
+                    class="fixed inset-0 z-40"
+                    aria-hidden="true"
+                    @click="closeMenu"
+                  ></div>
+                  <div
+                    v-if="menuOpenFor === item.id"
+                    class="absolute right-0 top-9 z-50 w-32 rounded-xl bg-white shadow-lg border border-slate-200/70 py-1"
+                    role="menu"
+                  >
+                    <button
+                      type="button"
+                      class="w-full flex items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:bg-surface-tint hover:text-ink transition-colors"
+                      role="menuitem"
+                      @click="openEdit(item)"
+                    >
+                      <Pencil class="w-4 h-4" /> 编辑
+                    </button>
+                    <button
+                      type="button"
+                      class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                      role="menuitem"
+                      @click="askDelete(item)"
+                    >
+                      <Trash2 class="w-4 h-4" /> 删除
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -615,6 +702,40 @@ async function resolveExportError(err: unknown): Promise<string> {
       @close="closeEdit"
       @saved="onMistakeSaved"
     />
+
+    <!-- 删除确认弹窗：删除会级联清理关联数据与配图文件，不可恢复 -->
+    <div
+      v-if="deleteConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="删除错题确认"
+      @click.self="closeDeleteConfirm"
+    >
+      <div class="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-ink">删除错题</h2>
+        <p class="text-sm text-ink-soft mt-2 leading-relaxed">
+          确定删除这道错题吗？关联的题目、配图等数据（包括存储中的图片文件）会被一并删除，删除后无法恢复。
+        </p>
+        <p v-if="deleteError" class="mt-2 text-sm text-red-500">{{ deleteError }}</p>
+        <div class="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-ink-soft hover:bg-slate-50 transition-colors"
+            @click="closeDeleteConfirm"
+          >取消</button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-xl bg-red-600 text-white px-4 py-2 text-sm font-medium shadow-lg shadow-red-600/25 hover:bg-red-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="deleting"
+            @click="confirmDelete"
+          >
+            <Loader2 v-if="deleting" class="w-4 h-4 animate-spin" />
+            {{ deleting ? '删除中…' : '删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- 导出对话框：选格式、改文件名，确认后才导出 -->
     <div

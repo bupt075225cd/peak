@@ -206,7 +206,7 @@ func TestMistakeCRUD(t *testing.T) {
 		t.Fatalf("expected 1, got total=%d len=%d", res.Total, len(res.Items))
 	}
 
-	if err := svc.DeleteMistake(ctx, m.ID); err != nil {
+	if _, err := svc.DeleteMistake(ctx, 1, m.ID); err != nil {
 		t.Fatalf("delete mistake: %v", err)
 	}
 }

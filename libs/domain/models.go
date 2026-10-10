@@ -131,6 +131,12 @@ const (
 	TaskFailed     = "failed"
 )
 
+// 存储分区前缀：识别产物先入 transient/ 临时区，提交错题时晋升为 committed/ 正式区。
+const (
+	TransientPrefix = "transient/"
+	CommittedPrefix = "committed/"
+)
+
 // 图片类型常量。
 const (
 	ImageTypeOriginal = "original"

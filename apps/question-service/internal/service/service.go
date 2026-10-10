@@ -3,11 +3,14 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"peak/libs/domain"
-	"peak/libs/errors"
+	bizerrors "peak/libs/errors"
 	"peak/libs/observability"
 
 	"peak/apps/question-service/internal/export"
@@ -34,7 +37,7 @@ func (s *Service) CreateQuestion(ctx context.Context, q *domain.Question) error 
 func (s *Service) GetQuestion(ctx context.Context, id uint64) (*domain.Question, error) {
 	q, err := s.repos.Question.Get(ctx, id)
 	if err != nil {
-		return nil, errors.Wrap(errors.CodeNotFound, "question not found", err)
+		return nil, bizerrors.Wrap(bizerrors.CodeNotFound, "question not found", err)
 	}
 	return q, nil
 }
@@ -47,7 +50,7 @@ func (s *Service) ListQuestions(ctx context.Context, offset, limit int) ([]domai
 // UpdateQuestion 更新题目（手动修正入口）。
 func (s *Service) UpdateQuestion(ctx context.Context, q *domain.Question) error {
 	if _, err := s.repos.Question.Get(ctx, q.ID); err != nil {
-		return errors.Wrap(errors.CodeNotFound, "question not found", err)
+		return bizerrors.Wrap(bizerrors.CodeNotFound, "question not found", err)
 	}
 	return s.repos.Question.Update(ctx, q)
 }
@@ -60,15 +63,15 @@ func (s *Service) DeleteQuestion(ctx context.Context, id uint64) error {
 // CreateMistake 创建错题记录。
 func (s *Service) CreateMistake(ctx context.Context, m *domain.Mistake) error {
 	if m.UserID == 0 {
-		return errors.New(errors.CodeInvalidArgument, "user_id is required")
+		return bizerrors.New(bizerrors.CodeInvalidArgument, "user_id is required")
 	}
 	if m.QuestionID == 0 {
-		return errors.New(errors.CodeInvalidArgument, "question_id is required")
+		return bizerrors.New(bizerrors.CodeInvalidArgument, "question_id is required")
 	}
 	// 来源必填：录入时要求填写错题出处，便于后续按来源筛选与统计。
 	m.Source = strings.TrimSpace(m.Source)
 	if m.Source == "" {
-		return errors.New(errors.CodeInvalidArgument, "source is required")
+		return bizerrors.New(bizerrors.CodeInvalidArgument, "source is required")
 	}
 	// 前端未传 recorded_at 时由服务端兜底为当前时间，避免入库为零值（0001-01-01）。
 	if m.RecordedAt.IsZero() {
@@ -83,7 +86,7 @@ func (s *Service) CreateMistake(ctx context.Context, m *domain.Mistake) error {
 func (s *Service) GetMistake(ctx context.Context, id uint64) (*domain.Mistake, error) {
 	m, err := s.repos.Mistake.Get(ctx, id)
 	if err != nil {
-		return nil, errors.Wrap(errors.CodeNotFound, "mistake not found", err)
+		return nil, bizerrors.Wrap(bizerrors.CodeNotFound, "mistake not found", err)
 	}
 	return m, nil
 }
@@ -96,14 +99,23 @@ func (s *Service) ListMistakes(ctx context.Context, query domain.MistakeQuery) (
 // UpdateMistake 更新错题（修正错误原因、掌握程度等）。
 func (s *Service) UpdateMistake(ctx context.Context, m *domain.Mistake) error {
 	if _, err := s.repos.Mistake.Get(ctx, m.ID); err != nil {
-		return errors.Wrap(errors.CodeNotFound, "mistake not found", err)
+		return bizerrors.Wrap(bizerrors.CodeNotFound, "mistake not found", err)
 	}
 	return s.repos.Mistake.Update(ctx, m)
 }
 
-// DeleteMistake 删除错题。
-func (s *Service) DeleteMistake(ctx context.Context, id uint64) error {
-	return s.repos.Mistake.Delete(ctx, id)
+// DeleteMistake 彻底删除错题及其全部关联数据（题目、图片记录、分类关联、
+// 识别任务），返回需要物理删除的存储文件 key（由 handler 尽力删除）。
+func (s *Service) DeleteMistake(ctx context.Context, userID, id uint64) ([]string, error) {
+	keys, err := s.repos.Mistake.Purge(ctx, userID, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, bizerrors.New(bizerrors.CodeNotFound, "mistake not found")
+		}
+		return nil, err
+	}
+	observability.ObserveMistakeOp("delete", nil)
+	return keys, nil
 }
 
 // ListCategories 查询分类列表。
