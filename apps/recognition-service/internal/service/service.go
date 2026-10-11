@@ -469,6 +469,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		geom.CheckSemicircle(parsed, result.StemText)
 		geom.CheckSemicircleDirection(parsed, result.StemText)
 		geom.CheckStemLengths(parsed, result.StemText)
+		geom.CheckStemPassPoints(parsed, result.StemText)
 
 		panels = panels[:0]
 		renderFailed := false

@@ -245,6 +245,87 @@ func CheckStemLengths(panels []Panel, stemText string) {
 	}
 }
 
+// stemPassPointRe 匹配 "XX恰好经过点P" / "XX经过点P"（XX 为两条线段端点名拼接，如 C1D1）。
+// 题干中的下标数字（C₁）先统一归一化为 ASCII（C1）再匹配。
+var stemPassPointRe = regexp.MustCompile(`([A-Z][0-9]?)([A-Z][0-9]?)\s*(?:恰好)?经\s*过\s*点\s*([A-Z][0-9]?)`)
+
+// stemSubscripts 题干/点名中的 Unicode 下标数字 → ASCII 数字。
+var stemSubscripts = strings.NewReplacer(
+	"₀", "0", "₁", "1", "₂", "2", "₃", "3", "₄", "4",
+	"₅", "5", "₆", "6", "₇", "7", "₈", "8", "₉", "9")
+
+// collinearityConstraint 题干中解析出的"线段经过点"共线约束（如 边C₁D₁恰好经过点A）。
+type collinearityConstraint struct {
+	from, to, point string
+}
+
+// parseStemPassPoints 从题干解析"线段经过点"约束（同一线段+点去重）。
+func parseStemPassPoints(stemText string) []collinearityConstraint {
+	normalized := stemSubscripts.Replace(stemText)
+	var out []collinearityConstraint
+	seen := make(map[string]bool)
+	for _, m := range stemPassPointRe.FindAllStringSubmatch(normalized, -1) {
+		a, b, p := m[1], m[2], m[3]
+		if a == b {
+			continue
+		}
+		key := a + b + p
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, collinearityConstraint{from: a, to: b, point: p})
+	}
+	return out
+}
+
+// stemCollinearTolerance "恰好经过点"共线核对容忍度：点到线段距离超过线段长度的
+// 该比例视为明显不共线（坐标直出不保证精确，但"恰好经过"应接近共线）。
+const stemCollinearTolerance = 0.15
+
+// normalizedPointIndex 点名的归一化索引（下标数字统一为 ASCII，便于与题干匹配）。
+func normalizedPointIndex(spec *Spec) map[string]Point {
+	idx := make(map[string]Point, len(spec.Points))
+	for _, p := range spec.Points {
+		idx[stemSubscripts.Replace(p.Name)] = p
+	}
+	return idx
+}
+
+// CheckStemPassPoints 题干-图形语义核对：题干中"XX恰好经过点P"（如"边C₁D₁恰好经过点A"）
+// 要求点 P 落在线段 XX 上（共线）。折叠/交点类题目常依赖这类条件，模型坐标直出时
+// 容易忽略，画出 P 远离 XX 的图。点到线段距离超过线段长度的容忍比例即判为矛盾，
+// 回喂修正并计入 consistent 判定。题干无"经过点"表述时保守跳过。
+func CheckStemPassPoints(panels []Panel, stemText string) {
+	constraints := parseStemPassPoints(stemText)
+	if len(constraints) == 0 {
+		return
+	}
+	for i := range panels {
+		idx := normalizedPointIndex(&panels[i].Spec)
+		for _, c := range constraints {
+			pa, okA := idx[c.from]
+			pb, okB := idx[c.to]
+			pp, okP := idx[c.point]
+			if !okA || !okB || !okP {
+				continue
+			}
+			a, b, p := vec{pa.X, pa.Y}, vec{pb.X, pb.Y}, vec{pp.X, pp.Y}
+			segLen := dist(a, b)
+			if segLen <= 0 {
+				continue
+			}
+			if ratio := pointSegDistance(p, a, b) / segLen; ratio > stemCollinearTolerance {
+				panels[i].Issues = append(panels[i].Issues, fmt.Sprintf(
+					"题干说 %s%s 恰好经过点 %s，但图中点 %s 明显不在线段 %s%s 上（偏离约为线段长度的 %.0f%%）。"+
+						"请先按题意推算各点相对位置（如折叠关系、共线条件），调整 points 坐标使 %s 落在 %s%s 所在直线上，"+
+						"并保持其余图形要素协调。",
+					c.from, c.to, c.point, c.point, c.from, c.to, ratio*100,
+					c.point, c.from, c.to))
+			}
+		}
+	}
+}
 // semicircleDirection 从题干判断半圆应在上方还是下方：
 // 在"半圆"附近（前后各数个字）找"上面/上方/顶"→ 朝上；"下面/下方/底" → 朝下。
 // 都找不到时返回 0（朝向不明，保守跳过核对）。

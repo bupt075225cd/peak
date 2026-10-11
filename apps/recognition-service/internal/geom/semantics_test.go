@@ -246,6 +246,79 @@ func TestCheckSemicircleDirectionUnknownSkips(t *testing.T) {
 	}
 }
 
+func TestCheckStemPassPointsFlagsNonCollinear(t *testing.T) {
+	// 题干"边C₁D₁恰好经过点A"，图中 A 远离 C1D1 → 报共线矛盾。
+	p := Panel{Title: "图1"}
+	p.Spec.Canvas = Canvas{Width: 100, Height: 100}
+	p.Spec.Points = []Point{
+		{Name: "A", X: 30, Y: 55},
+		{Name: "B", X: 90, Y: 55},
+		{Name: "D1", X: 15, Y: 30},
+		{Name: "C1", X: 75, Y: 12},
+	}
+	panels := []Panel{p}
+	CheckStemPassPoints(panels, "23.在长方形ABCD中…将长方形ABCD沿BE翻折…且边C₁D₁恰好经过点A，再将△ABC₁沿AB翻折…")
+	if len(panels[0].Issues) == 0 {
+		t.Fatalf("expected collinearity issue, got none")
+	}
+}
+
+func TestCheckStemPassPointsPassesCollinear(t *testing.T) {
+	// A 在 C1D1 所在直线上（允许小偏差）→ 不报。
+	p := Panel{Title: "图1"}
+	p.Spec.Canvas = Canvas{Width: 100, Height: 100}
+	p.Spec.Points = []Point{
+		{Name: "A", X: 45, Y: 21},
+		{Name: "B", X: 90, Y: 55},
+		{Name: "D1", X: 15, Y: 30},
+		{Name: "C1", X: 75, Y: 12},
+	}
+	panels := []Panel{p}
+	CheckStemPassPoints(panels, "且边C₁D₁恰好经过点A")
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestCheckStemPassPointsSkipsWithoutPattern(t *testing.T) {
+	// 题干无"经过点"表述 → 保守不报。
+	p := Panel{Title: "图1"}
+	p.Spec.Canvas = Canvas{Width: 100, Height: 100}
+	p.Spec.Points = []Point{
+		{Name: "A", X: 30, Y: 55},
+		{Name: "D1", X: 15, Y: 30},
+		{Name: "C1", X: 75, Y: 12},
+	}
+	panels := []Panel{p}
+	CheckStemPassPoints(panels, "将△ABC₁沿AB翻折，点C₁落在点C₂处，连接EC₂")
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestParseStemPassPoints(t *testing.T) {
+	cases := []struct {
+		stem string
+		want []collinearityConstraint
+	}{
+		{"且边C₁D₁恰好经过点A", []collinearityConstraint{{"C1", "D1", "A"}}},
+		{"线段DE经过点F", []collinearityConstraint{{"D", "E", "F"}}},
+		{"直线AB经过点C，AB经过点C", []collinearityConstraint{{"A", "B", "C"}}}, // 去重
+		{"点C落在点C₁处", nil}, // 无"经过点"
+	}
+	for _, c := range cases {
+		got := parseStemPassPoints(c.stem)
+		if len(got) != len(c.want) {
+			t.Fatalf("parseStemPassPoints(%q) = %v, want %d constraints", c.stem, got, len(c.want))
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("parseStemPassPoints(%q)[%d] = %v, want %v", c.stem, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
 func TestNormalizeDropsNumericLengthLabels(t *testing.T) {
 	// 图上不标数值长度：纯数值（可带单位）标注剔除，代数式/结论保留。
 	s := Spec{Canvas: Canvas{Width: 100, Height: 100}}
