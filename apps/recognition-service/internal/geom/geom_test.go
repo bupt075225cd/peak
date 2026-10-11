@@ -267,6 +267,22 @@ func TestRenderPanelsMultiAndSingle(t *testing.T) {
 	}
 }
 
+func TestParsePanelsExplicitEmptyPanels(t *testing.T) {
+	// 模型显式返回 {"panels":[]}（判定输入不是几何示意图）→ 返回空结果、不算错误。
+	panels, err := ParsePanels(`{"panels":[]}`)
+	if err != nil {
+		t.Fatalf("ParsePanels empty panels: %v", err)
+	}
+	if len(panels) != 0 {
+		t.Fatalf("expected 0 panels, got %d", len(panels))
+	}
+
+	// 单子图形态的内容为空 → 仍视为垃圾输出报错（走回喂重试）。
+	if _, err := ParsePanels(`{"title":"图1"}`); err == nil {
+		t.Fatal("expected error for empty single-panel spec")
+	}
+}
+
 func TestIsAngleText(t *testing.T) {
 	yes := []string{"", "40°", "∠ABC", "α", "(β)", "【γ】"}
 	no := []string{"AB=2", "AD=2BD", "x"}

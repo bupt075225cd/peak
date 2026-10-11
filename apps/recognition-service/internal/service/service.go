@@ -389,10 +389,20 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	}
 
 	// 提取的 VLM 输入：优先使用几何区域小图（输入瘦身）；失败则回退整张原图。
+	// bbox 四周加 12% 余量再裁剪：几何识别的外接框偶尔偏紧/偏移，直接按框裁剪
+	// 可能把图形切掉一部分，导致提取阶段把残片误判为"碎片"而拒绝绘制。
 	extractImage := imageData
+	regionFallback := false // 是否还可回退整张原图（空 panels 拒绝时用）
 	if bbox != nil {
-		if small, cerr := cropAndScaleRegion(imageData, bbox, geometryRegionMaxDim); cerr == nil {
+		padded := &provider.BoundingBox{
+			X:      bbox.X - bbox.Width*0.12,
+			Y:      bbox.Y - bbox.Height*0.12,
+			Width:  bbox.Width * 1.24,
+			Height: bbox.Height * 1.24,
+		}
+		if small, cerr := cropAndScaleRegion(imageData, padded, geometryRegionMaxDim); cerr == nil {
 			extractImage = small
+			regionFallback = true
 			s.log.Info("geometry extract input shrunk",
 				zap.Uint64("task_id", taskID),
 				zap.Int("src_bytes", len(imageData)), zap.Int("region_bytes", len(small)))
@@ -432,6 +442,26 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 				zap.String("error", perr.Error()), zap.String("spec", truncate(spec, 512)))
 			correction = fmt.Sprintf("上一轮输出的 JSON 无法解析（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", perr)
 			continue
+		}
+		// 模型判定输入区域不是几何示意图（显式空 panels）：
+		// 若当前用的是几何区域小图，可能是 bbox 偏移把图形切掉导致误判，
+		// 回退整张原图重试（提取有题干在手，能从整图找到对应图形）；
+		// 整张原图仍被拒绝才干净跳过重绘（本题确无几何图形）。
+		if len(parsed) == 0 {
+			if regionFallback {
+				regionFallback = false
+				extractImage = imageData
+				s.log.Warn("geometry spec empty on cropped region, retry with full image",
+					zap.Uint64("task_id", taskID), zap.Int("attempt", attempt))
+				correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
+					"但几何识别阶段已在该题目图片中检测到几何图形，可能是区域裁剪不完整导致误判。" +
+					"请基于这张完整图片，找到与题干对应的几何示意图，完整输出其几何描述 JSON；" +
+					"仅当整张图片确实没有任何几何图形时才返回 {\"panels\":[]}。"
+				continue
+			}
+			s.log.Info("geometry spec empty, skip redraw",
+				zap.Uint64("task_id", taskID), zap.Int("attempt", attempt))
+			return nil
 		}
 		s.verifyAngleMarks(ctx, taskID, extractImage, parsed)
 		// 题干-图形语义核对：半圆被画成整圆、半圆朝向不对、题干给定线段

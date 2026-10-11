@@ -69,13 +69,38 @@ func parseQuestion(out string) *QuestionParseResult {
 	return res
 }
 
+// geometryNoneKeywords 几何描述中出现这些表述时，视为模型自述"没有几何图形"。
+// 模型偶尔一边描述"无几何图形/只有残缺碎片"一边仍返回 bounding_box（自相矛盾），
+// 此时以文字描述为准丢弃 bbox，避免对纯文字题触发重绘。
+var geometryNoneKeywords = []string{
+	"无几何图形", "没有几何图形", "无完整几何图形", "没有完整几何",
+	"无几何图", "没有几何图", "不是几何图", "无示意图", "没有示意图",
+	"纯文字", "只有文字", "仅有文字", "只有题目文字", "残缺",
+}
+
+// descriptionSaysNoGeometry 判断几何描述是否自述"没有几何图形"。
+func descriptionSaysNoGeometry(desc string) bool {
+	for _, kw := range geometryNoneKeywords {
+		if strings.Contains(desc, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // RecognizeGeometry 调用多模态大模型输出结构化几何描述（JSON），并附带几何图形在原图中的位置框。
 func (v *vlmCapabilities) RecognizeGeometry(ctx context.Context, image []byte) (*GeometryResult, error) {
 	prompt := `识别图片中的几何图形，仅输出如下 JSON（不要输出其他内容、不要用 Markdown 代码块）：
 {"shape_type":"triangle|circle|quadrilateral|other","properties":{"边长":"","角度":"","位置关系":""},"description":"对图形的文字描述","bounding_box":{"x":0.1,"y":0.2,"width":0.5,"height":0.4}}
 
 其中 bounding_box 是几何图形（仅图形本身，不含题目文字）在原图中的外接矩形，坐标采用归一化（0~1），x/y 为左上角，width/height 为宽高。
-重要：若图中有多块几何图形（例如多个子图、图1/图2/图3），请输出包含「所有几何图形整体」的最大外接矩形，确保完整覆盖每一个图，不要只框出其中一部分。适度宽松即可，不要缩得太紧。若图片中没有几何图形，bounding_box 设为 null。`
+重要：若图中有多块几何图形（例如多个子图、图1/图2/图3），请输出包含「所有几何图形整体」的最大外接矩形，确保完整覆盖每一个图，不要只框出其中一部分。适度宽松即可，不要缩得太紧。
+判定标准：只有与题目对应、完整可辨认的几何示意图（由点、线段、角、圆、弧、多边形等构成）才算有几何图形。
+以下情况一律视为没有几何图形，bounding_box 必须设为 null：
+- 图片只有题目文字、公式、代数式或表格；
+- 只有残缺不全的局部线条或图形碎片（例如顶部残留一小段弧线、半条边）；
+- 图形属于旁边/上一题，与本题无关（以题干文字为准）。
+宁可返回 null，也不要把文字、公式或残缺碎片误判为几何图形。若判定没有几何图形，description 写明"无几何图形"。`
 	out, err := v.dash.chat(ctx, prompt, image)
 	if err != nil {
 		return nil, err
@@ -95,6 +120,11 @@ func parseGeometry(out string) *GeometryResult {
 		}
 	}
 	g.BoundingBox = normalizeBBox(g.BoundingBox)
+	// 防御 bbox 与描述自相矛盾：描述明确说没有几何图形时，以文字为准丢弃 bbox，
+	// 避免纯文字/残缺碎片题触发重绘。
+	if g.BoundingBox != nil && descriptionSaysNoGeometry(g.Description) {
+		g.BoundingBox = nil
+	}
 	return &g
 }
 

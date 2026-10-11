@@ -275,6 +275,22 @@ func TestParseGeometryWithBBox(t *testing.T) {
 	}
 }
 
+func TestParseGeometryDropsBBoxWhenDescriptionSaysNone(t *testing.T) {
+	// 模型一边描述"无完整几何图形/残缺碎片"一边返回 bbox（自相矛盾）→ 以描述为准丢弃。
+	in := `{"shape_type":"other","description":"图片顶部残留一个圆弧线的局部，未显示完整图形；其余为题目文字，无完整几何图形。",` +
+		`"bounding_box":{"x":0.12,"y":0,"width":0.28,"height":0.12}}`
+	g := parseGeometry(in)
+	if g.BoundingBox != nil {
+		t.Fatalf("expected bbox dropped, got %+v", g.BoundingBox)
+	}
+
+	// 描述正常说明有图形 → bbox 保留。
+	keep := parseGeometry(`{"shape_type":"circle","description":"圆O","bounding_box":{"x":0.1,"y":0.1,"width":0.5,"height":0.5}}`)
+	if keep.BoundingBox == nil {
+		t.Fatal("expected bbox kept for normal description")
+	}
+}
+
 func TestNormalizeBBox(t *testing.T) {
 	tests := []struct {
 		name string

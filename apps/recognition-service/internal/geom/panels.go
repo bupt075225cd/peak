@@ -45,8 +45,18 @@ func ParsePanels(raw string) ([]Panel, error) {
 
 	var multi panelsJSON
 	haveMulti := false
-	if err := json.Unmarshal([]byte(body), &multi); err == nil && len(multi.Panels) > 0 {
-		haveMulti = true
+	// 通过显式存在 "panels" 键判定多子图形态（单子图 JSON 也能 unmarshal 进
+	// panelsJSON 但 panels 为 nil，不能据此判定）。
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &probe); err == nil {
+		if rawPanels, ok := probe["panels"]; ok {
+			var ps []panelJSON
+			if err := json.Unmarshal(rawPanels, &ps); err != nil {
+				return nil, fmt.Errorf("geom: parse spec json: %w", err)
+			}
+			haveMulti = true
+			multi.Panels = ps
+		}
 	}
 	if !haveMulti {
 		var one panelJSON
@@ -54,6 +64,12 @@ func ParsePanels(raw string) ([]Panel, error) {
 			return nil, fmt.Errorf("geom: parse spec json: %w", err)
 		}
 		multi.Panels = []panelJSON{one}
+	}
+
+	// 模型显式返回 {"panels":[]}（判定输入不是几何示意图、拒绝绘制）→
+	// 合法返回空结果，由调用方干净跳过重绘（不算错误、不回喂重试）。
+	if haveMulti && len(multi.Panels) == 0 {
+		return []Panel{}, nil
 	}
 
 	panels := make([]Panel, 0, len(multi.Panels))
