@@ -211,6 +211,46 @@ func TestMistakeCRUD(t *testing.T) {
 	}
 }
 
+func TestUpdateMistakePreservesCreatedAt(t *testing.T) {
+	// 回归：编辑错题时请求体不带 created_at（handler 绑定后 CreatedAt 为零值），
+	// Save 整条覆盖会把零值时间写成 '0000-00-00'，MySQL 严格模式报 1292
+	// （SQLite 不报错但会把 created_at 清零，这里以"更新后 created_at 不变"断言）。
+	svc := setupService(t)
+	ctx := context.Background()
+
+	q := &domain.Question{Subject: "math"}
+	if err := svc.CreateQuestion(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	m := &domain.Mistake{UserID: 1, QuestionID: q.ID, Source: "期中考试"}
+	if err := svc.CreateMistake(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.GetMistake(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.CreatedAt.IsZero() {
+		t.Fatal("expected non-zero created_at after create")
+	}
+
+	// 模拟编辑请求：只带业务字段，created_at 为零值。
+	patch := &domain.Mistake{ID: m.ID, UserID: 1, QuestionID: q.ID, Source: "第二周周中练习"}
+	if err := svc.UpdateMistake(ctx, patch); err != nil {
+		t.Fatalf("update mistake: %v", err)
+	}
+	got, err := svc.GetMistake(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("created_at changed: got %v, want %v", got.CreatedAt, created.CreatedAt)
+	}
+	if got.Source != "第二周周中练习" {
+		t.Fatalf("source not updated: %s", got.Source)
+	}
+}
+
 func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
 	svc := setupService(t)
 	ctx := context.Background()

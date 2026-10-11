@@ -56,7 +56,10 @@ func (r *gormQuestionRepo) List(ctx context.Context, offset, limit int) ([]domai
 }
 
 func (r *gormQuestionRepo) Update(ctx context.Context, q *domain.Question) error {
-	return r.db.WithContext(ctx).Save(q).Error
+	// Omit CreatedAt：调用方（如 handler 绑定请求体）拿到的结构体通常没有
+	// created_at，Save 整条覆盖会把零值时间写成 '0000-00-00'，MySQL 严格
+	// 模式直接报错（SQLite 不报，测试发现不了）。创建时间不允许被更新覆盖。
+	return r.db.WithContext(ctx).Omit("CreatedAt").Save(q).Error
 }
 
 func (r *gormQuestionRepo) Delete(ctx context.Context, id uint64) error {
@@ -229,7 +232,9 @@ func (r *gormMistakeRepo) ListByIDs(ctx context.Context, userID uint64, ids []ui
 }
 
 func (r *gormMistakeRepo) Update(ctx context.Context, m *domain.Mistake) error {
-	return r.db.WithContext(ctx).Save(m).Error
+	// Omit CreatedAt：编辑错题时请求体不带 created_at，Save 整条覆盖会把
+	// 零值时间写成 '0000-00-00'，MySQL 严格模式报 1292（SQLite 不报）。
+	return r.db.WithContext(ctx).Omit("CreatedAt").Save(m).Error
 }
 
 // Purge 在单个事务内彻底删除错题及其全部关联数据：
@@ -365,7 +370,8 @@ func (r *gormCategoryRepo) List(ctx context.Context, typ string) ([]domain.Categ
 }
 
 func (r *gormCategoryRepo) Update(ctx context.Context, c *domain.Category) error {
-	return r.db.WithContext(ctx).Save(c).Error
+	// Omit CreatedAt：同错题/题目更新，避免零值 created_at 覆盖写库。
+	return r.db.WithContext(ctx).Omit("CreatedAt").Save(c).Error
 }
 
 func (r *gormCategoryRepo) Delete(ctx context.Context, id uint64) error {
