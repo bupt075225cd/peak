@@ -69,6 +69,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: apps/gateway
           args: --timeout=5m
 
@@ -76,6 +77,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: apps/question-service
           args: --timeout=5m
 
@@ -83,6 +85,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: apps/recognition-service
           args: --timeout=5m
 
@@ -90,6 +93,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: apps/user-service
           args: --timeout=5m
 
@@ -97,6 +101,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/config
           args: --timeout=5m
 
@@ -104,6 +109,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/domain
           args: --timeout=5m
 
@@ -111,6 +117,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/errors
           args: --timeout=5m
 
@@ -118,6 +125,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/filesign
           args: --timeout=5m
 
@@ -125,6 +133,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/http
           args: --timeout=5m
 
@@ -132,6 +141,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/logger
           args: --timeout=5m
 
@@ -139,6 +149,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/observability
           args: --timeout=5m
 
@@ -146,6 +157,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: libs/storage
           args: --timeout=5m
 
