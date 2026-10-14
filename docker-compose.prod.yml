@@ -7,12 +7,22 @@
 #   - 业务镜像来自阿里云 ACR（CI 推送），私有仓库需先 docker login
 #   - 配置通过环境变量注入（config.yaml 使用 ${VAR} 占位）
 #   - 敏感信息（DB 密码、阿里云密钥）通过 .env 文件或环境注入，勿提交到仓库
+# 数据库端点切换（容器自建 ⇄ 云 RDS / 外部 MySQL）：
+#   - DB_DSN 由 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_ROOT_PASSWORD/MYSQL_DATABASE
+#     组合拼装；不设置时默认 tcp(mysql:3306)，与原自建容器行为一致
+#   - 自建 mysql 容器归入 self-hosted-db profile：
+#       容器自建部署：.env 设置 COMPOSE_PROFILES=self-hosted-db（保持原行为，up -d 会启动本地库）
+#       切换 RDS：去掉 COMPOSE_PROFILES（或置空），MYSQL_HOST 指向 RDS 地址
+#   - 后端服务对 mysql 的 depends_on 为 required: false，本地库未启用时正常启动（需 docker compose v2.20+）
 services:
   # ── 基础设施 ────────────────────────────────────────────
+  # 自建 MySQL：仅容器自建部署时启动（COMPOSE_PROFILES=self-hosted-db）；
+  # 切换云 RDS 后本服务不再启动，数据卷 mysql-data 保留用于回滚兜底。
   mysql:
     image: mysql:8.0
     container_name: peak-mysql
     restart: unless-stopped
+    profiles: ["self-hosted-db"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-peak123456}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-peak}
@@ -71,11 +81,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
+        required: false
     environment:
       SERVER_PORT: "8081"
       LOG_DEV: "false"
       DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
       # 专属桶存放 committed/ 正式区；transient/ -> committed/ 提交拷贝
       # 通过对象存储服务端 CopyObject 从 recognition 桶跨桶完成
       STORAGE_TYPE: "s3"
@@ -105,11 +118,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
+        required: false
     environment:
       SERVER_PORT: "8082"
       LOG_DEV: "false"
       DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
       # 部署使用第三方 S3 兼容对象存储（阿里云 OSS / AWS S3 / Ceph 等），
       # 连接参数通过 .env 或部署环境注入，必需：S3_ENDPOINT / S3_RECOGNITION_BUCKET / 凭证。
       # 专属桶存放 transient/ 临时区；question-service 的提交拷贝经服务端
@@ -157,11 +173,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
+        required: false
     environment:
       SERVER_PORT: "8083"
       LOG_DEV: "false"
       DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(mysql:3306)/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
       # JWT 密钥须与 gateway 一致；生产必须通过 .env 注入强随机值
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       AUTH_TOKEN_TTL: ${AUTH_TOKEN_TTL:-168h}
