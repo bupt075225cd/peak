@@ -48,6 +48,7 @@ func NewGateway(cfg *config.Loader, log *logger.Logger) *Gateway {
 		routes["/api/users"] = "http://localhost:8083"
 		routes["/api/mistakes"] = "http://localhost:8081"
 		routes["/api/categories"] = "http://localhost:8081"
+		routes["/api/poetry"] = "http://localhost:8084"
 	}
 	return &Gateway{cfg: cfg, log: log, routes: routes}
 }

@@ -18,3 +18,4 @@ routes:
   /api/users: "${USER_SERVICE_URL:-http://localhost:8083}"
   /api/mistakes: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
   /api/categories: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
+  /api/poetry: "${POETRY_SERVICE_URL:-http://localhost:8084}"

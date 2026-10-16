@@ -56,12 +56,15 @@ services:
         condition: service_started
       user-service:
         condition: service_started
+      poetry-service:
+        condition: service_started
     environment:
       SERVER_PORT: "8080"
       LOG_DEV: "false"
       QUESTION_SERVICE_URL: "http://question-service:8081"
       RECOGNITION_SERVICE_URL: "http://recognition-service:8082"
       USER_SERVICE_URL: "http://user-service:8083"
+      POETRY_SERVICE_URL: "http://poetry-service:8084"
       # JWT 密钥须与 user-service 一致
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
@@ -204,6 +207,33 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+  # poetry-service 古诗文服务：语料内嵌导入（只读数据，无外部存储依赖），
+  # chat 接口当前为 RAG 二阶段占位。
+  poetry-service:
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-poetry-service:${IMAGE_TAG:-latest}
+    container_name: peak-poetry-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
+        required: false
+    environment:
+      SERVER_PORT: "8084"
+      LOG_DEV: "false"
+      DB_DIALECT: "mysql"
+      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
+    expose:
+      - "8084"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   # ── 前端（Nginx 托管静态资源 + 反代 /api）────────────────
   web:

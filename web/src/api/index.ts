@@ -2,7 +2,8 @@ import axios from 'axios'
 import { TOKEN_KEY, logout } from '../composables/useAuth'
 import { requestTraceparent } from '../monitor'
 
-const http = axios.create({
+// 导出共享 axios 实例：同目录的领域模块（如 poetry.ts）复用拦截器与 baseURL。
+export const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
 })

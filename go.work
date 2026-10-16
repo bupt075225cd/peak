@@ -4,6 +4,7 @@ toolchain go1.24.4
 
 use (
 	./apps/gateway
+	./apps/poetry-service
 	./apps/question-service
 	./apps/recognition-service
 	./apps/user-service

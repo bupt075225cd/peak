@@ -12,5 +12,6 @@ func Migrate(db *gorm.DB) error {
 		&Category{},
 		&QuestionCategory{},
 		&RecognitionTask{},
+		&Poem{},
 	)
 }

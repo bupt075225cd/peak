@@ -37,6 +37,21 @@ const router = createRouter({
       name: 'list',
       component: () => import('../views/MistakeList.vue'),
     },
+    {
+      path: '/poetry',
+      name: 'poetry-dashboard',
+      component: () => import('../views/PoetryDashboard.vue'),
+    },
+    {
+      path: '/poetry/list',
+      name: 'poetry-list',
+      component: () => import('../views/PoetryList.vue'),
+    },
+    {
+      path: '/poetry/detail/:id',
+      name: 'poetry-detail',
+      component: () => import('../views/PoetryDetail.vue'),
+    },
   ],
 })
 

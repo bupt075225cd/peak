@@ -123,6 +123,39 @@ type RecognitionTask struct {
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// Poem 古诗文篇目（统编版初中教材，由 Markdown 语料在服务启动时幂等导入）。
+// 唯一键为 (title, dynasty)：同朝代篇名不重复，跨朝代允许重名。
+type Poem struct {
+	ID           uint64         `gorm:"primaryKey" json:"id"`
+	Title        string         `gorm:"size:128;uniqueIndex:idx_poems_title_dynasty" json:"title"`
+	Dynasty      string         `gorm:"size:32;uniqueIndex:idx_poems_title_dynasty" json:"dynasty"`
+	DynastyOrder int            `gorm:"index" json:"dynasty_order"` // 朝代序号（先秦=0 → 清=9），用于时间轴排序
+	Author       string         `gorm:"size:128;index" json:"author"`
+	Volume       string         `gorm:"size:64;index" json:"volume"`     // 册数，如"八年级下册"
+	Category     string         `gorm:"size:16;index" json:"category"`   // 课内 / 课外（旧版未收录篇目为空）
+	Content      string         `gorm:"type:text" json:"content"`        // 正文（段落以换行分隔）
+	WordCount    int            `json:"word_count"`                      // 正文汉字数（去标点空白）
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// PoemDynasties 朝代固定顺序（先秦 → 清），对应统编版教材语料章节；
+// poems.dynasty_order 即该切片下标，用于时间轴与有序统计。
+var PoemDynasties = []string{
+	"先秦", "汉", "三国", "晋", "南北朝", "唐", "宋", "元", "明", "清",
+}
+
+// PoemDynastyOrder 返回朝代序号；未知朝代排在末尾。
+func PoemDynastyOrder(dynasty string) int {
+	for i, d := range PoemDynasties {
+		if d == dynasty {
+			return i
+		}
+	}
+	return len(PoemDynasties)
+}
+
 // 识别任务状态常量。
 const (
 	TaskPending    = "pending"

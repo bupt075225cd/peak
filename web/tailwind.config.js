@@ -22,6 +22,7 @@ export default {
       },
       fontFamily: {
         sans: ['PingFang SC', 'system-ui', 'sans-serif'],
+        serif: ['"Noto Serif SC"', '"Songti SC"', 'STSong', 'SimSun', 'serif'],
       },
       keyframes: {
         'fade-up': {
