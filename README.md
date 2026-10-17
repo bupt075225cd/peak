@@ -1,34 +1,70 @@
-# Peak · 中学生错题本
+# Peak · 中学生学习平台
 
-Peak 是一款面向中学生的错题本软件，核心解决「收集错题 → 分类管理 → 组卷练习 → 记录练习数据」的学习闭环。
+Peak 是面向中学生的学习平台，采用多应用架构：各应用独立域名部署、独立演进，
+共用统一的用户体系与基础设施。当前包含两个应用：
+
+- **错题本**（mistake）：拍照收录错题 → AI 识别整理 → 分类管理 → 组卷练习
+- **古诗文**（poetry）：统编版初中教材古诗文可视化总览、篇目检索与 AI 智能问答（RAG 二阶段）
+
+新应用可低成本接入：在应用注册表登记 → 网关加路由前缀与受众映射 → 前端配置自己的 client_id（详见[多应用模型](#多应用模型)）。
 
 ## 架构概览
 
 前后端分离 + 微服务（单仓库多服务 monorepo），后端 Go，前端 Vue3 + TypeScript。
+多应用共享网关与用户体系，各应用业务服务与数据相互隔离。
 
 ```
-                    ┌─────────────┐
-                    │   web (Vue3) │
-                    └──────┬──────┘
-                           │ HTTP
-                    ┌──────▼──────┐
-                    │   gateway   │  统一入口/鉴权/跨域/链路透传
-                    └──────┬──────┘
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-      ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-      │question-svc  │ │recognition-svc│ │ user-svc(预留)│
-      └──────┬───────┘ └──────┬───────┘ └──────────────┘
-             │                │
-             │                │  几何重绘（VLM 坐标直出 + Go 渲染）
-             │                ▼
-             │        ┌──────────────────┐
-             │        │ recognition-svc  │
-             │        │ internal/geom    │
-             │        └──────────────────┘
-             ▼                ▼
-        MySQL (GORM)    文件存储(本地→S3兼容对象存储) + 第三方AI(阿里云)
+  错题本应用（mistake 域名）      古诗文应用（poetry 域名）
+        │ 浏览器                        │ 浏览器
+        │ X-Client-Id: app-mistake      │ X-Client-Id: app-poetry
+        ▼                              ▼
+  ┌──────────────────────────────────────────────┐
+  │              gateway（统一入口）               │
+  │  JWT 鉴权 · aud 应用校验 · CORS 白名单 · 限流   │
+  └───────┬──────────┬──────────┬──────────┬──────┘
+          ▼          ▼          ▼          ▼
+  ┌────────────┐┌──────────────┐┌──────────┐┌──────────────┐
+  │question-svc││recognition-svc││poetry-svc││  user-svc    │
+  │  错题/题目  ││ 识别+几何重绘  ││ 古诗文    ││ 账号/认证/    │
+  │  (mistake) ││  (mistake)   ││ (poetry) ││ 应用注册表    │
+  └─────┬──────┘└──────┬───────┘└────┬─────┘└──────┬───────┘
+        │              │             │             │
+        ▼              ▼             ▼             ▼
+     MySQL(GORM)   S3兼容对象存储   MySQL(GORM)  MySQL(GORM)
+                   + 第三方AI                  users/app_clients
 ```
+
+- **core（多应用共享层）**：gateway、user-service、web（当前统一前端，未来按应用拆分独立前端）
+- **mistake 应用**：question-service + recognition-service；**poetry 应用**：poetry-service
+- 各业务服务独立数据库（按服务拆库），仅通过 user-service 共享账号体系
+
+## 多应用模型
+
+各应用独立域名、独立登录态，共用一套账号（OAuth 多客户端模型）：
+
+```
+用户中心(user-service) ──┬─ 错题本   client_id: app-mistake
+（账号唯一）             ├─ 古诗文   client_id: app-poetry
+                        └─ 新应用…  client_id: app-xxx（注册表加一条记录即可）
+```
+
+- **应用注册表**（`libs/domain.AppClient`，迁移时幂等播种默认客户端）：
+  记录 client_id、名称、允许来源与启停状态；新应用接入仅需登记
+- **登录隔离**：登录/注册接口要求携带 `X-Client-Id` 头（前端 axios 拦截器统一注入，
+  经 `VITE_APP_CLIENT_ID` 配置），user-service 校验注册表后签发 `aud = client_id` 的 JWT；
+  未注册或已停用的客户端返回 401
+- **网关强校验**：按路由前缀校验令牌 `aud` 与应用匹配（`auth.audience_routes`），
+  跨应用令牌返回 403「令牌不属于当前应用」；历史无 aud 令牌由
+  `auth.allow_legacy_tokens` 开关控制（前端全部接入后置 false 收紧）
+- **CORS 白名单**：`cors.allowed_origins` 按各应用域名精确放行（回显 Origin + Vary），
+  未配置时回退 `*`（仅限本地开发）
+- **免登录边界**：诗歌只读接口（篇目/统计 GET）对游客开放；各应用的写接口与
+  智能对话等能力要求登录
+- **部署**：应用级 profile 分组（`mistake` / `poetry`），支持全量或按应用选择部署，
+  详见[生产部署](#生产部署)；未来切独立域名时仅需前端各自配置 client_id +
+  nginx 双域名 + 网关收紧映射与白名单，后端零改动
+- **计费预留**：未来各应用独立计费时，订单/权益按 `(app_id, user_id)` 建模，
+  与应用注册表天然衔接
 
 ## 目录结构
 
@@ -39,20 +75,22 @@ peak/
 ├── .husky/                  # git pre-commit hook（husky 管理）
 ├── .github/workflows/       # CI 流水线（编译/静态检查/测试）
 ├── apps/                    # 微服务
-│   ├── gateway/             # API 网关 (:8080)
-│   ├── question-service/    # 题目/错题服务 (:8081)
-│   ├── recognition-service/ # 识别服务 (:8082，含内置几何渲染 internal/geom)
-│   └── user-service/        # 用户服务（预留 :8083）
+│   ├── gateway/             # API 网关 (:8080)：路由/鉴权/aud 校验/CORS/限流
+│   ├── question-service/    # 题目/错题服务 (:8081，mistake 应用)
+│   ├── recognition-service/ # 识别服务 (:8082，mistake 应用，含内置几何渲染 internal/geom)
+│   ├── poetry-service/      # 古诗文服务 (:8084，poetry 应用)
+│   └── user-service/        # 用户服务 (:8083，core)：登录认证/用户信息/应用注册表
 ├── libs/                    # 公共库
+│   ├── auth/                # JWT 签发解析（含 aud 应用受众）+ 登录凭证
 │   ├── config/              # 配置加载（YAML + 环境变量）
 │   ├── logger/              # zap 日志封装
 │   ├── errors/              # 统一错误码
 │   ├── http/                # HTTP 封装、中间件
 │   ├── storage/             # FileStorage 接口 + LocalStorage + S3Storage(对象存储)
-│   ├── domain/              # 领域模型 + GORM 迁移 + 数据库方言
+│   ├── domain/              # 领域模型 + GORM 迁移 + 数据库方言（含 AppClient 应用注册表）
 │   └── observability/       # Prometheus 指标 + OTel 追踪
-├── web/                     # Vue3 前端
-└── deploy/                  # 部署配置（prometheus 等）
+├── web/                     # Vue3 统一前端（多应用页面，未来按域名拆分）
+└── deploy/                  # 部署配置（compose 编排、观测栈、一键部署脚本）
 ```
 
 ## 开发 Quick Start
@@ -143,6 +181,9 @@ cd apps/question-service && go run .
 
 # recognition-service（默认 mock provider，无需密钥即可跑通）
 cd apps/recognition-service && go run .
+
+# poetry-service（古诗文，可选：仅开发古诗文应用时需要）
+cd apps/poetry-service && go run .
 ```
 
 > 依赖下载如遇网络问题，可设置代理：
@@ -166,7 +207,8 @@ database:
   dsn: "root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local"
 ```
 
-核心表：`users`、`questions`、`mistakes`、`images`、`categories`、`question_categories`、`recognition_tasks`。
+核心表：`users`、`app_clients`（应用注册表）、`questions`、`mistakes`、`images`、
+`categories`、`question_categories`、`recognition_tasks`、`poems`。
 
 ### 本地 SQLite 调测（免 MySQL）
 
@@ -178,7 +220,8 @@ make run-sqlite RECOGNITION_PROVIDER=mock    # 用 mock 识别，无需 API Key�
 make stop-sqlite                             # 停止服务并清空 /tmp/peak-run/data 与日志
 ```
 
-服务端口：gateway `:8080`、question `:8081`、recognition `:8082`；日志见 `/tmp/peak-run/{gateway,question,recognition}.log`。
+服务端口：gateway `:8080`、question `:8081`、recognition `:8082`、user `:8083`、poetry `:8084`；
+日志见 `/tmp/peak-run/*.log`。
 
 ## AI 识别服务（provider 可配置切换）
 
