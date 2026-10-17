@@ -28,6 +28,7 @@ function buildRouter() {
       { path: '/entry', name: 'entry', component: { template: '<div>entry-page</div>' } },
       { path: '/list', name: 'list', component: { template: '<div>list-page</div>' } },
       { path: '/poetry', name: 'poetry-dashboard', component: { template: '<div>poetry-page</div>' } },
+      { path: '/poetry/list', name: 'poetry-list', component: { template: '<div>poetry-list-page</div>' } },
     ],
   })
 }
@@ -60,6 +61,31 @@ describe('App.vue（未登录）', () => {
     const wrapper = mount(App, { global: { plugins: [router] } })
     expect(wrapper.text()).not.toContain('录入错题')
     expect(wrapper.find('[data-test="user-menu-trigger"]').exists()).toBe(false)
+  })
+
+  it('古诗文页面展示独立品牌与导航，不出现错题本元素', async () => {
+    const router = buildRouter()
+    router.push('/poetry')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [router] } })
+    // 品牌：Peak 古诗文（错题本导航项隐藏）
+    expect(wrapper.find('[data-test="app-brand"]').text()).toBe('Peak 古诗文')
+    expect(wrapper.text()).not.toContain('录入错题')
+    expect(wrapper.findAll('a').some((a) => a.text() === '错题本')).toBe(false)
+    // 古诗文导航：浏览免登录，访客可见
+    expect(wrapper.text()).toContain('总览')
+    expect(wrapper.text()).toContain('篇目检索')
+  })
+
+  it('已登录访问古诗文页面同样不展示错题本导航', async () => {
+    login('test-token')
+    const router = buildRouter()
+    router.push('/poetry')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [router] } })
+    expect(wrapper.find('[data-test="app-brand"]').text()).toBe('Peak 古诗文')
+    expect(wrapper.text()).not.toContain('录入错题')
+    logout()
   })
 
   it('未登录时导航不展示「古诗文」入口（独立应用，不在错题本内嵌入）', async () => {

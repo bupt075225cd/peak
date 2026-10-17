@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { Camera, BookOpen, User, LogIn, ChevronDown, Pencil } from 'lucide-vue-next'
+import { Camera, BookOpen, BookMarked, Search, User, LogIn, ChevronDown, Pencil } from 'lucide-vue-next'
 import { ref, computed, watch } from 'vue'
 import { useAuth } from './composables/useAuth'
 import { getMe, updateMyName } from './api'
@@ -9,6 +9,10 @@ const route = useRoute()
 const router = useRouter()
 const { isLoggedIn, logout } = useAuth()
 const active = computed(() => route.name)
+
+// 应用外壳按路由前缀切换：/poetry* 为古诗文应用（独立品牌与导航），
+// 其余为错题本应用；用户菜单属共享账号体系，两个应用保持一致。
+const isPoetry = computed(() => route.path.startsWith('/poetry'))
 
 function handleLogout() {
   // 退出登录并回到主页（未登录形态）。
@@ -81,16 +85,42 @@ async function handleSaveName() {
       <div class="mx-auto max-w-5xl h-full px-4 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <div
-            class="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center shadow-lg shadow-blue-500/20"
+            class="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg transition-colors"
+            :class="isPoetry ? 'bg-poetry-cinnabar shadow-poetry-cinnabar/25' : 'bg-gradient-to-br from-primary to-primary-light shadow-blue-500/20'"
           >
-            <BookOpen class="w-5 h-5 text-white" />
+            <BookMarked v-if="isPoetry" class="w-5 h-5 text-white" />
+            <BookOpen v-else class="w-5 h-5 text-white" />
           </div>
-          <RouterLink to="/home" class="text-lg font-semibold tracking-tight text-ink cursor-pointer">
-            Peak 错题本
+          <RouterLink
+            :to="isPoetry ? '/poetry' : '/home'"
+            class="text-lg font-semibold tracking-tight text-ink cursor-pointer"
+            data-test="app-brand"
+          >
+            {{ isPoetry ? 'Peak 古诗文' : 'Peak 错题本' }}
           </RouterLink>
         </div>
         <nav class="flex items-center gap-1">
-          <template v-if="isLoggedIn">
+          <!-- 古诗文应用导航（浏览免登录，访客可见） -->
+          <template v-if="isPoetry">
+            <RouterLink
+              to="/poetry"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :class="active === 'poetry-dashboard' ? 'bg-poetry-cinnabar/10 text-poetry-cinnabar' : 'text-ink-soft hover:bg-slate-100'"
+            >
+              <BookMarked class="w-4 h-4" />
+              总览
+            </RouterLink>
+            <RouterLink
+              to="/poetry/list"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :class="active === 'poetry-list' ? 'bg-poetry-cinnabar/10 text-poetry-cinnabar' : 'text-ink-soft hover:bg-slate-100'"
+            >
+              <Search class="w-4 h-4" />
+              篇目检索
+            </RouterLink>
+          </template>
+          <!-- 错题本应用导航 -->
+          <template v-if="isLoggedIn && !isPoetry">
             <RouterLink
               to="/entry"
               class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
