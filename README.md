@@ -372,15 +372,27 @@ export:
 ```bash
 # 方式一：一键远程部署（在能 SSH 到目标主机的机器上执行）
 cp deploy/.env.production.example deploy/.env.production   # 填入真实配置
-./deploy/deploy-to-host.sh root@<host>        # 生产模式
+./deploy/deploy-to-host.sh root@<host>        # 生产模式（全部应用）
 ./deploy/deploy-to-host.sh -d root@<host>     # 开发调试模式（叠加 dev.yml，
                                               # 开启超级验证码 000000 与 debug_code）
+./deploy/deploy-to-host.sh -a poetry root@<host>          # 仅古诗文应用
+./deploy/deploy-to-host.sh -a mistake,poetry root@<host>  # 全部应用（等价缺省）
+./deploy/deploy-to-host.sh -s "poetry-service web" root@<host>  # 指定服务子集
 
 # 方式二：手动部署（在部署机上，仓库中的 docker-compose.prod.yml + deploy/prometheus.yml）
-docker compose --env-file .env.production -f docker-compose.prod.yml pull
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile mistake --profile poetry pull          # 部署全部应用
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile mistake --profile poetry up -d
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile poetry up -d                           # 仅古诗文应用（core + poetry）
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  up -d poetry-service                             # 指定单个服务（显式目标无视 profile）
 ```
 
+- **应用级选择部署**：业务服务按应用分组（`mistake` = question + recognition，
+  `poetry` = poetry-service）；core（gateway / user-service / web 多应用共享层）
+  始终启动，停用某应用 profile 不影响其他应用，网关对缺席后端的路由返回 502
 - 镜像版本由 `.env.production` 的 `IMAGE_TAG` 控制（`latest` 或 commit sha，回滚即改此值重新 pull + up）
 - 私有镜像仓库需先在部署机 `docker login`（见 `deploy/deploy.env.example`）
 - 环境变量模板与逐项说明见 `deploy/.env.production.example`

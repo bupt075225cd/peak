@@ -3,10 +3,18 @@
 # 在「能 SSH 到目标主机」的机器上执行（本仓库沙箱环境与内网不通时，用你的办公机/跳板机）。
 #
 # 用法：
-#   ./deploy-to-host.sh [-d] [--obs] <user>@<host> [端口]
-#   -d     开发调试模式：额外上传并叠加 docker-compose.dev.yml
-#          （开启 LOG_DEV/AUTH_MASTER_CODE，超级验证码 000000 可登录）
-#   --obs  同时部署可选观测栈（Prometheus/Loki/Alloy/Grafana，Compose profiles: observability）。
+#   ./deploy-to-host.sh [选项] <user>@<host> [端口]
+# 选项（可任意组合）：
+#   -d             开发调试模式：额外上传并叠加 docker-compose.dev.yml
+#                  （开启 LOG_DEV/AUTH_MASTER_CODE，超级验证码 000000 可登录）
+#   --obs          同时部署可选观测栈（Prometheus/Loki/Alloy/Grafana，profiles: observability）
+#   -a <apps>      选择部署的应用（逗号分隔：mistake / poetry；缺省=全部应用）。
+#                  core（gateway/user-service/web）始终部署；
+#                  示例：-a poetry          仅古诗文应用
+#                        -a mistake,poetry  全部应用（等价缺省）
+#   -s "<services>" 指定服务子集（空格分隔，绕过 profile 直接按服务名部署）；
+#                  示例：-s "poetry-service web"
+#                  与 -a 互斥：同时给出时 -s 优先生效。
 # 前置：
 #   1) 已能 ssh <user>@<host>（密钥或交互输密码均可）
 #   2) deploy/.env.production 已按模板填好真实值
@@ -16,15 +24,41 @@ set -euo pipefail
 
 DEV=0
 OBS=0
-# 解析选项（-d 与 --obs 可任意组合）
-while [ "${1:-}" = "-d" ] || [ "${1:-}" = "--obs" ]; do
-  if [ "$1" = "-d" ]; then DEV=1; else OBS=1; fi
+APPS=""
+SERVICES=""
+# 解析选项（可任意组合）
+while [ "${1:-}" = "-d" ] || [ "${1:-}" = "--obs" ] || [ "${1:-}" = "-a" ] || [ "${1:-}" = "-s" ]; do
+  case "$1" in
+    -d) DEV=1 ;;
+    --obs) OBS=1 ;;
+    -a) APPS=${2:?"-a 需要应用列表（如 mistake,poetry）"}; shift ;;
+    -s) SERVICES=${2:?"-s 需要服务列表（如 \"poetry-service web\"）"}; shift ;;
+  esac
   shift
 done
 
-TARGET=${1:?用法: ./deploy-to-host.sh [-d] [--obs] <user>@<host> [端口]}
+TARGET=${1:?用法: ./deploy-to-host.sh [-d] [--obs] [-a <apps>] [-s "<services>"] <user>@<host> [端口]}
 PORT=${2:-22}
 REMOTE_DIR=/opt/peak
+
+# 合法应用名（对应编排文件中的 profile：mistake / poetry）
+ALL_PROFILES="mistake poetry"
+PROFILE_ARGS=""
+if [ -n "$APPS" ]; then
+  IFS=',' read -ra APP_LIST <<< "$APPS"
+  for app in "${APP_LIST[@]}"; do
+    app=$(echo "$app" | xargs) # 去首尾空白
+    case "$app" in
+      mistake|poetry) PROFILE_ARGS="$PROFILE_ARGS --profile $app" ;;
+      *) echo "✗ 未知应用: $app（可选：mistake / poetry）"; exit 1 ;;
+    esac
+  done
+else
+  # 缺省部署全部应用（core 始终启动，业务服务经 profile 激活）
+  for app in $ALL_PROFILES; do
+    PROFILE_ARGS="$PROFILE_ARGS --profile $app"
+  done
+fi
 
 cd "$(dirname "$0")/.."
 [ -f deploy/.env.production ] || { echo "✗ 缺少 deploy/.env.production，请按 .env.production.example 填写"; exit 1; }
@@ -46,7 +80,17 @@ if [ "$OBS" = "1" ]; then
   OBS_ARGS="--profile observability"
 fi
 
-echo "==> 上传部署文件到 $TARGET:$REMOTE_DIR（模式：$([ "$DEV" = "1" ] && echo 开发调试 || echo 生产)$([ "$OBS" = "1" ] && echo " + 观测栈" || echo "")）"
+# 部署范围二选一：
+#   -s "<services>" 服务子集：绕过 profile 直接按服务名拉取与启动（置于子命令之后）
+#   -a / 缺省       应用选择：经 profile 激活（--profile 为 compose 顶层参数，置于子命令之前）
+if [ -n "$SERVICES" ]; then
+  PROFILE_ARGS=""
+  SCOPE_DESC="服务子集: $SERVICES"
+else
+  SCOPE_DESC="应用: ${APPS:-全部（mistake + poetry）}"
+fi
+
+echo "==> 上传部署文件到 $TARGET:$REMOTE_DIR（模式：$([ "$DEV" = "1" ] && echo 开发调试 || echo 生产)$([ "$OBS" = "1" ] && echo " + 观测栈" || echo "")，$SCOPE_DESC）"
 ssh -p "$PORT" "$TARGET" "mkdir -p $REMOTE_DIR/deploy"
 scp -P "$PORT" docker-compose.prod.yml "$TARGET:$REMOTE_DIR/"
 if [ "$DEV" = "1" ]; then scp -P "$PORT" docker-compose.dev.yml "$TARGET:$REMOTE_DIR/"; fi
@@ -75,9 +119,9 @@ fi
 
 echo "==> 拉取镜像并启动"
 ssh -t -p "$PORT" "$TARGET" "cd $REMOTE_DIR && \
-  docker compose --env-file .env.production $OBS_ARGS $COMPOSE_FILES pull && \
-  docker compose --env-file .env.production $OBS_ARGS $COMPOSE_FILES up -d && \
-  docker compose --env-file .env.production $OBS_ARGS $COMPOSE_FILES ps"
+  docker compose --env-file .env.production $OBS_ARGS $PROFILE_ARGS $COMPOSE_FILES pull $SERVICES && \
+  docker compose --env-file .env.production $OBS_ARGS $PROFILE_ARGS $COMPOSE_FILES up -d $SERVICES && \
+  docker compose --env-file .env.production $OBS_ARGS $PROFILE_ARGS $COMPOSE_FILES ps $SERVICES"
 
 if [ "$DEV" = "1" ]; then
   echo "✓ 开发环境部署完成，超级验证码 000000 可登录，访问 http://<主机IP>:80"

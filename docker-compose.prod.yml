@@ -3,6 +3,14 @@
 #   docker compose -f docker-compose.prod.yml pull     # 拉取镜像仓库已构建镜像
 #   docker compose -f docker-compose.prod.yml up -d
 #   镜像 tag 通过 .env 的 IMAGE_TAG 指定（commit sha 或 latest，默认 latest）
+# 应用级选择部署（多应用模型，profile 分组）：
+#   部署全部应用：  --profile mistake --profile poetry up -d
+#   仅古诗文应用：  --profile poetry up -d            （core + poetry-service）
+#   仅错题本应用：  --profile mistake up -d           （core + question/recognition）
+#   指定单个服务：  up -d poetry-service              （显式目标可无视 profile）
+#   其中 core（始终启动）= gateway + user-service + web（多应用共享层）；
+#   mistake = question-service + recognition-service；poetry = poetry-service。
+#   应用间共享 user-service 与数据库，停用某应用 profile 不影响其他应用。
 # 说明：
 #   - 业务镜像来自阿里云 ACR（CI 推送），私有仓库需先 docker login
 #   - 配置通过环境变量注入（config.yaml 使用 ${VAR} 占位）
@@ -49,15 +57,20 @@ services:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-gateway:${IMAGE_TAG:-latest}
     container_name: peak-gateway
     restart: unless-stopped
+    # 后端依赖全部为可选：应用级裁剪部署（如仅 poetry）时，缺席的后端
+    # 不阻塞网关启动，对应路由返回 502；全量部署时行为不变。
     depends_on:
       question-service:
         condition: service_started
+        required: false
       recognition-service:
         condition: service_started
+        required: false
       user-service:
         condition: service_started
       poetry-service:
         condition: service_started
+        required: false
     environment:
       SERVER_PORT: "8080"
       LOG_DEV: "false"
@@ -77,10 +90,12 @@ services:
       retries: 5
       start_period: 10s
 
+  # 错题本应用后端（question + recognition 归入 mistake profile）
   question-service:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-question-service:${IMAGE_TAG:-latest}
     container_name: peak-question-service
     restart: unless-stopped
+    profiles: ["mistake"]
     depends_on:
       mysql:
         condition: service_healthy
@@ -118,6 +133,7 @@ services:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-recognition-service:${IMAGE_TAG:-latest}
     container_name: peak-recognition-service
     restart: unless-stopped
+    profiles: ["mistake"]
     depends_on:
       mysql:
         condition: service_healthy
@@ -209,11 +225,12 @@ services:
       start_period: 10s
 
   # poetry-service 古诗文服务：语料内嵌导入（只读数据，无外部存储依赖），
-  # chat 接口当前为 RAG 二阶段占位。
+  # chat 接口当前为 RAG 二阶段占位。归入 poetry profile（应用级选择部署）。
   poetry-service:
     image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-poetry-service:${IMAGE_TAG:-latest}
     container_name: peak-poetry-service
     restart: unless-stopped
+    profiles: ["poetry"]
     depends_on:
       mysql:
         condition: service_healthy

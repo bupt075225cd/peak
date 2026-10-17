@@ -88,10 +88,16 @@ Docker Compose 通过 `--env-file .env.production` 读取。
 # 登录镜像仓库（私有仓库必须，一次即可）
 docker login --username=<ACR用户名> <ACR实例地址>
 
-# 拉取镜像并后台启动（默认轻量模式：只启动 6 个业务容器）
-docker compose --env-file .env.production -f docker-compose.prod.yml pull
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+# 拉取镜像并后台启动（默认轻量模式；业务服务按应用分组，需激活对应 profile）
+# 全部应用：--profile mistake --profile poetry；core（gateway/user-service/web）始终启动
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile mistake --profile poetry pull
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile mistake --profile poetry up -d
 
+# 应用级选择部署：
+#   仅古诗文应用：--profile poetry        仅错题本应用：--profile mistake
+#   指定单个服务：up -d poetry-service    （显式目标可无视 profile）
 # 需要观测栈时，追加 --profile observability（GRAFANA_ADMIN_PASSWORD 必须已设强密码）
 # docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
 ```
@@ -99,7 +105,10 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 也可在能 SSH 到目标主机的机器上一键完成（上传文件 + 登录 + 拉取 + 启动）：
 
 ```bash
-./deploy/deploy-to-host.sh root@<host>          # 生产模式（轻量，不含观测栈）
+./deploy/deploy-to-host.sh root@<host>          # 生产模式（全部应用，轻量，不含观测栈）
+./deploy/deploy-to-host.sh -a poetry root@<host>          # 仅古诗文应用（core + poetry）
+./deploy/deploy-to-host.sh -a mistake,poetry root@<host>  # 全部应用（等价缺省）
+./deploy/deploy-to-host.sh -s "poetry-service web" root@<host>  # 指定服务子集
 ./deploy/deploy-to-host.sh --obs root@<host>    # 生产模式 + 观测栈
 ./deploy/deploy-to-host.sh -d root@<host>       # 开发调试模式：额外上传并叠加
                                                 # docker-compose.dev.yml（LOG_DEV/AUTH_MASTER_CODE
