@@ -4,13 +4,14 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import PoetryDashboard from './PoetryDashboard.vue'
 import { login, logout } from '../composables/useAuth'
 
-const { getDynastyStats, getVolumeStats, getAuthorStats, getWordStats, sendChat } = vi.hoisted(
+const { getDynastyStats, getVolumeStats, getAuthorStats, getWordStats, sendChat, listPoems } = vi.hoisted(
   () => ({
     getDynastyStats: vi.fn(),
     getVolumeStats: vi.fn(),
     getAuthorStats: vi.fn(),
     getWordStats: vi.fn(),
     sendChat: vi.fn(),
+    listPoems: vi.fn(),
   }),
 )
 
@@ -24,6 +25,7 @@ vi.mock('../api/poetry', () => ({
   getAuthorStats,
   getWordStats,
   sendChat,
+  listPoems,
 }))
 
 function buildRouter() {
@@ -62,6 +64,7 @@ beforeEach(() => {
   getVolumeStats.mockResolvedValue([{ volume: '七年级上册', inclass: 8, outline: 2, other: 0 }])
   getAuthorStats.mockResolvedValue([{ author: '李白', count: 8 }])
   getWordStats.mockResolvedValue({ items: [{ word: '明', count: 120 }], total_chars: 9999 })
+  listPoems.mockResolvedValue({ items: [], total: 24 })
 })
 
 // AI 弹窗通过 Teleport 挂载到 body：用例间清理，避免遗留 DOM 干扰后续断言。
@@ -81,6 +84,47 @@ describe('PoetryDashboard.vue', () => {
     getDynastyStats.mockRejectedValue({ response: { data: { message: '服务不可用' } } })
     const { wrapper } = await mountView()
     expect(wrapper.find('[data-test="stats-error"]').text()).toContain('服务不可用')
+  })
+
+  it('选择筛选后防抖展示匹配篇数，并可一键查看筛选结果', async () => {
+    vi.useFakeTimers()
+    try {
+      const { wrapper, router } = await mountView()
+      expect(wrapper.find('[data-test="filter-match"]').exists()).toBe(false)
+
+      await wrapper.find('[data-test="filter-dynasty"]').setValue('唐')
+      await vi.advanceTimersByTimeAsync(300) // 越过防抖窗口
+      await flushPromises()
+
+      expect(listPoems).toHaveBeenCalledWith(expect.objectContaining({ dynasty: '唐', limit: 1 }))
+      expect(wrapper.find('[data-test="filter-match"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="match-count"]').text()).toBe('24')
+
+      await wrapper.find('[data-test="go-filtered-list"]').trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.path).toBe('/poetry/list')
+      expect(router.currentRoute.value.query.dynasty).toBe('唐')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('清空全部筛选后隐藏匹配结果条', async () => {
+    vi.useFakeTimers()
+    try {
+      const { wrapper } = await mountView()
+      await wrapper.find('[data-test="filter-category"]').setValue('课内')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(wrapper.find('[data-test="filter-match"]').exists()).toBe(true)
+
+      await wrapper.find('[data-test="filter-category"]').setValue('')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(wrapper.find('[data-test="filter-match"]').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('带筛选跳转列表页并透传查询参数', async () => {

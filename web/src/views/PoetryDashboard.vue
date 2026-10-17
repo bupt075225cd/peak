@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Sparkles, BookMarked } from 'lucide-vue-next'
+import { Search, Sparkles, BookMarked, ChevronRight } from 'lucide-vue-next'
 import { useAuth } from '../composables/useAuth'
 import { usePoetryStats, totalPoems } from '../composables/usePoetryStats'
 import { listPoems, type Poem } from '../api/poetry'
@@ -19,10 +19,46 @@ const router = useRouter()
 const { isLoggedIn } = useAuth()
 const { stats, loading, error, load } = usePoetryStats()
 
-// 筛选状态：作用于图表统计（当前语料统计为全量，筛选联动列表页跳转）。
+// 筛选状态：总览图表保持全量统计口径；选择条件后即时展示匹配篇数，
+// 并可一键跳转列表页查看筛选结果（列表页支持继续调整筛选与关键词）。
 const filterDynasty = ref('')
 const filterVolume = ref('')
 const filterCategory = ref('')
+
+// 匹配篇数（null = 未选择任何筛选，不展示）；reqToken 防止快速切换时的竞态。
+const matchCount = ref<number | null>(null)
+const matching = ref(false)
+let matchToken = 0
+let matchTimer: ReturnType<typeof setTimeout> | undefined
+
+async function fetchMatchCount() {
+  const token = ++matchToken
+  if (!filterDynasty.value && !filterVolume.value && !filterCategory.value) {
+    matchCount.value = null
+    return
+  }
+  matching.value = true
+  try {
+    const res = await listPoems({
+      limit: 1,
+      dynasty: filterDynasty.value || undefined,
+      volume: filterVolume.value || undefined,
+      category: filterCategory.value || undefined,
+    })
+    if (token === matchToken) matchCount.value = res.total
+  } catch (err) {
+    console.error('查询筛选匹配篇数失败', err)
+    if (token === matchToken) matchCount.value = null
+  } finally {
+    if (token === matchToken) matching.value = false
+  }
+}
+
+// 选择变化后 300ms 防抖查询（连续切换只发一次请求）。
+watch([filterDynasty, filterVolume, filterCategory], () => {
+  if (matchTimer) clearTimeout(matchTimer)
+  matchTimer = setTimeout(fetchMatchCount, 300)
+})
 
 const total = computed(() => totalPoems(stats.value.dynasties))
 
@@ -120,6 +156,27 @@ onMounted(load)
           <option value="课内">课内</option>
           <option value="课外">课外</option>
         </select>
+      </div>
+
+      <!-- 筛选即时反馈：匹配篇数 + 一键查看 -->
+      <div
+        v-if="matchCount !== null"
+        class="mt-3 inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-poetry-cinnabar/8 border border-poetry-cinnabar/20"
+        data-test="filter-match"
+      >
+        <span class="text-sm text-poetry-inkstone">
+          当前筛选匹配
+          <b class="text-poetry-cinnabar font-semibold" data-test="match-count">{{ matchCount }}</b>
+          篇
+        </span>
+        <button
+          class="inline-flex items-center gap-1 text-sm font-semibold text-poetry-cinnabar hover:text-poetry-cinnabarLight transition-colors cursor-pointer"
+          data-test="go-filtered-list"
+          @click="goList"
+        >
+          查看筛选结果
+          <ChevronRight class="w-4 h-4" />
+        </button>
       </div>
 
       <!-- 错误提示 -->
