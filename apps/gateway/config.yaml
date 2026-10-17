@@ -10,6 +10,22 @@ tracing:
 # 鉴权：JWT 密钥必须与 user-service 一致（经环境变量注入）。
 auth:
   jwt_secret: "${JWT_SECRET:-peak-dev-secret}"
+  # 多应用隔离：路由前缀 -> 允许的 JWT aud（应用受众）。
+  # app-peak 为统一前端过渡期客户端；前端按独立域名拆分后，
+  # 各自使用 app-mistake / app-poetry 并收紧对应列表。
+  audience_routes:
+    /api/mistakes: ["app-mistake", "app-peak"]
+    /api/questions: ["app-mistake", "app-peak"]
+    /api/categories: ["app-mistake", "app-peak"]
+    /api/recognition: ["app-mistake", "app-peak"]
+    /api/poetry: ["app-poetry", "app-peak"]
+  # 是否放行无 aud 的历史令牌；前端全部接入 X-Client-Id 后置为 false 收紧。
+  allow_legacy_tokens: "${AUTH_ALLOW_LEGACY_TOKENS:-true}"
+
+# CORS：前端来源白名单（精确匹配 Origin；独立域名各应用分别登记）。
+# 留空回退 *（仅限本地开发），上线必须显式配置各应用域名。
+cors:
+  allowed_origins: "${CORS_ALLOWED_ORIGINS:-}"
 
 # 路由前缀 -> 后端服务地址（可用环境变量覆盖，生产环境指向服务名）
 routes:

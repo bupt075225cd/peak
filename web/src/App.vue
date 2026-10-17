@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { Camera, BookOpen, BookMarked, User, LogIn, ChevronDown, Pencil } from 'lucide-vue-next'
+import { Camera, BookOpen, User, LogIn, ChevronDown, Pencil } from 'lucide-vue-next'
 import { ref, computed, watch } from 'vue'
 import { useAuth } from './composables/useAuth'
 import { getMe, updateMyName } from './api'
@@ -107,16 +107,8 @@ async function handleSaveName() {
               <BookOpen class="w-4 h-4" />
               错题本
             </RouterLink>
-            <RouterLink
-              to="/poetry"
-              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-              :class="active?.toString().startsWith('poetry-') ? 'bg-primary/10 text-primary' : 'text-ink-soft hover:bg-slate-100'"
-              data-test="nav-poetry"
-            >
-              <BookMarked class="w-4 h-4" />
-              古诗文
-            </RouterLink>
           </template>
+          <!-- 古诗文为独立应用：错题本导航不放置其入口，通过独立域名/地址访问 -->
           <div class="ml-3 flex items-center pl-3 border-l border-slate-200">
             <template v-if="isLoggedIn">
               <!-- 用户菜单：展示真实昵称，点击展开个人中心入口 -->

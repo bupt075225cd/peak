@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import PoetryDashboard from './PoetryDashboard.vue'
+import { login, logout } from '../composables/useAuth'
 
 const { getDynastyStats, getVolumeStats, getAuthorStats, getWordStats, sendChat } = vi.hoisted(
   () => ({
@@ -32,6 +33,7 @@ function buildRouter() {
       { path: '/', redirect: '/poetry' },
       { path: '/poetry', name: 'poetry-dashboard', component: PoetryDashboard },
       { path: '/poetry/list', name: 'poetry-list', component: { template: '<div />' } },
+      { path: '/login', name: 'login', component: { template: '<div />' } },
     ],
   })
 }
@@ -46,6 +48,7 @@ async function mountView() {
 }
 
 beforeEach(() => {
+  logout() // 重置登录态（AI 弹窗用例内单独 login）
   getDynastyStats.mockReset()
   getVolumeStats.mockReset()
   getAuthorStats.mockReset()
@@ -59,6 +62,11 @@ beforeEach(() => {
   getVolumeStats.mockResolvedValue([{ volume: '七年级上册', inclass: 8, outline: 2, other: 0 }])
   getAuthorStats.mockResolvedValue([{ author: '李白', count: 8 }])
   getWordStats.mockResolvedValue({ items: [{ word: '明', count: 120 }], total_chars: 9999 })
+})
+
+// AI 弹窗通过 Teleport 挂载到 body：用例间清理，避免遗留 DOM 干扰后续断言。
+afterEach(() => {
+  document.body.innerHTML = ''
 })
 
 describe('PoetryDashboard.vue', () => {
@@ -102,6 +110,7 @@ async function click(el: HTMLElement) {
 }
 
 it('打开 AI 问答占位弹窗并发送问题', async () => {
+  login('test-token')
   sendChat.mockResolvedValue({ enabled: false, notice: '敬请期待' })
   const { wrapper } = await mountView()
   expect(modalEl()).toBeNull()
@@ -119,11 +128,21 @@ it('打开 AI 问答占位弹窗并发送问题', async () => {
 })
 
 it('AI 请求失败时展示兜底提示', async () => {
+  login('test-token')
   sendChat.mockRejectedValue(new Error('network error'))
   const { wrapper } = await mountView()
   await click(wrapper.find('[data-test="open-ai-chat"]').element as HTMLElement)
   setInput(inputEl()!, '问题')
   await click(sendEl()!)
   expect(responseEl()!.textContent).toContain('请求失败')
+})
+
+it('未登录点击 AI 问答时跳转登录页并携带回跳参数', async () => {
+  const { wrapper, router } = await mountView()
+  await click(wrapper.find('[data-test="open-ai-chat"]').element as HTMLElement)
+  await flushPromises()
+  expect(router.currentRoute.value.path).toBe('/login')
+  expect(router.currentRoute.value.query.redirect).toBe('/poetry')
+  expect(modalEl()).toBeNull()
 })
 })

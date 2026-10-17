@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import router from './index'
+
+// poetry-dashboard 懒加载链路引入 echarts 图表：jsdom 无 canvas，
+// 与 PoetryDashboard.test.ts 一致以 stub 替代。
+vi.mock('vue-echarts', () => ({ default: { name: 'VChart', template: '<div />' } }))
+vi.mock('echarts-wordcloud', () => ({}))
 
 describe('router/index.ts', () => {
   it('根路径重定向到 /home', () => {
@@ -28,6 +33,21 @@ describe('router/index.ts', () => {
     const list = router.getRoutes().find((r) => r.name === 'list')
     expect(list).toBeDefined()
     const loader = list!.components!.default as () => Promise<unknown>
+    const comp = await loader()
+    expect(comp).toBeTruthy()
+  })
+
+  it('诗歌模块拥有独立主页面及子页面路由', () => {
+    const names = router.getRoutes().map((r) => r.name)
+    expect(names).toContain('poetry-dashboard')
+    expect(names).toContain('poetry-list')
+    expect(names).toContain('poetry-detail')
+  })
+
+  it('poetry-dashboard 路由可解析到组件（懒加载）', async () => {
+    const poetry = router.getRoutes().find((r) => r.name === 'poetry-dashboard')
+    expect(poetry).toBeDefined()
+    const loader = poetry!.components!.default as () => Promise<unknown>
     const comp = await loader()
     expect(comp).toBeTruthy()
   })

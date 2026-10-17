@@ -72,7 +72,7 @@ func TestSanitizeTraceID(t *testing.T) {
 }
 
 func TestMonitorReportIsPublic(t *testing.T) {
-	if !isPublicPath("/api/monitor/report") {
+	if !isPublicPath(http.MethodPost, "/api/monitor/report") {
 		t.Fatal("monitor report should be public")
 	}
 }

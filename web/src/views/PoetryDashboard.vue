@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Sparkles, BookMarked } from 'lucide-vue-next'
+import { useAuth } from '../composables/useAuth'
 import { usePoetryStats, totalPoems } from '../composables/usePoetryStats'
 import { listPoems, type Poem } from '../api/poetry'
 import {
@@ -15,6 +16,7 @@ import ChartCard from '../components/poetry/ChartCard.vue'
 import AiChatPlaceholder from '../components/poetry/AiChatPlaceholder.vue'
 
 const router = useRouter()
+const { isLoggedIn } = useAuth()
 const { stats, loading, error, load } = usePoetryStats()
 
 // 筛选状态：作用于图表统计（当前语料统计为全量，筛选联动列表页跳转）。
@@ -41,7 +43,12 @@ function goList() {
 }
 
 const chatRef = ref<InstanceType<typeof AiChatPlaceholder> | null>(null)
+// 智能对话需要登录（与错题本共用用户体系）：未登录引导去登录页并回跳本页。
 function openChat() {
+  if (!isLoggedIn.value) {
+    router.push({ path: '/login', query: { redirect: '/poetry' } })
+    return
+  }
   chatRef.value?.show()
 }
 

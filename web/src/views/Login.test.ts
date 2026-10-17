@@ -27,6 +27,7 @@ function buildRouter() {
       { path: '/', redirect: '/login' },
       { path: '/login', name: 'login', component: Login },
       { path: '/home', name: 'home', component: { template: '<div>home-page</div>' } },
+      { path: '/poetry', name: 'poetry-dashboard', component: { template: '<div>poetry-page</div>' } },
       { path: '/register', name: 'register', component: { template: '<div>register-page</div>' } },
       { path: '/forgot-password', name: 'forgot-password', component: { template: '<div>forgot-page</div>' } },
     ],
@@ -87,6 +88,40 @@ describe('Login.vue 密码登录', () => {
       account: 'stu@peak.local', password: 'password123',
     })
     expect(localStorage.getItem(TOKEN_KEY)).toBe('jwt-pwd')
+    expect(router.currentRoute.value.path).toBe('/home')
+    logout()
+  })
+
+  it('携带合法 redirect 时登录成功后回跳目标页', async () => {
+    const router = buildRouter()
+    router.push('/login?redirect=/poetry')
+    await router.isReady()
+    const wrapper = mount(Login, { global: { plugins: [router] } })
+    httpMethods.post.mockResolvedValueOnce(
+      ok({ token: 'jwt-redirect', user: { id: 3, account: 'stu@peak.local', email: 'stu@peak.local', phone: null, name: '同学r', email_verified: true } }),
+    )
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('password123')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/poetry')
+    logout()
+  })
+
+  it('redirect 为站外地址时忽略并回退主页', async () => {
+    const router = buildRouter()
+    router.push('/login?redirect=//evil.example.com')
+    await router.isReady()
+    const wrapper = mount(Login, { global: { plugins: [router] } })
+    httpMethods.post.mockResolvedValueOnce(
+      ok({ token: 'jwt-safe', user: { id: 4, account: 'stu@peak.local', email: 'stu@peak.local', phone: null, name: '同学s', email_verified: true } }),
+    )
+    await wrapper.find('#login-account').setValue('stu@peak.local')
+    await wrapper.find('#login-password').setValue('password123')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
     expect(router.currentRoute.value.path).toBe('/home')
     logout()
   })

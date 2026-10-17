@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"peak/apps/user-service/internal/code"
 	"peak/apps/user-service/internal/guard"
@@ -84,6 +85,13 @@ type fixture struct {
 	r      *gin.Engine
 	sender *recordingSender
 	mailer *recordingMailer
+	db     *gorm.DB
+}
+
+// disableApp 将注册表中指定应用置为停用态（测试应用隔离用）。
+func (f *fixture) disableApp(clientID string) error {
+	return f.db.Model(&domain.AppClient{}).Where("client_id = ?", clientID).
+		Update("status", domain.AppStatusDisabled).Error
 }
 
 // setup 构建带 SQLite 存储的测试服务与路由（默认防爆破参数）。
@@ -105,14 +113,15 @@ func setupWithGuard(t *testing.T, cfg service.Config, gcfg guard.Config) *fixtur
 	}
 
 	repos := repository.NewUserRepository(db)
+	apps := repository.NewAppClientRepository(db)
 	codes := code.NewStore(code.Config{})
 	sender := &recordingSender{}
 	mailer := &recordingMailer{}
-	svc := service.New(repos, codes, sender, mailer, guard.NewGuard(gcfg), cfg)
+	svc := service.New(repos, apps, codes, sender, mailer, guard.NewGuard(gcfg), cfg)
 
 	r := gin.New()
 	New(svc).RegisterRoutes(r)
-	return &fixture{r: r, sender: sender, mailer: mailer}
+	return &fixture{r: r, sender: sender, mailer: mailer, db: db}
 }
 
 func devConfig(masterCode bool) service.Config {
@@ -120,12 +129,20 @@ func devConfig(masterCode bool) service.Config {
 }
 
 func post(t *testing.T, r *gin.Engine, path string, body any) *httptest.ResponseRecorder {
+	return postWithClient(t, r, path, body, "")
+}
+
+// postWithClient 同 post，但可指定 X-Client-Id 请求头（应用客户端标识）。
+func postWithClient(t *testing.T, r *gin.Engine, path string, body any, clientID string) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Real-IP", "10.0.0.1")
+	if clientID != "" {
+		req.Header.Set("X-Client-Id", clientID)
+	}
 	r.ServeHTTP(w, req)
 	return w
 }
@@ -207,7 +224,7 @@ func TestLoginFullFlowWithRealCode(t *testing.T) {
 	}
 
 	// 签发的 JWT 可解析回同一用户。
-	uid, err := auth.Parse(data["token"].(string), testSecret)
+	uid, _, err := auth.Parse(data["token"].(string), testSecret)
 	if err != nil || uid == 0 {
 		t.Fatalf("parse issued token: uid = %d, err = %v", uid, err)
 	}
@@ -406,7 +423,7 @@ func TestEmailRegisterAndPasswordLogin(t *testing.T) {
 	if user["phone"] != nil {
 		t.Fatalf("email user phone = %v, want null", user["phone"])
 	}
-	if _, err := auth.Parse(data["token"].(string), testSecret); err != nil {
+	if _, _, err := auth.Parse(data["token"].(string), testSecret); err != nil {
 		t.Fatalf("parse issued token: %v", err)
 	}
 
@@ -674,3 +691,92 @@ func TestSendEmailCodeRateLimit(t *testing.T) {
 		t.Fatalf("invalid purpose: status = %d, want 400", w.Code)
 	}
 }
+
+// ── 应用客户端（X-Client-Id / JWT aud）────────────────────────────
+
+func TestPasswordLoginWithRegisteredClient(t *testing.T) {
+	f := setup(t, devConfig(false))
+	// 先注册一个邮箱用户。
+	sendEmailCode(t, f, "app-client@peak.local", "register")
+	emailRegisterWithClient(t, f, "app-client@peak.local", "password123", emailCode(t, f), "app-mistake")
+
+	// 携带已注册 client 登录 → 200。
+	w := postWithClient(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": "app-client@peak.local", "password": "password123",
+	}, "app-poetry")
+	if w.Code != http.StatusOK {
+		t.Fatalf("login with registered client: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	token := decode(t, w)["data"].(map[string]any)["token"].(string)
+
+	// JWT 应携带 aud = client 标识（应用受众），实现应用间令牌隔离。
+	uid, aud, err := auth.Parse(token, testSecret)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	if uid == 0 || aud != "app-poetry" {
+		t.Fatalf("uid = %d, aud = %q, want aud app-poetry", uid, aud)
+	}
+}
+
+func TestPasswordLoginWithUnknownClient(t *testing.T) {
+	f := setup(t, devConfig(false))
+	sendEmailCode(t, f, "unknown-client@peak.local", "register")
+	emailRegisterWithClient(t, f, "unknown-client@peak.local", "password123", emailCode(t, f), "")
+
+	// 未注册的 client → 401，不签发令牌。
+	w := postWithClient(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": "unknown-client@peak.local", "password": "password123",
+	}, "app-not-registered")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown client: status = %d, want 401", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "\"token\"") {
+		t.Fatal("unknown client should not receive a token")
+	}
+}
+
+func TestPasswordLoginWithDisabledClient(t *testing.T) {
+	f := setup(t, devConfig(false))
+	sendEmailCode(t, f, "disabled-client@peak.local", "register")
+	emailRegisterWithClient(t, f, "disabled-client@peak.local", "password123", emailCode(t, f), "")
+
+	// 停用 app-mistake 后，该 client 登录 → 401。
+	if err := f.disableApp("app-mistake"); err != nil {
+		t.Fatalf("disable app: %v", err)
+	}
+	w := postWithClient(t, f.r, "/api/users/auth/password/login", map[string]string{
+		"account": "disabled-client@peak.local", "password": "password123",
+	}, "app-mistake")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled client: status = %d, want 401", w.Code)
+	}
+}
+
+func TestSmsLoginWithoutClientIssuesLegacyToken(t *testing.T) {
+	// 未携带 X-Client-Id（历史客户端/内部调试）：兼容放行，令牌无 aud。
+	f := setup(t, devConfig(false))
+	phone := "13800009999"
+	ticket, codeStr := sendCode(t, f, phone)
+	w := login(t, f, phone, codeStr, ticket)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login without client: status = %d", w.Code)
+	}
+	token := decode(t, w)["data"].(map[string]any)["token"].(string)
+	_, aud, err := auth.Parse(token, testSecret)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	if aud != "" {
+		t.Fatalf("aud = %q, want empty for legacy token", aud)
+	}
+}
+
+// emailRegisterWithClient 携带应用标识的邮箱注册（仅测试辅助）。
+func emailRegisterWithClient(t *testing.T, f *fixture, email, password, codeStr, clientID string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postWithClient(t, f.r, "/api/users/auth/email/register", map[string]string{
+		"email": email, "password": password, "code": codeStr,
+	}, clientID)
+}
+

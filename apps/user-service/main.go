@@ -67,6 +67,7 @@ func main() {
 
 	// 组装认证依赖：repository -> code store -> sms/mail sender -> guard -> service -> handler。
 	repos := repository.NewUserRepository(db)
+	apps := repository.NewAppClientRepository(db) // 应用注册表：多应用独立登录（JWT aud）
 	codes := code.NewStore(code.Config{})
 	sender := newSender(cfg, zapLog)
 	mailer := newMailSender(cfg, zapLog)
@@ -76,7 +77,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	svc := service.New(repos, codes, sender, mailer, bruteGuard, service.Config{
+	svc := service.New(repos, apps, codes, sender, mailer, bruteGuard, service.Config{
 		JWTSecret: cfg.String("auth.jwt_secret", ""),
 		TokenTTL:  tokenTTL,
 		// 超级验证码双开关：配置显式开启 且 仅开发模式生效；生产强制禁用。

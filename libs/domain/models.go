@@ -27,6 +27,39 @@ type User struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// AppClient 应用（前端客户端）注册表：多应用共用用户体系的基础设施。
+//
+// 各独立域名应用在用户中心注册为唯一 client（OAuth2/OIDC 多客户端模型）：
+// 登录时前端携带 X-Client-Id，user-service 校验注册表后把 client_id 写入
+// JWT 的 aud claim，网关按路由前缀校验 aud 与应用匹配——应用间令牌不通用，
+// 登录状态互不共享。新应用接入仅需在注册表新增一条记录。
+type AppClient struct {
+	ID       uint64         `gorm:"primaryKey" json:"id"`
+	ClientID string         `gorm:"size:64;uniqueIndex" json:"client_id"` // 应用标识（JWT aud）
+	Name     string         `gorm:"size:64" json:"name"`                  // 展示名（如"错题本"）
+	// AllowedOrigins 允许的前端来源（逗号分隔，含协议，如 https://mistake.example.com）。
+	AllowedOrigins string      `gorm:"size:512" json:"allowed_origins"`
+	Status         string      `gorm:"size:16;default:enabled" json:"status"` // enabled / disabled
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// 应用状态常量。
+const (
+	AppStatusEnabled  = "enabled"
+	AppStatusDisabled = "disabled"
+)
+
+// DefaultAppClients 默认注册的应用：与现有前端/网关配置保持一致。
+// app-peak 为统一前端过渡期客户端（单 SPA 同时承载错题本与古诗文页面），
+// 前端按域名拆分后可分别使用 app-mistake / app-poetry 并收紧网关映射。
+var DefaultAppClients = []AppClient{
+	{ClientID: "app-mistake", Name: "错题本", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
+	{ClientID: "app-poetry", Name: "古诗文", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
+	{ClientID: "app-peak", Name: "统一前端（过渡）", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
+}
+
 // Question 题目（规范化后的题目本体，可被多道错题复用）。
 type Question struct {
 	ID              uint64         `gorm:"primaryKey" json:"id"`

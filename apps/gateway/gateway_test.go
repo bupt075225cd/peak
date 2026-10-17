@@ -47,7 +47,7 @@ func setupGateway(t *testing.T, cfgContent string) *gin.Engine {
 // issueTestToken 签发测试用 JWT。
 func issueTestToken(t *testing.T, userID uint64) string {
 	t.Helper()
-	tok, err := auth.Issue(userID, testJWTSecret, time.Hour)
+	tok, err := auth.Issue(userID, "", testJWTSecret, time.Hour)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
@@ -114,8 +114,9 @@ routes:
 
 func TestCORS(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, ""), logger.NewNop())
 	r := gin.New()
-	r.Use(corsMiddleware())
+	r.Use(gw.corsMiddleware())
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// 普通请求带 CORS 头。
@@ -207,6 +208,46 @@ func TestAuthMiddlewarePublicPaths(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/recognition/tasks/1", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for protected path, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewarePoetryPublic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, "auth:\n  jwt_secret: \""+testJWTSecret+"\"\n"), logger.NewNop())
+	r := gin.New()
+	r.Use(gw.authMiddleware())
+	r.GET("/api/poetry/pieces", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/poetry/pieces/3", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/poetry/pieces/3/related", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/poetry/stats/dynasties", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.POST("/api/poetry/chat", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// 诗歌只读 GET 接口无需令牌（浏览免登录）。
+	for _, path := range []string{
+		"/api/poetry/pieces",
+		"/api/poetry/pieces/3",
+		"/api/poetry/pieces/3/related",
+		"/api/poetry/stats/dynasties",
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("public poetry GET %s: expected 200, got %d", path, w.Code)
+		}
+	}
+
+	// chat 接口不在白名单，未登录仍需 401。
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/poetry/chat", strings.NewReader(`{"question":"q"}`)))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for poetry chat without token, got %d", w.Code)
+	}
+
+	// 携带有效令牌的 chat 请求放行。
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, requestWithToken(http.MethodPost, "/api/poetry/chat", issueTestToken(t, 1)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for poetry chat with token, got %d", w.Code)
 	}
 }
 
@@ -329,5 +370,113 @@ func TestProxyInvalidBackend(t *testing.T) {
 	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/bad/x", issueTestToken(t, 1)))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for invalid backend, got %d", w.Code)
+	}
+}
+
+// ── 多应用隔离（JWT aud）与 CORS 白名单 ──────────────────────────
+
+// audTestConfig 构造带受众映射的网关配置。
+func audTestConfig(extra string) string {
+	return `auth:
+  jwt_secret: "` + testJWTSecret + `"
+  audience_routes:
+    /api/mistakes: ["app-mistake"]
+    /api/poetry: ["app-poetry"]
+` + extra
+}
+
+func setupAudGateway(t *testing.T, extra string) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, audTestConfig(extra)), logger.NewNop())
+	r := gin.New()
+	r.Use(gw.authMiddleware())
+	r.GET("/api/mistakes", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.POST("/api/poetry/chat", func(c *gin.Context) { c.Status(http.StatusOK) })
+	return r
+}
+
+func TestAudienceMismatchRejected(t *testing.T) {
+	r := setupAudGateway(t, "")
+
+	// 错题本应用的令牌访问诗歌接口 → 403（应用间令牌不通用）。
+	tokenPoetry, _ := auth.Issue(1, "app-poetry", testJWTSecret, time.Hour)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/mistakes", tokenPoetry))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("audience mismatch: expected 403, got %d", w.Code)
+	}
+
+	// 匹配的受众 → 200。
+	tokenMistake, _ := auth.Issue(1, "app-mistake", testJWTSecret, time.Hour)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/mistakes", tokenMistake))
+	if w.Code != http.StatusOK {
+		t.Fatalf("audience match: expected 200, got %d", w.Code)
+	}
+}
+
+func TestLegacyTokenAllowedByDefault(t *testing.T) {
+	r := setupAudGateway(t, "")
+
+	// 无 aud 的历史令牌：默认兼容放行。
+	legacy, _ := auth.Issue(1, "", testJWTSecret, time.Hour)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, requestWithToken(http.MethodGet, "/api/mistakes", legacy))
+	if w.Code != http.StatusOK {
+		t.Fatalf("legacy token: expected 200, got %d", w.Code)
+	}
+
+	// 关闭兼容开关 → 401。
+	r2 := setupAudGateway(t, "  allow_legacy_tokens: false\n")
+	w2 := httptest.NewRecorder()
+	r2.ServeHTTP(w2, requestWithToken(http.MethodGet, "/api/mistakes", legacy))
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy token strict: expected 401, got %d", w2.Code)
+	}
+}
+
+func TestCORSOriginWhitelist(t *testing.T) {
+	content := `auth:
+  jwt_secret: "` + testJWTSecret + `"
+cors:
+  allowed_origins: ["https://mistake.example.com", "https://poetry.example.com"]
+`
+	gin.SetMode(gin.TestMode)
+	gw := NewGateway(mustLoad(t, content), logger.NewNop())
+	r := gin.New()
+	r.Use(gw.corsMiddleware())
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// 白名单内来源：回显具体 Origin 并携带 Vary: Origin。
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "https://mistake.example.com")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://mistake.example.com" {
+		t.Fatalf("allow origin = %q, want echoed origin", got)
+	}
+	if w.Header().Get("Vary") != "Origin" {
+		t.Fatal("expected Vary: Origin")
+	}
+
+	// 白名单外来源：不返回放行头。
+	req = httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("non-whitelisted origin should not be allowed, got %q", got)
+	}
+
+	// 未配置白名单：回退 *（本地开发态）。
+	gw2 := NewGateway(mustLoad(t, ""), logger.NewNop())
+	r2 := gin.New()
+	r2.Use(gw2.corsMiddleware())
+	r2.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+	w2 := httptest.NewRecorder()
+	r2.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/x", nil))
+	if got := w2.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("empty whitelist should fall back to *, got %q", got)
 	}
 }

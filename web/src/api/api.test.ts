@@ -25,6 +25,7 @@ import {
 } from './index'
 import { logout, TOKEN_KEY } from '../composables/useAuth'
 import { requestTraceparent } from '../monitor'
+import { CLIENT_ID } from '../config/client'
 
 // 模块加载时 api/index.ts 会调用 axios.create() 创建 http 实例，
 // 因此必须在 vi.mock 工厂里同步提供 create 的返回，确保加载即可用。
@@ -287,6 +288,12 @@ describe('api/index.ts 鉴权拦截器', () => {
     const config = { headers: {} as Record<string, string> }
     const res = authRequestInterceptor(config as never)
     expect((res.headers as Record<string, string>).Authorization).toBe('Bearer jwt-abc')
+  })
+
+  it('authRequestInterceptor 注入应用客户端标识 X-Client-Id', () => {
+    const config = { headers: {} as Record<string, string> }
+    const res = authRequestInterceptor(config as never)
+    expect((res.headers as Record<string, string>)['X-Client-Id']).toBe(CLIENT_ID)
   })
 
   it('authRequestInterceptor 未登录时不注入 Authorization', () => {

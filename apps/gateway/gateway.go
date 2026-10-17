@@ -26,6 +26,14 @@ type Gateway struct {
 	cfg    *config.Loader
 	log    *logger.Logger
 	routes map[string]string // 前缀 -> 后端地址
+
+	// 多应用隔离：路由前缀 -> 允许的 JWT aud（应用受众）列表。
+	// 令牌带 aud 且不在列表内 → 403；aud 为空按 allow_legacy_tokens 决定。
+	audienceRoutes map[string][]string
+	// CORS 允许的前端来源白名单（精确匹配 Origin）；为空时回退 *（开发态）。
+	corsOrigins []string
+	// allowLegacyTokens 是否放行无 aud 的历史令牌（默认 true，收紧前置为 false）。
+	allowLegacyTokens bool
 }
 
 // NewGateway 从配置构建网关路由表。
@@ -50,7 +58,45 @@ func NewGateway(cfg *config.Loader, log *logger.Logger) *Gateway {
 		routes["/api/categories"] = "http://localhost:8081"
 		routes["/api/poetry"] = "http://localhost:8084"
 	}
-	return &Gateway{cfg: cfg, log: log, routes: routes}
+	// 应用受众路由映射（auth.audience_routes.<prefix> = [client_id...]）。
+	audienceRoutes := map[string][]string{}
+	if v := cfg.Get("auth.audience_routes"); v != nil {
+		if m, ok := v.(map[string]any); ok {
+			for prefix, raw := range m {
+				if list, ok := raw.([]any); ok {
+					auds := make([]string, 0, len(list))
+					for _, a := range list {
+						if s, ok := a.(string); ok {
+							auds = append(auds, s)
+						}
+					}
+					audienceRoutes[prefix] = auds
+				}
+			}
+		}
+	}
+	// CORS 白名单（cors.allowed_origins = [origin...]），逗号分隔字符串或列表均可。
+	var corsOrigins []string
+	switch v := cfg.Get("cors.allowed_origins").(type) {
+	case []any:
+		for _, o := range v {
+			if s, ok := o.(string); ok && s != "" {
+				corsOrigins = append(corsOrigins, s)
+			}
+		}
+	case string:
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				corsOrigins = append(corsOrigins, s)
+			}
+		}
+	}
+	return &Gateway{
+		cfg: cfg, log: log, routes: routes,
+		audienceRoutes:    audienceRoutes,
+		corsOrigins:       corsOrigins,
+		allowLegacyTokens: cfg.Bool("auth.allow_legacy_tokens", true),
+	}
 }
 
 // RegisterRoutes 注册网关路由。
@@ -72,7 +118,7 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 	registerMonitorReport(engine, g.log.Logger)
 
 	// 跨域处理。
-	engine.Use(corsMiddleware())
+	engine.Use(g.corsMiddleware())
 
 	// 预留鉴权中间件（当前为透传，后续接入 user-service）。
 	engine.Use(g.authMiddleware())
@@ -96,10 +142,26 @@ var publicPrefixes = []string{
 	"/metrics",
 }
 
-// isPublicPath 判断路径是否在鉴权白名单内。
-func isPublicPath(path string) bool {
+// 按方法精确匹配的公开路由：诗歌只读接口对未登录访客开放（浏览免登录），
+// POST /api/poetry/chat（智能对话）不在其列，维持 JWT 保护。
+var publicMethodPrefixes = []struct {
+	method string
+	prefix string
+}{
+	{http.MethodGet, "/api/poetry/pieces"}, // 列表 / 详情 / 相关推荐
+	{http.MethodGet, "/api/poetry/stats/"}, // 朝代 / 册数 / 作者 / 字词统计
+}
+
+// isPublicPath 判断请求是否在鉴权白名单内：
+// 先按纯路径前缀（不限方法）匹配，再按「方法 + 路径前缀」精确匹配。
+func isPublicPath(method, path string) bool {
 	for _, p := range publicPrefixes {
 		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	for _, r := range publicMethodPrefixes {
+		if r.method == method && strings.HasPrefix(path, r.prefix) {
 			return true
 		}
 	}
@@ -109,6 +171,8 @@ func isPublicPath(path string) bool {
 
 // authMiddleware JWT 鉴权：校验 Authorization: Bearer，以真实 user_id
 // 覆盖 X-User-Id 透传给后端服务；白名单路径放行，其余未登录返回 401。
+// 多应用隔离：按路由前缀校验令牌 aud（应用受众）与应用匹配，应用间令牌
+// 不通用；aud 为空的历史令牌由 allow_legacy_tokens 开关决定放行策略。
 // 同时为所有请求注入 X-Real-IP（取网关侧 ClientIP），供后端限流使用——
 // 后端只信任网关注入值，外部直传的该头会在代理前被覆盖。
 func (g *Gateway) authMiddleware() gin.HandlerFunc {
@@ -117,10 +181,10 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 		// 客户端真实 IP：网关是唯一可信入口，覆盖外部传入的头。
 		c.Request.Header.Set("X-Real-IP", c.ClientIP())
 
-		if isPublicPath(c.Request.URL.Path) {
+		if isPublicPath(c.Request.Method, c.Request.URL.Path) {
 			// 已登录用户访问公开接口时仍解析身份（尽力而为，失败不阻断）。
 			if h := c.GetHeader("Authorization"); h != "" {
-				if uid, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret); err == nil {
+				if uid, _, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret); err == nil {
 					c.Set("user_id", uid)
 					c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
 				}
@@ -135,10 +199,17 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		uid, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret)
+		uid, aud, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret)
 		if err != nil || uid == 0 {
 			g.log.Warn("invalid token", zap.String("path", c.Request.URL.Path), zap.Error(err))
 			httpx.Fail(c, bizerr.New(bizerr.CodeUnauthorized, "未登录或令牌已过期"))
+			c.Abort()
+			return
+		}
+		// 应用受众校验：令牌声明的应用必须与路由允许的应用匹配（应用间令牌不通用）。
+		if err := g.checkAudience(c.Request.URL.Path, aud); err != nil {
+			g.log.Warn("audience mismatch", zap.String("path", c.Request.URL.Path), zap.String("aud", aud))
+			httpx.Fail(c, err)
 			c.Abort()
 			return
 		}
@@ -147,6 +218,43 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 		c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
 		c.Next()
 	}
+}
+
+// checkAudience 校验令牌 aud 与路由前缀允许的应用受众是否匹配：
+// - 路由未配置受众约束 → 放行；
+// - 令牌带 aud 且在允许列表 → 放行；
+// - 令牌带 aud 但不匹配 → 拒绝（应用间不可互用令牌）；
+// - 令牌无 aud（历史令牌）→ 由 allow_legacy_tokens 开关决定。
+func (g *Gateway) checkAudience(path, aud string) error {
+	allowed, ok := g.matchAudienceRoute(path)
+	if !ok {
+		return nil
+	}
+	if aud != "" {
+		for _, a := range allowed {
+			if a == aud {
+				return nil
+			}
+		}
+		return bizerr.New(bizerr.CodeForbidden, "令牌不属于当前应用")
+	}
+	if g.allowLegacyTokens {
+		return nil
+	}
+	return bizerr.New(bizerr.CodeUnauthorized, "令牌缺少应用受众，请重新登录")
+}
+
+// matchAudienceRoute 按最长前缀匹配路由受众配置。
+func (g *Gateway) matchAudienceRoute(path string) ([]string, bool) {
+	best := ""
+	var allowed []string
+	ok := false
+	for prefix, auds := range g.audienceRoutes {
+		if strings.HasPrefix(path, prefix) && len(prefix) > len(best) {
+			best, allowed, ok = prefix, auds, true
+		}
+	}
+	return allowed, ok
 }
 
 // proxy 为指定前缀创建反向代理，转发时透传 traceID。
@@ -211,12 +319,33 @@ func isHex32(s string) bool {
 	return err == nil
 }
 
-// corsMiddleware 跨域处理（开发阶段全放开，生产通过配置收紧）。
-func corsMiddleware() gin.HandlerFunc {
+// corsMiddleware 跨域处理：独立域名多应用模型下按前端来源白名单放行
+// （cors.allowed_origins，精确匹配 Origin 并回显 + Vary: Origin）；
+// 未配置白名单时回退 *（本地开发态），上线必须显式配置。
+func (g *Gateway) corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := c.GetHeader("Origin")
+		allowAll := len(g.corsOrigins) == 0
+		allowed := allowAll
+		if !allowAll && origin != "" {
+			for _, o := range g.corsOrigins {
+				if o == origin {
+					allowed = true
+					break
+				}
+			}
+		}
+		if allowed {
+			if allowAll || origin == "" {
+				c.Header("Access-Control-Allow-Origin", "*")
+			} else {
+				// 白名单模式：回显具体来源，并提示缓存按 Origin 区分。
+				c.Header("Access-Control-Allow-Origin", origin)
+				c.Header("Vary", "Origin")
+			}
+		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-Id, X-User-Id, traceparent, tracestate")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-Id, X-User-Id, X-Client-Id, traceparent, tracestate")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

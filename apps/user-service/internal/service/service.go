@@ -58,6 +58,7 @@ type Config struct {
 // Service 认证服务。
 type Service struct {
 	repos     repository.UserRepository
+	apps      repository.AppClientRepository
 	codes     *code.Store
 	sender    sms.Sender
 	mailer    mail.Sender
@@ -67,8 +68,8 @@ type Service struct {
 }
 
 // New 创建认证服务。
-func New(repos repository.UserRepository, codes *code.Store, sender sms.Sender, mailer mail.Sender, g *guard.Guard, cfg Config) *Service {
-	return &Service{repos: repos, codes: codes, sender: sender, mailer: mailer, guard: g, cfg: cfg, now: time.Now}
+func New(repos repository.UserRepository, apps repository.AppClientRepository, codes *code.Store, sender sms.Sender, mailer mail.Sender, g *guard.Guard, cfg Config) *Service {
+	return &Service{repos: repos, apps: apps, codes: codes, sender: sender, mailer: mailer, guard: g, cfg: cfg, now: time.Now}
 }
 
 // log 获取日志器，未注入时静默。
@@ -77,6 +78,29 @@ func (s *Service) log() *zap.Logger {
 		return zap.NewNop()
 	}
 	return s.cfg.Log
+}
+
+// resolveAudience 校验登录发起方应用（X-Client-Id），返回 JWT 的 aud（应用受众）。
+//
+// 多应用共用用户体系、各自独立登录：应用必须在注册表注册且为启用态，
+// 校验通过后以 client_id 作为 JWT aud，网关按路由前缀校验应用匹配，
+// 应用间令牌不通用。clientID 为空表示调用方未声明应用（历史客户端/内部
+// 调试），返回空 aud，由网关侧兼容开关决定放行策略。
+func (s *Service) resolveAudience(ctx context.Context, clientID string) (string, error) {
+	if clientID == "" {
+		return "", nil
+	}
+	app, err := s.apps.GetByClientID(ctx, clientID)
+	if err != nil {
+		if isNotFound(err) {
+			return "", errors.New(errors.CodeUnauthorized, "未注册的应用客户端")
+		}
+		return "", errors.Wrap(errors.CodeInternal, "查询应用注册表失败", err)
+	}
+	if app.Status != domain.AppStatusEnabled {
+		return "", errors.New(errors.CodeUnauthorized, "应用客户端已被停用")
+	}
+	return app.ClientID, nil
 }
 
 // checkGuard 密码类认证的防爆破前置检查：账号锁定或 IP 超限均返回 429 语义。
@@ -144,7 +168,8 @@ type LoginResult struct {
 
 // SmsLogin 验证码登录：校验凭证 → 校验验证码 → 查/建用户 → 签发 JWT。
 // 未注册手机号自动注册（Account=手机号），中学生用户无需单独注册步骤。
-func (s *Service) SmsLogin(ctx context.Context, phone, codeStr, ticket, ip string) (*LoginResult, error) {
+// clientID 为登录发起方应用（X-Client-Id），签发的 JWT 携带 aud 实现应用间隔离。
+func (s *Service) SmsLogin(ctx context.Context, phone, codeStr, ticket, clientID, ip string) (*LoginResult, error) {
 	if !phoneRe.MatchString(phone) {
 		return nil, errors.New(errors.CodeInvalidArgument, "手机号格式不正确")
 	}
@@ -173,8 +198,12 @@ func (s *Service) SmsLogin(ctx context.Context, phone, codeStr, ticket, ip strin
 		return nil, errors.Wrap(errors.CodeInternal, "查询用户失败", err)
 	}
 
+	aud, err := s.resolveAudience(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
 
-	token, err := auth.Issue(user.ID, s.cfg.JWTSecret, s.cfg.TokenTTL)
+	token, err := auth.Issue(user.ID, aud, s.cfg.JWTSecret, s.cfg.TokenTTL)
 	if err != nil {
 		return nil, errors.Wrap(errors.CodeInternal, "签发令牌失败", err)
 	}
@@ -264,7 +293,8 @@ func (s *Service) SendEmailCode(ctx context.Context, email, purpose, ip string) 
 
 // EmailRegister 邮箱+密码注册：校验 → 消费注册验证码 → 建 User（Account=邮箱，
 // EmailVerified=true）→ 签发 JWT。注册成功即登录态。
-func (s *Service) EmailRegister(ctx context.Context, email, password, codeStr, ip string) (*LoginResult, error) {
+// clientID 为登录发起方应用（X-Client-Id），签发的 JWT 携带 aud 实现应用间隔离。
+func (s *Service) EmailRegister(ctx context.Context, email, password, codeStr, clientID, ip string) (*LoginResult, error) {
 	if !emailRe.MatchString(email) {
 		return nil, errors.New(errors.CodeInvalidArgument, "邮箱格式不正确")
 	}
@@ -300,7 +330,11 @@ func (s *Service) EmailRegister(ctx context.Context, email, password, codeStr, i
 		return nil, errors.Wrap(errors.CodeInternal, "创建用户失败", err)
 	}
 
-	token, err := auth.Issue(user.ID, s.cfg.JWTSecret, s.cfg.TokenTTL)
+	aud, err := s.resolveAudience(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := auth.Issue(user.ID, aud, s.cfg.JWTSecret, s.cfg.TokenTTL)
 	if err != nil {
 		return nil, errors.Wrap(errors.CodeInternal, "签发令牌失败", err)
 	}
@@ -313,7 +347,8 @@ var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("peak-timing-equalizer"), 
 // PasswordLogin 密码登录：账号可为手机号或邮箱（与验证码登录并存）。
 // 统一返回"账号或密码不正确"，不区分账号不存在与密码错误；
 // 前置防爆破检查（账号锁定/IP 限频），失败累计锁定并记录结构化日志。
-func (s *Service) PasswordLogin(ctx context.Context, account, password, ip string) (*LoginResult, error) {
+// clientID 为登录发起方应用（X-Client-Id），签发的 JWT 携带 aud 实现应用间隔离。
+func (s *Service) PasswordLogin(ctx context.Context, account, password, clientID, ip string) (*LoginResult, error) {
 	account = strings.TrimSpace(account)
 	if err := s.checkGuard(account, ip); err != nil {
 		return nil, err
@@ -345,7 +380,11 @@ func (s *Service) PasswordLogin(ctx context.Context, account, password, ip strin
 	}
 
 	s.recordAuthSuccess("password_login", account, ip)
-	token, err := auth.Issue(user.ID, s.cfg.JWTSecret, s.cfg.TokenTTL)
+	aud, err := s.resolveAudience(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := auth.Issue(user.ID, aud, s.cfg.JWTSecret, s.cfg.TokenTTL)
 	if err != nil {
 		return nil, errors.Wrap(errors.CodeInternal, "签发令牌失败", err)
 	}

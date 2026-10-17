@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { TOKEN_KEY, logout } from '../composables/useAuth'
 import { requestTraceparent } from '../monitor'
+import { CLIENT_ID } from '../config/client'
 
 // 导出共享 axios 实例：同目录的领域模块（如 poetry.ts）复用拦截器与 baseURL。
 export const http = axios.create({
@@ -8,8 +9,10 @@ export const http = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：注入 Bearer 令牌与 W3C traceparent；用户身份由网关校验
-// JWT 后注入，前端不再直接携带 X-User-Id。
+// 请求拦截器：注入 Bearer 令牌、应用客户端标识与 W3C traceparent；用户身份由
+// 网关校验 JWT 后注入，前端不再直接携带 X-User-Id。
+// X-Client-Id 声明登录发起方应用：JWT 的 aud（应用受众）由该标识决定，
+// 网关按路由前缀校验应用匹配，多应用间令牌不通用。
 // traceparent 使每个 API 请求在前端事件与后端链路间共用同一 Trace ID：
 // 前端报"接口慢"时，可直接用该 ID 在 Tempo 中下钻后端 SQL/第三方调用耗时。
 export function authRequestInterceptor(config: import('axios').InternalAxiosRequestConfig) {
@@ -17,6 +20,7 @@ export function authRequestInterceptor(config: import('axios').InternalAxiosRequ
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  config.headers['X-Client-Id'] = CLIENT_ID
   try {
     config.headers.traceparent = requestTraceparent()
   } catch {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, LogIn, ArrowLeft, Loader2, Smartphone, ShieldCheck,
   KeyRound, Mail, Lock, Eye, EyeOff,
@@ -10,7 +10,16 @@ import { useAuth } from '../composables/useAuth'
 import { SMS_LOGIN_ENABLED } from '../config/features'
 
 const router = useRouter()
+const route = useRoute()
 const { login } = useAuth()
+
+// 登录成功后的回跳目标：来自 redirect 查询参数。
+// 仅接受站内绝对路径（以单个 / 开头），防止开放重定向。
+const redirectTarget = computed(() => {
+  const r = route.query.redirect
+  if (typeof r === 'string' && r.startsWith('/') && !r.startsWith('//')) return r
+  return '/home'
+})
 
 // 登录方式：sms（验证码）/ password（账号密码），Tab 切换。
 // 短信服务未接入时（SMS_LOGIN_ENABLED=false）隐藏验证码登录，默认密码登录。
@@ -73,7 +82,7 @@ async function handleSmsLogin() {
   try {
     const res = await smsLogin(phone.value.trim(), code.value.trim(), ticket.value)
     login(res.token)
-    router.push('/home')
+    router.push(redirectTarget.value)
   } catch (err) {
     errorMsg.value = extractError(err, '登录失败，请稍后重试')
   } finally {
@@ -89,7 +98,7 @@ async function handlePasswordLogin() {
   try {
     const res = await passwordLogin(account.value.trim(), password.value)
     login(res.token)
-    router.push('/home')
+    router.push(redirectTarget.value)
   } catch (err) {
     errorMsg.value = extractError(err, '登录失败，请稍后重试')
   } finally {

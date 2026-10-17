@@ -76,13 +76,19 @@ type smsLoginRequest struct {
 	Ticket string `json:"ticket" binding:"required"`
 }
 
+// clientID 取登录发起方应用标识：前端 axios 拦截器统一注入 X-Client-Id
+// （多应用共用用户体系、各自独立登录，JWT 的 aud 由该标识决定）。
+func clientID(c *gin.Context) string {
+	return c.GetHeader("X-Client-Id")
+}
+
 // smsLogin POST /api/users/auth/sms/login
 func (h *Handler) smsLogin(c *gin.Context) {
 	var req smsLoginRequest
 	if !bindJSON(c, &req) {
 		return
 	}
-	res, err := h.svc.SmsLogin(c.Request.Context(), req.Phone, req.Code, req.Ticket, clientIP(c))
+	res, err := h.svc.SmsLogin(c.Request.Context(), req.Phone, req.Code, req.Ticket, clientID(c), clientIP(c))
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -126,7 +132,7 @@ func (h *Handler) emailRegister(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	res, err := h.svc.EmailRegister(c.Request.Context(), req.Email, req.Password, req.Code, clientIP(c))
+	res, err := h.svc.EmailRegister(c.Request.Context(), req.Email, req.Password, req.Code, clientID(c), clientIP(c))
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -146,7 +152,7 @@ func (h *Handler) passwordLogin(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	res, err := h.svc.PasswordLogin(c.Request.Context(), req.Account, req.Password, clientIP(c))
+	res, err := h.svc.PasswordLogin(c.Request.Context(), req.Account, req.Password, clientID(c), clientIP(c))
 	if err != nil {
 		httpx.Fail(c, err)
 		return

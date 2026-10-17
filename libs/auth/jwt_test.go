@@ -11,22 +11,25 @@ import (
 const testSecret = "test-secret"
 
 func TestJWTRoundtrip(t *testing.T) {
-	token, err := Issue(42, testSecret, time.Hour)
+	token, err := Issue(42, "", testSecret, time.Hour)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	uid, err := Parse(token, testSecret)
+	uid, aud, err := Parse(token, testSecret)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if uid != 42 {
 		t.Fatalf("uid = %d, want 42", uid)
 	}
+	if aud != "" {
+		t.Fatalf("aud = %q, want empty", aud)
+	}
 }
 
 func TestJWTRoundtripLargeUID(t *testing.T) {
-	token, _ := Issue(1<<40, testSecret, time.Hour)
-	uid, err := Parse(token, testSecret)
+	token, _ := Issue(1<<40, "", testSecret, time.Hour)
+	uid, _, err := Parse(token, testSecret)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -35,30 +38,55 @@ func TestJWTRoundtripLargeUID(t *testing.T) {
 	}
 }
 
+func TestJWTRoundtripWithAudience(t *testing.T) {
+	// 按应用签发：aud 应完整保留在令牌中。
+	token, err := Issue(7, "app-poetry", testSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	uid, aud, err := Parse(token, testSecret)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if uid != 7 || aud != "app-poetry" {
+		t.Fatalf("uid = %d, aud = %q, want 7/app-poetry", uid, aud)
+	}
+}
+
 func TestJWTWrongSecret(t *testing.T) {
-	token, _ := Issue(42, testSecret, time.Hour)
-	if _, err := Parse(token, "other-secret"); err == nil {
+	token, _ := Issue(42, "", testSecret, time.Hour)
+	if _, _, err := Parse(token, "other-secret"); err == nil {
 		t.Fatal("parse with wrong secret should fail")
 	}
 }
 
 func TestJWTExpired(t *testing.T) {
-	token, _ := Issue(42, testSecret, -time.Minute)
-	if _, err := Parse(token, testSecret); err == nil {
+	token, _ := Issue(42, "", testSecret, -time.Minute)
+	if _, _, err := Parse(token, testSecret); err == nil {
 		t.Fatal("parse expired token should fail")
 	}
 }
 
 func TestJWTTampered(t *testing.T) {
-	token, _ := Issue(42, testSecret, time.Hour)
-	if _, err := Parse(token+"x", testSecret); err == nil {
+	token, _ := Issue(42, "", testSecret, time.Hour)
+	if _, _, err := Parse(token+"x", testSecret); err == nil {
 		t.Fatal("parse tampered token should fail")
 	}
 }
 
 func TestJWTParseGarbage(t *testing.T) {
-	if _, err := Parse("garbage", testSecret); err == nil {
+	if _, _, err := Parse("garbage", testSecret); err == nil {
 		t.Fatal("parse garbage should fail")
+	}
+}
+
+func TestJWTUnusedAudienceNotShared(t *testing.T) {
+	// 令牌签名覆盖 aud：为应用 A 签发的令牌无法被改写为应用 B 的受众。
+	tokenA, _ := Issue(7, "app-a", testSecret, time.Hour)
+	// 同一令牌在合法签名下 aud 固定为 app-a，不可篡改（签名校验兜底）。
+	_, aud, err := Parse(tokenA, testSecret)
+	if err != nil || aud != "app-a" {
+		t.Fatalf("aud = %q, err = %v, want app-a", aud, err)
 	}
 }
 
@@ -75,20 +103,26 @@ func makeTokenWithClaims(t *testing.T, claims jwt.MapClaims) string {
 func TestParseUnusualClaims(t *testing.T) {
 	// user_id 为字符串（非常规但应兼容）。
 	tok := makeTokenWithClaims(t, jwt.MapClaims{"user_id": "7", "exp": time.Now().Add(time.Hour).Unix()})
-	if uid, err := Parse(tok, testSecret); err != nil || uid != 7 {
+	if uid, _, err := Parse(tok, testSecret); err != nil || uid != 7 {
 		t.Fatalf("string claim: uid = %d, err = %v", uid, err)
 	}
 
 	// 缺少 user_id claim。
 	tok = makeTokenWithClaims(t, jwt.MapClaims{"exp": time.Now().Add(time.Hour).Unix()})
-	if _, err := Parse(tok, testSecret); err == nil {
+	if _, _, err := Parse(tok, testSecret); err == nil {
 		t.Fatal("missing user_id claim should fail")
 	}
 
 	// user_id 类型非法。
 	tok = makeTokenWithClaims(t, jwt.MapClaims{"user_id": true, "exp": time.Now().Add(time.Hour).Unix()})
-	if _, err := Parse(tok, testSecret); err == nil {
+	if _, _, err := Parse(tok, testSecret); err == nil {
 		t.Fatal("invalid user_id claim type should fail")
+	}
+
+	// aud 为非字符串类型：忽略该 claim（返回空 aud）。
+	tok = makeTokenWithClaims(t, jwt.MapClaims{"user_id": 1, "aud": 42, "exp": time.Now().Add(time.Hour).Unix()})
+	if uid, aud, err := Parse(tok, testSecret); err != nil || uid != 1 || aud != "" {
+		t.Fatalf("non-string aud: uid = %d, aud = %q, err = %v", uid, aud, err)
 	}
 
 	// 非预期签名算法。
@@ -96,10 +130,7 @@ func TestParseUnusualClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("make none token: %v", err)
 	}
-	if _, err := Parse(noneTok, testSecret); err == nil {
-		t.Fatal("none signing method should be rejected")
-	}
-	if _, err := Parse(tok, testSecret); err == nil {
+	if _, _, err := Parse(noneTok, testSecret); err == nil {
 		t.Fatal("none signing method should be rejected")
 	}
 }

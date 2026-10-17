@@ -27,6 +27,7 @@ function buildRouter() {
       { path: '/login', name: 'login', component: { template: '<div>login-page</div>' } },
       { path: '/entry', name: 'entry', component: { template: '<div>entry-page</div>' } },
       { path: '/list', name: 'list', component: { template: '<div>list-page</div>' } },
+      { path: '/poetry', name: 'poetry-dashboard', component: { template: '<div>poetry-page</div>' } },
     ],
   })
 }
@@ -60,6 +61,15 @@ describe('App.vue（未登录）', () => {
     expect(wrapper.text()).not.toContain('录入错题')
     expect(wrapper.find('[data-test="user-menu-trigger"]').exists()).toBe(false)
   })
+
+  it('未登录时导航不展示「古诗文」入口（独立应用，不在错题本内嵌入）', async () => {
+    const router = buildRouter()
+    router.push('/login')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [router] } })
+    expect(wrapper.find('[data-test="nav-poetry"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('古诗文')
+  })
 })
 
 describe('App.vue（已登录）', () => {
@@ -75,6 +85,12 @@ describe('App.vue（已登录）', () => {
 
   beforeEach(() => {
     httpMethods.get.mockResolvedValue(ok({ id: 1, account: '13800001234', phone: '13800001234', name: '小明同学' }))
+  })
+
+  it('已登录时导航也不含「古诗文」入口', async () => {
+    const { wrapper } = await mountLoggedIn()
+    await flushPromises()
+    expect(wrapper.find('[data-test="nav-poetry"]').exists()).toBe(false)
   })
 
   it('渲染 RouterView 内容', async () => {
