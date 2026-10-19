@@ -293,6 +293,8 @@ export interface Question {
 export interface ReviewRecord {
   reviewed_at: string // 复习时间
   result: string // 复习结果
+  /** 本次重做仍出错的原因，结果为「正确」时为空。 */
+  wrong_reason?: string
 }
 
 // 错题（含关联题目）。

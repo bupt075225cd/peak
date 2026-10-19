@@ -617,7 +617,7 @@ describe('MistakeList.vue 编辑错题', () => {
         ...mockMistakes[0],
         wrong_reason: '概念不清',
         source: '期中考试',
-        review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误' }],
+        review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误', wrong_reason: '仍混淆公式' }],
       }),
     )
 
@@ -634,6 +634,8 @@ describe('MistakeList.vue 编辑错题', () => {
     await flushPromises()
     await wrapper.find('input[type="date"]').setValue('2026-09-20')
     await wrapper.find('[aria-label="第 1 条重做结果"]').setValue('错误')
+    // 结果不是「正确」时出现原因输入框，选填，可填写本次仍出错的原因。
+    await wrapper.find('[aria-label="第 1 条重做错误原因"]').setValue('仍混淆公式')
 
     await buttonByText(wrapper, '保存').trigger('click')
     await flushPromises()
@@ -644,12 +646,48 @@ describe('MistakeList.vue 编辑错题', () => {
       question_id: 10,
       wrong_reason: '概念不清',
       source: '期中考试',
-      review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误' }],
+      review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '错误', wrong_reason: '仍混淆公式' }],
       recorded_at: '2026-08-10T00:00:00Z',
     })
     // 弹窗关闭，列表条目用新来源原地更新。
     expect(wrapper.text()).not.toContain('编辑错题')
     expect(wrapper.text()).toContain('来源：期中考试')
+  })
+
+  it('重做结果为「正确」时不展示原因输入框，原因提交为空', async () => {
+    httpMethods.put.mockResolvedValueOnce(
+      ok({
+        ...mockMistakes[0],
+        source: '期中考试',
+        review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '正确', wrong_reason: '' }],
+      }),
+    )
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    await openMenuAndClick(wrapper, '编辑')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="edit-source-input"]').setValue('期中考试')
+
+    await buttonByText(wrapper, '添加记录').trigger('click')
+    await flushPromises()
+    await wrapper.find('input[type="date"]').setValue('2026-09-20')
+    await wrapper.find('[aria-label="第 1 条重做结果"]').setValue('错误')
+    const reasonInput = wrapper.find('[aria-label="第 1 条重做错误原因"]')
+    expect(reasonInput.exists()).toBe(true)
+
+    // 改回「正确」后原因输入框隐藏，提交时原因置空。
+    await wrapper.find('[aria-label="第 1 条重做结果"]').setValue('正确')
+    expect(wrapper.find('[aria-label="第 1 条重做错误原因"]').exists()).toBe(false)
+
+    await buttonByText(wrapper, '保存').trigger('click')
+    await flushPromises()
+
+    expect(httpMethods.put).toHaveBeenCalledWith('/mistakes/1', expect.objectContaining({
+      review_records: [{ reviewed_at: '2026-09-20T00:00:00Z', result: '正确', wrong_reason: '' }],
+    }))
   })
 
   it('取消编辑不提交更新', async () => {

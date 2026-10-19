@@ -14,17 +14,17 @@ import (
 // NULL——MySQL/SQLite 的唯一索引允许多个 NULL，两类账号互不冲突；
 // PasswordHash 为空表示未设置密码（仅验证码登录）。
 type User struct {
-	ID        uint64         `gorm:"primaryKey" json:"id"`
-	Account   string         `gorm:"size:64;uniqueIndex" json:"account"`
-	Phone     *string        `gorm:"size:16;uniqueIndex" json:"phone"`
-	Email     *string        `gorm:"size:128;uniqueIndex" json:"email"`
-	Name      string         `gorm:"size:64" json:"name"`
+	ID      uint64  `gorm:"primaryKey" json:"id"`
+	Account string  `gorm:"size:64;uniqueIndex" json:"account"`
+	Phone   *string `gorm:"size:16;uniqueIndex" json:"phone"`
+	Email   *string `gorm:"size:128;uniqueIndex" json:"email"`
+	Name    string  `gorm:"size:64" json:"name"`
 	// PasswordHash bcrypt 哈希，不对外序列化；空串表示未设置密码（仅验证码登录）。
-	PasswordHash string        `gorm:"size:128" json:"-"`
-	EmailVerified bool         `gorm:"default:false" json:"email_verified"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	PasswordHash  string         `gorm:"size:128" json:"-"`
+	EmailVerified bool           `gorm:"default:false" json:"email_verified"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // AppClient 应用（前端客户端）注册表：多应用共用用户体系的基础设施。
@@ -34,14 +34,14 @@ type User struct {
 // JWT 的 aud claim，网关按路由前缀校验 aud 与应用匹配——应用间令牌不通用，
 // 登录状态互不共享。新应用接入仅需在注册表新增一条记录。
 type AppClient struct {
-	ID       uint64         `gorm:"primaryKey" json:"id"`
-	ClientID string         `gorm:"size:64;uniqueIndex" json:"client_id"` // 应用标识（JWT aud）
-	Name     string         `gorm:"size:64" json:"name"`                  // 展示名（如"错题本"）
+	ID       uint64 `gorm:"primaryKey" json:"id"`
+	ClientID string `gorm:"size:64;uniqueIndex" json:"client_id"` // 应用标识（JWT aud）
+	Name     string `gorm:"size:64" json:"name"`                  // 展示名（如"错题本"）
 	// AllowedOrigins 允许的前端来源（逗号分隔，含协议，如 https://mistake.example.com）。
-	AllowedOrigins string      `gorm:"size:512" json:"allowed_origins"`
-	Status         string      `gorm:"size:16;default:enabled" json:"status"` // enabled / disabled
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	AllowedOrigins string         `gorm:"size:512" json:"allowed_origins"`
+	Status         string         `gorm:"size:16;default:enabled" json:"status"` // enabled / disabled
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
@@ -62,14 +62,14 @@ var DefaultAppClients = []AppClient{
 
 // Question 题目（规范化后的题目本体，可被多道错题复用）。
 type Question struct {
-	ID              uint64         `gorm:"primaryKey" json:"id"`
-	Subject         string         `gorm:"size:32;index" json:"subject"`
-	Grade           string         `gorm:"size:32;index" json:"grade"` // 年级，如"七年级上"
-	StemText        string         `gorm:"type:text" json:"stem_text"`
-	Answer          string         `gorm:"type:text" json:"answer"`
-	Analysis        string         `gorm:"type:text" json:"analysis"`
-	QuestionType    string         `gorm:"size:32" json:"question_type"`      // 选择/填空/解答
-	Image           string         `gorm:"type:json" json:"image"`            // 图片引用（image key 列表，含几何图与其它科目插图）
+	ID           uint64 `gorm:"primaryKey" json:"id"`
+	Subject      string `gorm:"size:32;index" json:"subject"`
+	Grade        string `gorm:"size:32;index" json:"grade"` // 年级，如"七年级上"
+	StemText     string `gorm:"type:text" json:"stem_text"`
+	Answer       string `gorm:"type:text" json:"answer"`
+	Analysis     string `gorm:"type:text" json:"analysis"`
+	QuestionType string `gorm:"size:32" json:"question_type"` // 选择/填空/解答
+	Image        string `gorm:"type:json" json:"image"`       // 图片引用（image key 列表，含几何图与其它科目插图）
 	// KnowledgePoints 可空指针：MySQL 的 JSON 列不接受空字符串，未设置时存 NULL。
 	KnowledgePoints *string        `gorm:"type:json" json:"knowledge_points"` // 知识点标签数组
 	Source          string         `gorm:"size:128" json:"source"`            // 题目来源（试卷/练习册等）
@@ -82,8 +82,9 @@ type Question struct {
 
 // ReviewRecord 单条复习记录。
 type ReviewRecord struct {
-	ReviewedAt time.Time `json:"reviewed_at"` // 复习时间
-	Result     string    `json:"result"`      // 复习结果
+	ReviewedAt  time.Time `json:"reviewed_at"`            // 复习时间
+	Result      string    `json:"result"`                 // 复习结果
+	WrongReason string    `json:"wrong_reason,omitempty"` // 本次重做仍出错的原因（结果为「正确」时为空）
 }
 
 // Mistake 错题（用户维度对某道题的错题记录）。
@@ -139,12 +140,12 @@ type QuestionCategory struct {
 
 // RecognitionTask 识别任务（异步状态机）。
 type RecognitionTask struct {
-	ID           uint64         `gorm:"primaryKey" json:"id"`
-	UserID       uint64         `gorm:"index" json:"user_id"` // 归属用户（网关注入 X-User-Id）
-	ImageID      uint64         `gorm:"index" json:"image_id"`
-	Status       string         `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
-	Progress     int            `gorm:"default:0" json:"progress"`     // 0-100
-	ProgressText string         `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
+	ID           uint64 `gorm:"primaryKey" json:"id"`
+	UserID       uint64 `gorm:"index" json:"user_id"` // 归属用户（网关注入 X-User-Id）
+	ImageID      uint64 `gorm:"index" json:"image_id"`
+	Status       string `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
+	Progress     int    `gorm:"default:0" json:"progress"`     // 0-100
+	ProgressText string `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
 	// ResultJSON 识别结果（JSON 列）。指针类型：任务创建时为 NULL——MySQL 的 JSON 列
 	// 不接受空字符串，且前端以 falsy 判断"结果未就绪"。
 	ResultJSON   *string        `gorm:"type:json" json:"result_json"`
@@ -164,10 +165,10 @@ type Poem struct {
 	Dynasty      string         `gorm:"size:32;uniqueIndex:idx_poems_title_dynasty" json:"dynasty"`
 	DynastyOrder int            `gorm:"index" json:"dynasty_order"` // 朝代序号（先秦=0 → 清=9），用于时间轴排序
 	Author       string         `gorm:"size:128;index" json:"author"`
-	Volume       string         `gorm:"size:64;index" json:"volume"`     // 册数，如"八年级下册"
-	Category     string         `gorm:"size:16;index" json:"category"`   // 课内 / 课外（旧版未收录篇目为空）
-	Content      string         `gorm:"type:text" json:"content"`        // 正文（段落以换行分隔）
-	WordCount    int            `json:"word_count"`                      // 正文汉字数（去标点空白）
+	Volume       string         `gorm:"size:64;index" json:"volume"`   // 册数，如"八年级下册"
+	Category     string         `gorm:"size:16;index" json:"category"` // 课内 / 课外（旧版未收录篇目为空）
+	Content      string         `gorm:"type:text" json:"content"`      // 正文（段落以换行分隔）
+	WordCount    int            `json:"word_count"`                    // 正文汉字数（去标点空白）
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`

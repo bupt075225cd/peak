@@ -20,12 +20,17 @@ const emit = defineEmits<{
 // 表单状态：编辑期间不改动原记录，保存成功后再回写列表。
 const wrongReason = ref('')
 const source = ref('')
-const records = ref<{ reviewed_at: string; result: string }[]>([])
+const records = ref<{ reviewed_at: string; result: string; wrong_reason: string }[]>([])
 const saving = ref(false)
 const errorMsg = ref('')
 
 // 重做结果固定选项：统一口径便于统计，避免自由输入出现同义不同写法。
 const RESULT_OPTIONS = ['正确', '部分正确', '错误']
+
+// 结果为「正确」时不记录原因；其余结果（含历史自由文本）可补充本次仍出错的原因。
+function showRecordReason(result: string): boolean {
+  return !!result && result !== '正确'
+}
 
 // 历史数据可能存有旧的自由文本结果，把它作为额外选项保留，避免编辑时被覆盖丢失。
 function resultOptions(current: string): string[] {
@@ -42,6 +47,7 @@ watch(
     records.value = (m.review_records ?? []).map((r) => ({
       reviewed_at: toDateInput(r.reviewed_at),
       result: r.result ?? '',
+      wrong_reason: r.wrong_reason ?? '',
     }))
     saving.value = false
     errorMsg.value = ''
@@ -64,7 +70,7 @@ function todayInput(): string {
 }
 
 function addRecord() {
-  records.value.push({ reviewed_at: todayInput(), result: '' })
+  records.value.push({ reviewed_at: todayInput(), result: '', wrong_reason: '' })
 }
 
 function removeRecord(index: number) {
@@ -85,9 +91,14 @@ async function handleSave() {
   }
 
   // 未填日期的空行不提交（可能只是点了「添加记录」还没填）。
+  // 结果为「正确」的记录原因置空；其余结果保留填写的原因（选填）。
   const reviewRecords: ReviewRecord[] = records.value
     .filter((r) => r.reviewed_at)
-    .map((r) => ({ reviewed_at: toRFC3339(r.reviewed_at), result: r.result.trim() }))
+    .map((r) => ({
+      reviewed_at: toRFC3339(r.reviewed_at),
+      result: r.result.trim(),
+      wrong_reason: r.result === '正确' ? '' : r.wrong_reason.trim(),
+    }))
 
   saving.value = true
   try {
@@ -197,29 +208,41 @@ function onKey(e: KeyboardEvent) {
               <div
                 v-for="(rec, i) in records"
                 :key="i"
-                class="flex items-center gap-2"
+                class="space-y-1.5"
               >
+                <div class="flex items-center gap-2">
+                  <input
+                    v-model="rec.reviewed_at"
+                    type="date"
+                    class="w-36 shrink-0 rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <select
+                    v-model="rec.result"
+                    class="flex-1 min-w-0 rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
+                    :aria-label="`第 ${i + 1} 条重做结果`"
+                  >
+                    <option disabled value="">请选择结果</option>
+                    <option v-for="opt in resultOptions(rec.result)" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                  <button
+                    type="button"
+                    class="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg text-ink-faint hover:bg-red-50 hover:text-red-500 transition-colors"
+                    :title="`删除第 ${i + 1} 条重做记录`"
+                    @click="removeRecord(i)"
+                  >
+                    <Trash2 class="w-4 h-4" />
+                  </button>
+                </div>
+                <!-- 结果不是「正确」时，可补充本次仍出错的原因（选填）。 -->
                 <input
-                  v-model="rec.reviewed_at"
-                  type="date"
-                  class="w-36 shrink-0 rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  v-if="showRecordReason(rec.result)"
+                  v-model="rec.wrong_reason"
+                  type="text"
+                  maxlength="255"
+                  class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
+                  :aria-label="`第 ${i + 1} 条重做错误原因`"
+                  placeholder="本次重做仍出错的原因（选填），如：仍混淆公式"
                 />
-                <select
-                  v-model="rec.result"
-                  class="flex-1 min-w-0 rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
-                  :aria-label="`第 ${i + 1} 条重做结果`"
-                >
-                  <option disabled value="">请选择结果</option>
-                  <option v-for="opt in resultOptions(rec.result)" :key="opt" :value="opt">{{ opt }}</option>
-                </select>
-                <button
-                  type="button"
-                  class="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg text-ink-faint hover:bg-red-50 hover:text-red-500 transition-colors"
-                  :title="`删除第 ${i + 1} 条重做记录`"
-                  @click="removeRecord(i)"
-                >
-                  <Trash2 class="w-4 h-4" />
-                </button>
               </div>
             </div>
           </div>

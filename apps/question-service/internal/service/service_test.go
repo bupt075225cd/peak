@@ -267,7 +267,7 @@ func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
 		Source:     "期中考试",
 		ReviewRecords: []domain.ReviewRecord{
 			{ReviewedAt: reviewedAt, Result: "correct"},
-			{ReviewedAt: reviewedAt.Add(24 * time.Hour), Result: "wrong"},
+			{ReviewedAt: reviewedAt.Add(24 * time.Hour), Result: "wrong", WrongReason: "仍混淆公式"},
 		},
 	}
 	if err := svc.CreateMistake(ctx, m); err != nil {
@@ -286,6 +286,10 @@ func TestMistakeReviewRecordsRoundTrip(t *testing.T) {
 	}
 	if got.ReviewRecords[0].Result != "correct" || got.ReviewRecords[1].Result != "wrong" {
 		t.Fatalf("unexpected results: %+v", got.ReviewRecords)
+	}
+	// 结果为「正确」的记录无原因，非正确结果的原因需完整保存与读出。
+	if got.ReviewRecords[0].WrongReason != "" || got.ReviewRecords[1].WrongReason != "仍混淆公式" {
+		t.Fatalf("unexpected wrong reasons: %+v", got.ReviewRecords)
 	}
 }
 
