@@ -12,7 +12,9 @@ import (
 // OpenDBFromConfig 从统一配置（database.* 键）建立带追踪与连接池的数据库连接。
 // 支持的配置项：
 //
-//	database.dialect / database.dsn        方言与 DSN（沿用原有键）
+//	database.dialect / database.dsn        方言与 DSN（默认 postgres；DSN 为 PostgreSQL
+//	                                       key=value 形式，如
+//	                                       "host=127.0.0.1 port=5432 user=peak password=xxx dbname=peak sslmode=disable TimeZone=Asia/Shanghai"）
 //	database.slow_query_threshold          慢查询日志阈值（duration 字符串，默认 200ms）
 //	database.max_open_conns                最大打开连接数（默认 25；SQLite 默认 1 防锁表）
 //	database.max_idle_conns                最大空闲连接数（默认 10）
@@ -22,7 +24,7 @@ import (
 // 自动注册 GORM OpenTelemetry 插件：每条 SQL 产生一个 span（tracing 未启用时
 // 为 no-op），用于在链路中定位"接口慢"是否卡在数据库与具体 SQL。
 func OpenDBFromConfig(cfg *config.Loader, logLevel logger.LogLevel, extra ...DBOption) (*gorm.DB, error) {
-	dialect := DBDialect(cfg.String("database.dialect", "mysql"))
+	dialect := DBDialect(cfg.String("database.dialect", "postgres"))
 
 	slow, err := time.ParseDuration(cfg.String("database.slow_query_threshold", "200ms"))
 	if err != nil {

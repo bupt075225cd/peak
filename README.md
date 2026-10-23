@@ -30,7 +30,7 @@ Peak 是面向中学生的学习平台，采用多应用架构：各应用独立
   └─────┬──────┘└──────┬───────┘└────┬─────┘└──────┬───────┘
         │              │             │             │
         ▼              ▼             ▼             ▼
-     MySQL(GORM)   S3兼容对象存储   MySQL(GORM)  MySQL(GORM)
+  PostgreSQL(GORM) S3兼容对象存储 PostgreSQL(GORM) PostgreSQL(GORM)
                    + 第三方AI                  users/app_clients
 ```
 
@@ -99,7 +99,7 @@ peak/
 
 - **Go 1.24+**（workspace 模式，`go.work` 已就绪）
 - **Node.js 20+**（前端 Vue3 + Vite）
-- **Docker**（可选，用于启动 MySQL 基础设施）
+- **Docker**（可选，用于启动 PostgreSQL 基础设施）
 
 ### 1. 克隆并安装依赖
 
@@ -132,7 +132,7 @@ make install-tools   # 安装 watchexec（文件监听）+ air（Go 热重载）
 | `make ci` | 一键全跑 = check + lint + build + test + 覆盖率门禁 | **提交前执行**，等价 CI |
 | `make watch` | 监听 `.go/.ts/.vue`，保存即自动 check | 开发中持续反馈 |
 | `make install-tools` | 安装辅助工具 | 首次环境准备 |
-| `make run-sqlite` | 编译并以 SQLite 空库一键启动全部服务（gateway/question/recognition） | 本地免 MySQL 调测，重启即清空数据 |
+| `make run-sqlite` | 编译并以 SQLite 空库一键启动全部服务（gateway/question/recognition） | 本地免 PostgreSQL 调测，重启即清空数据 |
 | `make stop-sqlite` | 停止 `run-sqlite` 启动的服务并清空数据目录与日志 | 结束调测 |
 
 ```bash
@@ -167,7 +167,7 @@ make ci
 ### 1. 启动基础设施
 
 ```bash
-docker compose up -d mysql
+docker compose up -d postgres
 ```
 
 ### 2. 启动后端服务
@@ -199,20 +199,23 @@ cd web && npm install && npm run dev
 
 ## 数据库
 
-默认 MySQL（可替换为 PostgreSQL / SQLite，通过 `config.yaml` 的 `database.dialect` 切换）：
+默认 PostgreSQL 16（本地可用 SQLite 免容器调测，通过 `config.yaml` 的 `database.dialect` 切换）：
 
 ```yaml
 database:
-  dialect: "mysql"   # mysql / postgres / sqlite
-  dsn: "root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local"
+  dialect: "postgres"   # postgres / sqlite
+  dsn: "host=127.0.0.1 port=5432 user=peak password=peak123456 dbname=peak sslmode=disable TimeZone=Asia/Shanghai"
 ```
 
 核心表：`users`、`app_clients`（应用注册表）、`questions`、`mistakes`、`images`、
 `categories`、`question_categories`、`recognition_tasks`、`poems`。
 
-### 本地 SQLite 调测（免 MySQL）
+> 从 MySQL 切换到 PostgreSQL 的切流步骤、数据迁移（pgloader）与回滚方案见
+> [`deploy/db-migration-runbook.md`](deploy/db-migration-runbook.md)。
 
-不想起 MySQL 时，可用 `make run-sqlite` 一键以 SQLite 空库启动全部服务，数据落在 `/tmp/peak-run/data/*.db`，与仓库隔离，且每次重启都重建为空库（自动清空上次测试数据）：
+### 本地 SQLite 调测（免 PostgreSQL）
+
+不想起 PostgreSQL 时，可用 `make run-sqlite` 一键以 SQLite 空库启动全部服务，数据落在 `/tmp/peak-run/data/*.db`，与仓库隔离，且每次重启都重建为空库（自动清空上次测试数据）：
 
 ```bash
 make run-sqlite                              # recognition 用 aliyun provider（需配 DASHSCOPE_API_KEY）

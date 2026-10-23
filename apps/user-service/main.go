@@ -45,7 +45,7 @@ func main() {
 	defer func() { _ = shutdown(context.Background()) }()
 
 	// 初始化数据库。
-	dialect := cfg.String("database.dialect", "mysql")
+	dialect := cfg.String("database.dialect", "postgres")
 	dsn := cfg.String("database.dsn", "")
 	if dialect == "sqlite" {
 		// SQLite 需确保库文件目录存在。

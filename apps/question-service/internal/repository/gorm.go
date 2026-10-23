@@ -57,8 +57,8 @@ func (r *gormQuestionRepo) List(ctx context.Context, offset, limit int) ([]domai
 
 func (r *gormQuestionRepo) Update(ctx context.Context, q *domain.Question) error {
 	// Omit CreatedAt：调用方（如 handler 绑定请求体）拿到的结构体通常没有
-	// created_at，Save 整条覆盖会把零值时间写成 '0000-00-00'，MySQL 严格
-	// 模式直接报错（SQLite 不报，测试发现不了）。创建时间不允许被更新覆盖。
+	// created_at，Save 整条覆盖会把零值时间写入并覆盖真实创建时间（PostgreSQL
+	// 会接受 0001-01-01，脏值更难发现）。创建时间不允许被更新覆盖。
 	return r.db.WithContext(ctx).Omit("CreatedAt").Save(q).Error
 }
 
@@ -98,8 +98,9 @@ func (r *gormMistakeRepo) mistakeBaseQuery(ctx context.Context, userID uint64) *
 // mistakeKeywordFilter 生成关键词的条件与参数。
 //
 // 关键词按空白拆成多个词，每个词都必须命中 题干/知识点/题型/来源/学科 之一
-// （词之间 AND、字段之间 OR）；字段统一用 LOWER 比较，
-// 抹平 MySQL 与 SQLite 在 LIKE 大小写敏感性上的差异。
+// （词之间 AND、字段之间 OR）；字段统一用 LOWER 比较，避免 PostgreSQL 与 SQLite
+// 在 LIKE 大小写敏感性上的差异。knowledge_points 是 JSON 列，须先 CAST 成文本
+// 才能套用 LOWER/LIKE（PostgreSQL 没有 lower(json) 函数）。
 func mistakeKeywordFilter(keyword string) (string, []any) {
 	terms := strings.Fields(keyword)
 	if len(terms) == 0 {
@@ -111,7 +112,7 @@ func mistakeKeywordFilter(keyword string) (string, []any) {
 	for _, term := range terms {
 		pattern := "%" + strings.ToLower(term) + "%"
 		clauses = append(clauses, "(LOWER(questions.stem_text) LIKE ?"+
-			" OR LOWER(questions.knowledge_points) LIKE ?"+
+			" OR LOWER(COALESCE(CAST(questions.knowledge_points AS TEXT), '')) LIKE ?"+
 			" OR LOWER(questions.question_type) LIKE ?"+
 			" OR LOWER(questions.subject) LIKE ?"+
 			" OR LOWER("+mistakeSourceSQL+") LIKE ?)")
@@ -233,7 +234,7 @@ func (r *gormMistakeRepo) ListByIDs(ctx context.Context, userID uint64, ids []ui
 
 func (r *gormMistakeRepo) Update(ctx context.Context, m *domain.Mistake) error {
 	// Omit CreatedAt：编辑错题时请求体不带 created_at，Save 整条覆盖会把
-	// 零值时间写成 '0000-00-00'，MySQL 严格模式报 1292（SQLite 不报）。
+	// 零值时间写入并覆盖真实创建时间。创建时间不允许被更新覆盖。
 	return r.db.WithContext(ctx).Omit("CreatedAt").Save(m).Error
 }
 

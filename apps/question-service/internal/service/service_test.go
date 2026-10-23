@@ -213,7 +213,7 @@ func TestMistakeCRUD(t *testing.T) {
 
 func TestUpdateMistakePreservesCreatedAt(t *testing.T) {
 	// 回归：编辑错题时请求体不带 created_at（handler 绑定后 CreatedAt 为零值），
-	// Save 整条覆盖会把零值时间写成 '0000-00-00'，MySQL 严格模式报 1292
+	// Save 整条覆盖会把零值时间写入并覆盖真实创建时间
 	// （SQLite 不报错但会把 created_at 清零，这里以"更新后 created_at 不变"断言）。
 	svc := setupService(t)
 	ctx := context.Background()

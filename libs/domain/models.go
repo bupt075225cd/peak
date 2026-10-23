@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -11,7 +12,7 @@ import (
 // 亦支持邮箱+密码注册与密码登录）。
 //
 // Email/Phone 为指针类型：手机用户无邮箱存 NULL，邮箱注册用户无手机号存
-// NULL——MySQL/SQLite 的唯一索引允许多个 NULL，两类账号互不冲突；
+// NULL——PostgreSQL/SQLite 的唯一索引允许多个 NULL，两类账号互不冲突；
 // PasswordHash 为空表示未设置密码（仅验证码登录）。
 type User struct {
 	ID      uint64  `gorm:"primaryKey" json:"id"`
@@ -70,7 +71,7 @@ type Question struct {
 	Analysis     string `gorm:"type:text" json:"analysis"`
 	QuestionType string `gorm:"size:32" json:"question_type"` // 选择/填空/解答
 	Image        string `gorm:"type:json" json:"image"`       // 图片引用（image key 列表，含几何图与其它科目插图）
-	// KnowledgePoints 可空指针：MySQL 的 JSON 列不接受空字符串，未设置时存 NULL。
+	// KnowledgePoints 可空指针：JSON 列不接受空字符串，未设置时存 NULL。
 	KnowledgePoints *string        `gorm:"type:json" json:"knowledge_points"` // 知识点标签数组
 	Source          string         `gorm:"size:128" json:"source"`            // 题目来源（试卷/练习册等）
 	CreatedAt       time.Time      `json:"created_at"`
@@ -78,6 +79,20 @@ type Question struct {
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Categories []Category `gorm:"many2many:question_categories;" json:"categories,omitempty"`
+}
+
+// BeforeSave 归一化 JSON 列，保证写入值一定是合法 JSON：
+// 空字符串在 PostgreSQL 的 json 列会直接报 invalid input syntax，故无图存空数组、
+// 空知识点存 NULL（与指针语义一致）。此前依赖 MySQL JSON 列的宽松行为与调用方
+// 手工兜底，切换 PostgreSQL 后统一在模型层收敛，避免各地漏改。
+func (q *Question) BeforeSave(tx *gorm.DB) error {
+	if strings.TrimSpace(q.Image) == "" {
+		q.Image = "[]"
+	}
+	if q.KnowledgePoints != nil && strings.TrimSpace(*q.KnowledgePoints) == "" {
+		q.KnowledgePoints = nil
+	}
+	return nil
 }
 
 // ReviewRecord 单条复习记录。
@@ -146,7 +161,7 @@ type RecognitionTask struct {
 	Status       string `gorm:"size:32;index" json:"status"`   // pending/processing/success/failed
 	Progress     int    `gorm:"default:0" json:"progress"`     // 0-100
 	ProgressText string `gorm:"size:128" json:"progress_text"` // 当前阶段文案（如"正在几何重绘…"）
-	// ResultJSON 识别结果（JSON 列）。指针类型：任务创建时为 NULL——MySQL 的 JSON 列
+	// ResultJSON 识别结果（JSON 列）。指针类型：任务创建时为 NULL——JSON 列
 	// 不接受空字符串，且前端以 falsy 判断"结果未就绪"。
 	ResultJSON   *string        `gorm:"type:json" json:"result_json"`
 	ErrorMessage string         `gorm:"size:512" json:"error_message"`

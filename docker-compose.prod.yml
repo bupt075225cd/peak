@@ -1,4 +1,4 @@
-# 生产部署编排：后端微服务 + MySQL + Prometheus
+# 生产部署编排：后端微服务 + PostgreSQL + Prometheus
 # 用法：
 #   docker compose -f docker-compose.prod.yml pull     # 拉取镜像仓库已构建镜像
 #   docker compose -f docker-compose.prod.yml up -d
@@ -15,36 +15,37 @@
 #   - 业务镜像来自阿里云 ACR（CI 推送），私有仓库需先 docker login
 #   - 配置通过环境变量注入（config.yaml 使用 ${VAR} 占位）
 #   - 敏感信息（DB 密码、阿里云密钥）通过 .env 文件或环境注入，勿提交到仓库
-# 数据库端点切换（容器自建 ⇄ 云 RDS / 外部 MySQL）：
-#   - DB_DSN 由 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_ROOT_PASSWORD/MYSQL_DATABASE
-#     组合拼装；不设置时默认 tcp(mysql:3306)，与原自建容器行为一致
-#   - 自建 mysql 容器归入 self-hosted-db profile：
-#       容器自建部署：.env 设置 COMPOSE_PROFILES=self-hosted-db（保持原行为，up -d 会启动本地库）
-#       切换 RDS：去掉 COMPOSE_PROFILES（或置空），MYSQL_HOST 指向 RDS 地址
-#   - 后端服务对 mysql 的 depends_on 为 required: false，本地库未启用时正常启动（需 docker compose v2.20+）
+# 数据库端点切换（容器自建 ⇄ 云数据库 / 外部 PostgreSQL）：
+#   - DB_DSN 由 POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB
+#     组合拼装；不设置时默认 host=postgres port=5432，与自建容器行为一致
+#   - 自建 postgres 容器归入 self-hosted-db profile：
+#       容器自建部署：.env 设置 COMPOSE_PROFILES=self-hosted-db（up -d 会启动本地库）
+#       切换云数据库：去掉 COMPOSE_PROFILES（或置空），POSTGRES_HOST 指向实例地址
+#   - 后端服务对 postgres 的 depends_on 为 required: false，本地库未启用时正常启动（需 docker compose v2.20+）
 services:
   # ── 基础设施 ────────────────────────────────────────────
-  # 自建 MySQL：仅容器自建部署时启动（COMPOSE_PROFILES=self-hosted-db）；
-  # 切换云 RDS 后本服务不再启动，数据卷 mysql-data 保留用于回滚兜底。
-  mysql:
-    image: mysql:8.0
-    container_name: peak-mysql
+  # 自建 PostgreSQL：仅容器自建部署时启动（COMPOSE_PROFILES=self-hosted-db）；
+  # 切换云数据库后本服务不再启动，数据卷 postgres-data 保留用于回滚兜底。
+  postgres:
+    image: postgres:16-alpine
+    container_name: peak-postgres
     restart: unless-stopped
     profiles: ["self-hosted-db"]
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-peak123456}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-peak}
+      POSTGRES_USER: ${POSTGRES_USER:-peak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-peak123456}
+      POSTGRES_DB: ${POSTGRES_DB:-peak}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - mysql-data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-peak123456}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-peak} -d ${POSTGRES_DB:-peak}"]
       interval: 10s
       timeout: 5s
       retries: 10
-    # 不对外暴露 3306，仅内网访问
+    # 不对外暴露 5432，仅内网访问
     expose:
-      - "3306"
+      - "5432"
 
   # ── 后端服务 ────────────────────────────────────────────
   # 对象存储使用外部第三方 S3 兼容服务（阿里云 OSS / AWS S3 / Ceph 等），
@@ -97,16 +98,16 @@ services:
     restart: unless-stopped
     profiles: ["mistake"]
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
-        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 切换外部数据库时本地 postgres 容器（self-hosted-db profile）不启动，
         # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
         required: false
     environment:
       SERVER_PORT: "8081"
       LOG_DEV: "false"
-      DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DIALECT: "postgres"
+      DB_DSN: "host=${POSTGRES_HOST:-postgres} port=${POSTGRES_PORT:-5432} user=${POSTGRES_USER:-peak} password=${POSTGRES_PASSWORD:-peak123456} dbname=${POSTGRES_DB:-peak} sslmode=${POSTGRES_SSLMODE:-disable} TimeZone=${TZ:-Asia/Shanghai}"
       # 专属桶存放 committed/ 正式区；transient/ -> committed/ 提交拷贝
       # 通过对象存储服务端 CopyObject 从 recognition 桶跨桶完成
       STORAGE_TYPE: "s3"
@@ -135,16 +136,16 @@ services:
     restart: unless-stopped
     profiles: ["mistake"]
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
-        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 切换外部数据库时本地 postgres 容器（self-hosted-db profile）不启动，
         # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
         required: false
     environment:
       SERVER_PORT: "8082"
       LOG_DEV: "false"
-      DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DIALECT: "postgres"
+      DB_DSN: "host=${POSTGRES_HOST:-postgres} port=${POSTGRES_PORT:-5432} user=${POSTGRES_USER:-peak} password=${POSTGRES_PASSWORD:-peak123456} dbname=${POSTGRES_DB:-peak} sslmode=${POSTGRES_SSLMODE:-disable} TimeZone=${TZ:-Asia/Shanghai}"
       # 部署使用第三方 S3 兼容对象存储（阿里云 OSS / AWS S3 / Ceph 等），
       # 连接参数通过 .env 或部署环境注入，必需：S3_ENDPOINT / S3_RECOGNITION_BUCKET / 凭证。
       # 专属桶存放 transient/ 临时区；question-service 的提交拷贝经服务端
@@ -190,16 +191,16 @@ services:
     container_name: peak-user-service
     restart: unless-stopped
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
-        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 切换外部数据库时本地 postgres 容器（self-hosted-db profile）不启动，
         # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
         required: false
     environment:
       SERVER_PORT: "8083"
       LOG_DEV: "false"
-      DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DIALECT: "postgres"
+      DB_DSN: "host=${POSTGRES_HOST:-postgres} port=${POSTGRES_PORT:-5432} user=${POSTGRES_USER:-peak} password=${POSTGRES_PASSWORD:-peak123456} dbname=${POSTGRES_DB:-peak} sslmode=${POSTGRES_SSLMODE:-disable} TimeZone=${TZ:-Asia/Shanghai}"
       # JWT 密钥须与 gateway 一致；生产必须通过 .env 注入强随机值
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       AUTH_TOKEN_TTL: ${AUTH_TOKEN_TTL:-168h}
@@ -232,16 +233,16 @@ services:
     restart: unless-stopped
     profiles: ["poetry"]
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
-        # 切换外部 RDS 时本地 mysql 容器（self-hosted-db profile）不启动，
+        # 切换外部数据库时本地 postgres 容器（self-hosted-db profile）不启动，
         # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
         required: false
     environment:
       SERVER_PORT: "8084"
       LOG_DEV: "false"
-      DB_DIALECT: "mysql"
-      DB_DSN: "${MYSQL_USER:-root}:${MYSQL_ROOT_PASSWORD:-peak123456}@tcp(${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306})/${MYSQL_DATABASE:-peak}?charset=utf8mb4&parseTime=True&loc=Local"
+      DB_DIALECT: "postgres"
+      DB_DSN: "host=${POSTGRES_HOST:-postgres} port=${POSTGRES_PORT:-5432} user=${POSTGRES_USER:-peak} password=${POSTGRES_PASSWORD:-peak123456} dbname=${POSTGRES_DB:-peak} sslmode=${POSTGRES_SSLMODE:-disable} TimeZone=${TZ:-Asia/Shanghai}"
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     expose:
       - "8084"
@@ -342,7 +343,7 @@ services:
       - loki
 
 volumes:
-  mysql-data:
+  postgres-data:
   recognition-data:
   prometheus-data:
   loki-data:

@@ -92,8 +92,10 @@ func (r *gormRepo) poemModel(ctx context.Context, f Filter) *gorm.DB {
 		query = query.Where("category = ?", f.Category)
 	}
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
-		like := "%" + kw + "%"
-		query = query.Where("title LIKE ? OR author LIKE ? OR content LIKE ?", like, like, like)
+		// 统一按小写匹配：PostgreSQL 的 LIKE 区分大小写，SQLite 默认不区分，
+		// 用 LOWER 对齐两者行为（与错题关键词检索口径一致）。
+		like := "%" + strings.ToLower(kw) + "%"
+		query = query.Where("LOWER(title) LIKE ? OR LOWER(author) LIKE ? OR LOWER(content) LIKE ?", like, like, like)
 	}
 	return query
 }

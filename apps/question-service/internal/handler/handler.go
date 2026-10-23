@@ -92,7 +92,7 @@ func (h *Handler) createQuestion(c *gin.Context) {
 		return
 	}
 	if q.Image == "" {
-		// MySQL 的 JSON 列不接受空字符串；无图题目存空数组。
+		// JSON 列不接受空字符串；无图题目存空数组（模型层 BeforeSave 亦兜底）。
 		q.Image = "[]"
 	}
 	// 提交错题 = 把识别产物从临时区晋升为正式区：拷贝 transient/<key> ->

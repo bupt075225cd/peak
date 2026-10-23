@@ -1,17 +1,19 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: peak-mysql
+  postgres:
+    image: postgres:16-alpine
+    container_name: peak-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: peak123456
-      MYSQL_DATABASE: peak
+      # 容器内以该用户作为超级用户初始化（首次启动生效），数据库同名创建。
+      POSTGRES_USER: peak
+      POSTGRES_PASSWORD: peak123456
+      POSTGRES_DB: peak
+      TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql-data:/var/lib/mysql
-    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppeak123456"]
+      test: ["CMD-SHELL", "pg_isready -U peak -d peak"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -28,4 +30,4 @@ services:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
 
 volumes:
-  mysql-data:
+  postgres-data:

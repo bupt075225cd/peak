@@ -17,7 +17,7 @@
        question-svc  recognition-svc  user-svc
               │            │
               ▼            ▼
-           MySQL     本地存储/S3 + 阿里云AI
+         PostgreSQL  本地存储/S3 + 阿里云AI
 ```
 
 - `gateway` 是唯一对外的服务（暴露 8080），其余服务仅内网访问（`expose` 不映射端口）
@@ -34,7 +34,7 @@
 
 | 模式 | 容器数 | 最低配置 | 说明 |
 |---|---|---|---|
-| 默认（轻量） | 6 个业务容器 | 2C / 4G / 40G | mysql + 4 后端 + web，无观测栈 |
+| 默认（轻量） | 6 个业务容器 | 2C / 4G / 40G | postgres + 4 后端 + web，无观测栈 |
 | 含观测栈 | 12 个容器 | 4C / 8G / 80G SSD | 增加观测栈，数据卷持续增长 |
 
 ## 1. 获取镜像
@@ -64,8 +64,8 @@ docker build -f web/Dockerfile -t peak-web ./web
 |---|---|---|---|
 | 端口 | `SERVER_PORT` | 8080/8081/8082 | 各服务端口 |
 | 日志模式 | `LOG_DEV` | true | 生产应设 `false` |
-| 数据库 DSN | `DB_DSN` | 本地 MySQL | 生产指向 mysql 服务 |
-| 数据库方言 | `DB_DIALECT` | mysql | mysql/postgres/sqlite |
+| 数据库 DSN | `DB_DSN` | 本地 PostgreSQL | 生产由 `POSTGRES_*` 组合指向 postgres 服务 |
+| 数据库方言 | `DB_DIALECT` | postgres | postgres/sqlite |
 | 识别 Provider | `RECOGNITION_PROVIDER` | mock | mock/aliyun |
 | 阿里云密钥 | `ALIYUN_ACCESS_KEY_ID` 等 | 空 | 生产必填（aliyun 模式） |
 | 追踪端点 | `TRACING_ENDPOINT` | 空 | 留空则不启用 OTel（观测栈未部署时保持留空） |
@@ -77,7 +77,7 @@ docker build -f web/Dockerfile -t peak-web ./web
 
 ```bash
 cp deploy/.env.production.example deploy/.env.production
-vi deploy/.env.production   # 填入 JWT_SECRET、MySQL 密码、S3 凭证、识别密钥、IMAGE_TAG 等
+vi deploy/.env.production   # 填入 JWT_SECRET、PostgreSQL 密码、S3 凭证、识别密钥、IMAGE_TAG 等
 ```
 
 Docker Compose 通过 `--env-file .env.production` 读取。
@@ -124,7 +124,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml \
 | gateway | 8080 | `http://<host>:8080`（或经 web 反代 `/api`） |
 | question-service | 8081 | 仅内网 |
 | recognition-service | 8082 | 仅内网 |
-| mysql | 3306 | 仅内网 |
+| postgres | 5432 | 仅内网 |
 | prometheus | 9090 | `http://<host>:9090`（仅 `--obs` 开启观测栈时） |
 
 > 前端 `web` 容器内 Nginx 已配置将 `/api` 反代到 `gateway:8080`，因此生产环境浏览器直接访问 `http://<host>/` 即可同时访问前端与后端 API。
@@ -133,7 +133,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml \
 
 - **健康检查**：四个后端服务均实现 `/healthz`，prod 编排已配置容器 healthcheck（wget 探活，15s 间隔）
 - **指标**：各服务暴露 `/metrics`，Prometheus 通过服务名抓取（见 `deploy/prometheus.yml`；仅观测栈开启时被抓取）
-- **数据库**：mysql 服务配置了 healthcheck，`question-service`/`recognition-service` 依赖其 `service_healthy` 后才启动
+- **数据库**：postgres 服务配置了 `pg_isready` healthcheck，`question-service`/`recognition-service` 依赖其 `service_healthy` 后才启动
 - **日志**：`docker compose logs -f <service>`；开启观测栈后由 Alloy 采集入 Loki
 
 ### 可观测栈（Grafana 全家桶，可选部署）
@@ -227,17 +227,17 @@ cd web && npm install && npm run build
 
 ## 7. 数据持久化
 
-- **MySQL**：挂载卷 `mysql-data`（自动持久化到 Docker volume）
+- **PostgreSQL**：挂载卷 `postgres-data`（自动持久化到 Docker volume）
 - **识别服务存储**：挂载卷 `recognition-data`（本地存储模式）
 
 若切换到 S3 对象存储，将 `STORAGE_ROOT` 本地存储替换为 `S3Storage` 的 endpoint 配置即可（见主 README「文件存储」章节）。
 
 ## 8. 生产环境建议清单
 
-- [ ] 修改 MySQL root 密码（`.env`）
+- [ ] 修改 PostgreSQL 密码（`.env` 的 `POSTGRES_PASSWORD`）
 - [ ] 配置阿里云密钥（若使用 `aliyun` provider）
 - [ ] 设置 `LOG_DEV=false`
 - [ ] 为 gateway 配置 TLS（通过前置 Nginx/负载均衡器）
 - [ ] 按需开启观测栈并配置告警通知渠道（`--profile observability` + `deploy/grafana/provisioning/alerting/contact-points.yml`）
-- [ ] 配置 MySQL 备份策略
+- [ ] 配置 PostgreSQL 备份策略（见 `scripts/db-migration/backup.sh`）
 - [ ] 使用 `restart: unless-stopped` 保障服务自愈（已默认配置）

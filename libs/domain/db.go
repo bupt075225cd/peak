@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -17,7 +16,6 @@ import (
 type DBDialect string
 
 const (
-	DialectMySQL    DBDialect = "mysql"
 	DialectPostgres DBDialect = "postgres"
 	DialectSQLite   DBDialect = "sqlite"
 )
@@ -82,8 +80,6 @@ func OpenDB(dialect DBDialect, dsn string, logLevel logger.LogLevel, opts ...DBO
 
 	var dialector gorm.Dialector
 	switch dialect {
-	case DialectMySQL:
-		dialector = mysql.Open(dsn)
 	case DialectPostgres:
 		dialector = postgres.Open(dsn)
 	case DialectSQLite:

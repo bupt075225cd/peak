@@ -1,51 +1,60 @@
 #!/usr/bin/env bash
-# 迁移数据校验：源（自建容器）与目标（RDS）逐表比对行数与 CHECKSUM。
+# 迁移数据校验：源（自建容器）与目标（云数据库）逐表比对行数与内容指纹。
 #
 # 用法（在部署主机执行，切流前与回滚判断前各跑一次）：
-#   SRC_PASSWORD=<源库密码> DST_HOST=<rds地址> DST_USER=<用户> DST_PASSWORD=<密码> \
+#   SRC_PASSWORD=<源库密码> DST_HOST=<实例地址> DST_USER=<用户> DST_PASSWORD=<密码> \
 #     ./verify.sh
 #
 # 环境变量：
-#   MYSQL_DATABASE  库名（默认 peak）
-#   SRC_CONTAINER   源 MySQL 容器名（默认 peak-mysql）
-#   SRC_USER        源库用户（默认 root）
+#   PG_DATABASE     库名（默认 peak）
+#   SRC_CONTAINER   源 PostgreSQL 容器名（默认 peak-postgres）
+#   SRC_USER        源库用户（默认 peak）
 #   SRC_PASSWORD    源库密码（必填）
 #   DST_HOST        目标库地址（必填）
-#   DST_PORT        目标库端口（默认 3306）
+#   DST_PORT        目标库端口（默认 5432）
 #   DST_USER        目标库用户（必填）
 #   DST_PASSWORD    目标库密码（必填）
-#   MYSQL_IMAGE     用于客户端容器的 MySQL 镜像（默认 mysql:8.0）
+#   POSTGRES_IMAGE  用于客户端容器的 PostgreSQL 镜像（默认 postgres:16-alpine）
+#
+# 说明：内容指纹用 sum(hashtext(整行::text))，能发现"行数相同但内容不同"；
+#       该计算会全表扫描，大表建议放到业务低峰执行。
 #
 # 退出码：0=全部一致；1=存在差异（禁止切流，先排查）
 set -euo pipefail
 
-MYSQL_DATABASE="${MYSQL_DATABASE:-peak}"
-SRC_CONTAINER="${SRC_CONTAINER:-peak-mysql}"
-SRC_USER="${SRC_USER:-root}"
+PG_DATABASE="${PG_DATABASE:-peak}"
+SRC_CONTAINER="${SRC_CONTAINER:-peak-postgres}"
+SRC_USER="${SRC_USER:-peak}"
 SRC_PASSWORD="${SRC_PASSWORD:?需要 SRC_PASSWORD（源库密码）}"
 DST_HOST="${DST_HOST:?需要 DST_HOST（目标库地址）}"
-DST_PORT="${DST_PORT:-3306}"
+DST_PORT="${DST_PORT:-5432}"
 DST_USER="${DST_USER:?需要 DST_USER（目标库用户）}"
 DST_PASSWORD="${DST_PASSWORD:?需要 DST_PASSWORD（目标库密码）}"
-MYSQL_IMAGE="${MYSQL_IMAGE:-mysql:8.0}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 
 src_sql() {
-  docker exec -e MYSQL_PWD="$SRC_PASSWORD" "$SRC_CONTAINER" \
-    sh -c "exec mysql --user=\"$SRC_USER\" --default-character-set=utf8mb4 -N -e \"$1\" \"$MYSQL_DATABASE\""
+  docker exec -e PGPASSWORD="$SRC_PASSWORD" "$SRC_CONTAINER" \
+    psql -U "$SRC_USER" -d "$PG_DATABASE" -tAc "$1"
 }
 
 dst_sql() {
-  docker run --rm -i -e MYSQL_PWD="$DST_PASSWORD" "$MYSQL_IMAGE" \
-    mysql -h "$DST_HOST" -P "$DST_PORT" -u "$DST_USER" \
-    --default-character-set=utf8mb4 -N -e "$1" "$MYSQL_DATABASE"
+  docker run --rm -i -e PGPASSWORD="$DST_PASSWORD" "$POSTGRES_IMAGE" \
+    psql -h "$DST_HOST" -p "$DST_PORT" -U "$DST_USER" -d "$PG_DATABASE" -tAc "$1"
+}
+
+# 表指纹：行数 + 整行文本哈希合计。
+fingerprint_sql() {
+  local t="$1"
+  echo "SELECT count(*) || '|' || coalesce(sum(hashtext(x::text))::text, '0') FROM (SELECT * FROM \"$t\") x;"
 }
 
 echo "==> 读取源/目标表清单 ..."
-SRC_TABLES="$(src_sql "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;")"
-DST_TABLES="$(dst_sql "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;")"
+LIST_SQL="SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE 'pg_%' ORDER BY tablename;"
+SRC_TABLES="$(src_sql "$LIST_SQL")"
+DST_TABLES="$(dst_sql "$LIST_SQL")"
 
 if [[ -z "$SRC_TABLES" ]]; then
-  echo "错误：源库 $MYSQL_DATABASE 中没有表，请确认容器与库名" >&2
+  echo "错误：源库 $PG_DATABASE 中没有表，请确认容器与库名" >&2
   exit 1
 fi
 
@@ -60,14 +69,12 @@ while IFS= read -r t; do
     FAIL=1
     continue
   fi
-  SRC_COUNT="$(src_sql "SELECT COUNT(*) FROM \`$t\`;")"
-  DST_COUNT="$(dst_sql "SELECT COUNT(*) FROM \`$t\`;")"
-  SRC_CK="$(src_sql "CHECKSUM TABLE \`$t\`;")"
-  DST_CK="$(dst_sql "CHECKSUM TABLE \`$t\`;")"
-  if [[ "$SRC_COUNT" == "$DST_COUNT" && "$SRC_CK" == "$DST_CK" ]]; then
-    echo "✓ $t  rows=$SRC_COUNT  checksum 一致"
+  SRC_FP="$(src_sql "$(fingerprint_sql "$t")")"
+  DST_FP="$(dst_sql "$(fingerprint_sql "$t")")"
+  if [[ "$SRC_FP" == "$DST_FP" ]]; then
+    echo "✓ $t  rows=${SRC_FP%%|*}  指纹一致"
   else
-    echo "✗ $t  rows: src=$SRC_COUNT dst=$DST_COUNT  checksum: src=$SRC_CK dst=$DST_CK"
+    echo "✗ $t  rows/指纹: src=$SRC_FP dst=$DST_FP"
     FAIL=1
   fi
 done <<< "$SRC_TABLES"
@@ -89,4 +96,4 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 TABLE_N="$(grep -c . <<< "$SRC_TABLES")"
-echo "==> 校验通过：源/目标 $TABLE_N 张表行数与 CHECKSUM 全部一致"
+echo "==> 校验通过：源/目标 $TABLE_N 张表行数与内容指纹全部一致"

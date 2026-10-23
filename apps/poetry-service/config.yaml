@@ -8,8 +8,8 @@ tracing:
   endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
 
 database:
-  dialect: "${DB_DIALECT:-mysql}"  # mysql / postgres / sqlite
-  dsn: "${DB_DSN:-root:peak123456@tcp(127.0.0.1:3306)/peak?charset=utf8mb4&parseTime=True&loc=Local}"
+  dialect: "${DB_DIALECT:-postgres}"  # postgres / sqlite
+  dsn: "${DB_DSN:-host=127.0.0.1 port=5432 user=peak password=peak123456 dbname=peak sslmode=disable TimeZone=Asia/Shanghai}"
   slow_query_threshold: "${DB_SLOW_QUERY_THRESHOLD:-200ms}"
   max_open_conns: "${DB_MAX_OPEN_CONNS:-10}"
   max_idle_conns: "${DB_MAX_IDLE_CONNS:-5}"
@@ -19,6 +19,6 @@ database:
 # RAG 智能对话（二阶段启用）：当前 chat 接口返回"未启用"占位响应，
 # 契约已定：POST /api/poetry/chat {question} → {enabled, answer?, notice}。
 # 启用计划：复用 OpenAI 兼容 AI 客户端（阿里云/智谱）做 embedding + LLM，
-# 向量存储沿用本服务数据库（SQLite/MySQL/Postgres），无额外运维组件。
+# 向量存储沿用本服务数据库（PostgreSQL/SQLite），无额外运维组件。
 chat:
   enabled: "${POETRY_CHAT_ENABLED:-false}"
