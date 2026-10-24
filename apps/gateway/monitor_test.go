@@ -60,8 +60,8 @@ func TestSanitizeTraceID(t *testing.T) {
 	cases := map[string]string{
 		"4bf92f3577b34da6a3ce929d0e0e4736": "4bf92f3577b34da6a3ce929d0e0e4736",
 		"":                                 "",
-		"with space injected":              "",            // 非法字符 -> 清空
-		"<script>alert(1)</script>":        "",            // 防日志注入
+		"with space injected":              "",                      // 非法字符 -> 清空
+		"<script>alert(1)</script>":        "",                      // 防日志注入
 		strings.Repeat("a", 100):           strings.Repeat("a", 64), // 超长截断
 	}
 	for in, want := range cases {

@@ -19,6 +19,19 @@ export default {
           soft: '#475569',
           faint: '#94A3B8',
         },
+        // 家庭资产账本：低饱和金融配色（资产涨红、负债绿，沿用参考图语义）。
+        ledger: {
+          ink: '#1E2A44',
+          mist: '#EEF0F6',
+          haze: '#E6EAF3',
+          up: '#D95C4A',
+          down: '#3E9E7E',
+          liquid: '#E9A66B',
+          fixed: '#9DBCC4',
+          invest: '#A9A3D4',
+          receivable: '#63C6A5',
+          liability: '#B9B4C7',
+        },
       },
       fontFamily: {
         sans: ['PingFang SC', 'system-ui', 'sans-serif'],

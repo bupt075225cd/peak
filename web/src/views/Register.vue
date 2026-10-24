@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
-  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, UserPlus, Eye, EyeOff, MailCheck,
+  BookOpen, ArrowLeft, Loader2, ShieldCheck, Mail, Lock, UserPlus, Eye, EyeOff, MailCheck, Wallet,
 } from 'lucide-vue-next'
 import { sendEmailCode, emailRegister } from '../api'
 import { useAuth } from '../composables/useAuth'
+import { useAppBrand } from '../composables/useAppBrand'
 import { usePasswordStrength } from '../composables/usePasswordStrength'
 import { maskEmail } from '../utils/email'
+import { safeRedirect } from '../utils/redirect'
 
 const router = useRouter()
+const route = useRoute()
 const { login } = useAuth()
+// 从账本被拦到注册页时沿用账本品牌。
+const { isLedger } = useAppBrand()
+const redirectTarget = computed(() => safeRedirect(route.query.redirect))
+// 回登录页时保留回跳目标，避免中途丢失账本上下文。
+const loginLink = computed(() => (route.query.redirect ? { path: '/login', query: { redirect: redirectTarget.value } } : '/login'))
 
 const email = ref('')
 const password = ref('')
@@ -70,7 +78,7 @@ async function handleRegister() {
   try {
     const res = await emailRegister(email.value.trim(), password.value, code.value.trim())
     login(res.token)
-    router.push('/home')
+    router.push(redirectTarget.value)
   } catch (err) {
     errorMsg.value = extractError(err, '注册失败，请稍后重试')
   } finally {
@@ -102,11 +110,18 @@ onUnmounted(() => {
     <div class="mt-6 bg-white rounded-2xl border border-slate-200/80 p-8 shadow-sm animate-fade-up">
       <div class="flex flex-col items-center text-center">
         <div
-          class="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center shadow-lg shadow-blue-500/20"
+          class="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"
+          :class="isLedger
+            ? 'bg-gradient-to-br from-ledger-ink to-[#3A4B72] shadow-slate-500/25'
+            : 'bg-gradient-to-br from-primary to-primary-light shadow-blue-500/20'"
+          data-test="register-logo"
         >
-          <BookOpen class="w-6 h-6 text-white" />
+          <Wallet v-if="isLedger" class="w-6 h-6 text-white" />
+          <BookOpen v-else class="w-6 h-6 text-white" />
         </div>
-        <h1 class="mt-4 text-xl font-semibold text-ink">注册 Peak 错题本</h1>
+        <h1 class="mt-4 text-xl font-semibold text-ink" data-test="register-title">
+          注册 Peak {{ isLedger ? '家庭账本' : '错题本' }}
+        </h1>
         <p class="mt-1 text-sm text-ink-soft">使用邮箱创建账号，验证邮件已为你准备好</p>
       </div>
 
@@ -237,7 +252,7 @@ onUnmounted(() => {
 
         <p class="text-center text-sm text-ink-soft">
           已有账号？
-          <router-link to="/login" class="text-primary hover:text-primary-light font-medium transition-colors">
+          <router-link :to="loginLink" class="text-primary hover:text-primary-light font-medium transition-colors">
             直接登录
           </router-link>
         </p>

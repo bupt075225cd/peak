@@ -135,6 +135,49 @@ func TestParseUnusualClaims(t *testing.T) {
 	}
 }
 
+func TestParseClaimsIssuedAt(t *testing.T) {
+	before := time.Now().Add(-time.Second)
+	token, err := Issue(9, "app-ledger", testSecret, time.Hour)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := ParseClaims(token, testSecret)
+	if err != nil {
+		t.Fatalf("parse claims: %v", err)
+	}
+	if claims.UserID != 9 || claims.Audience != "app-ledger" {
+		t.Fatalf("claims = %+v", claims)
+	}
+	if claims.IssuedAt.Before(before) || claims.IssuedAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("iat = %v, want around now", claims.IssuedAt)
+	}
+	if claims.ExpiresAt.IsZero() {
+		t.Fatal("exp should be parsed")
+	}
+}
+
+func TestParseClaimsLegacyTokenWithoutIat(t *testing.T) {
+	// 历史令牌无 iat：解析成功但签发时间为零值，敏感操作需重新登录。
+	tok := makeTokenWithClaims(t, jwt.MapClaims{
+		"user_id": 3,
+		"exp":     time.Now().Add(time.Hour).Unix(),
+	})
+	claims, err := ParseClaims(tok, testSecret)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !claims.IssuedAt.IsZero() {
+		t.Fatalf("iat should be zero for legacy token, got %v", claims.IssuedAt)
+	}
+}
+
+func TestParseClaimsRejectsWrongSecret(t *testing.T) {
+	token, _ := Issue(1, "", testSecret, time.Hour)
+	if _, err := ParseClaims(token, "other"); err == nil {
+		t.Fatal("wrong secret should fail")
+	}
+}
+
 func TestTicketRoundtrip(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	ticket := IssueTicket("13800000001", testSecret, DefaultTicketTTL, now)

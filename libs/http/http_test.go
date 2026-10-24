@@ -185,5 +185,3 @@ func TestAccessLogMiddleware(t *testing.T) {
 		t.Fatalf("expected 204, got %d", w.Code)
 	}
 }
-
-

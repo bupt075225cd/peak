@@ -58,6 +58,7 @@ const (
 var DefaultAppClients = []AppClient{
 	{ClientID: "app-mistake", Name: "错题本", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
 	{ClientID: "app-poetry", Name: "古诗文", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
+	{ClientID: "app-ledger", Name: "家庭资产账本", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
 	{ClientID: "app-peak", Name: "统一前端（过渡）", AllowedOrigins: "http://localhost:5173,http://localhost:5174", Status: AppStatusEnabled},
 }
 

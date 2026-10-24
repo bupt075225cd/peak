@@ -8,10 +8,11 @@
 #   -d             开发调试模式：额外上传并叠加 docker-compose.dev.yml
 #                  （开启 LOG_DEV/AUTH_MASTER_CODE，超级验证码 000000 可登录）
 #   --obs          同时部署可选观测栈（Prometheus/Loki/Alloy/Grafana，profiles: observability）
-#   -a <apps>      选择部署的应用（逗号分隔：mistake / poetry；缺省=全部应用）。
+#   -a <apps>      选择部署的应用（逗号分隔：mistake / poetry / ledger；缺省=全部应用）。
 #                  core（gateway/user-service/web）始终部署；
 #                  示例：-a poetry          仅古诗文应用
-#                        -a mistake,poetry  全部应用（等价缺省）
+#                        -a ledger          仅家庭资产账本（需在 .env.production 注入账本密钥）
+#                        -a mistake,poetry,ledger  全部应用（等价缺省）
 #   -s "<services>" 指定服务子集（空格分隔，绕过 profile 直接按服务名部署）；
 #                  示例：-s "poetry-service web"
 #                  与 -a 互斥：同时给出时 -s 优先生效。
@@ -41,16 +42,16 @@ TARGET=${1:?用法: ./deploy-to-host.sh [-d] [--obs] [-a <apps>] [-s "<services>
 PORT=${2:-22}
 REMOTE_DIR=/opt/peak
 
-# 合法应用名（对应编排文件中的 profile：mistake / poetry）
-ALL_PROFILES="mistake poetry"
+# 合法应用名（对应编排文件中的 profile：mistake / poetry / ledger）
+ALL_PROFILES="mistake poetry ledger"
 PROFILE_ARGS=""
 if [ -n "$APPS" ]; then
   IFS=',' read -ra APP_LIST <<< "$APPS"
   for app in "${APP_LIST[@]}"; do
     app=$(echo "$app" | xargs) # 去首尾空白
     case "$app" in
-      mistake|poetry) PROFILE_ARGS="$PROFILE_ARGS --profile $app" ;;
-      *) echo "✗ 未知应用: $app（可选：mistake / poetry）"; exit 1 ;;
+      mistake|poetry|ledger) PROFILE_ARGS="$PROFILE_ARGS --profile $app" ;;
+      *) echo "✗ 未知应用: $app（可选：mistake / poetry / ledger）"; exit 1 ;;
     esac
   done
 else
@@ -87,7 +88,7 @@ if [ -n "$SERVICES" ]; then
   PROFILE_ARGS=""
   SCOPE_DESC="服务子集: $SERVICES"
 else
-  SCOPE_DESC="应用: ${APPS:-全部（mistake + poetry）}"
+  SCOPE_DESC="应用: ${APPS:-全部（mistake + poetry + ledger）}"
 fi
 
 echo "==> 上传部署文件到 $TARGET:$REMOTE_DIR（模式：$([ "$DEV" = "1" ] && echo 开发调试 || echo 生产)$([ "$OBS" = "1" ] && echo " + 观测栈" || echo "")，$SCOPE_DESC）"

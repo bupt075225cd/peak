@@ -41,7 +41,7 @@ jobs:
 
       - name: Build binaries (vet-free compile check)
         run: |
-          for svc in gateway question-service recognition-service user-service poetry-service; do
+          for svc in gateway question-service recognition-service user-service poetry-service asset-service; do
             echo "building apps/$svc"
             (cd "apps/$svc" && go build -o /dev/null .)
           done
@@ -71,6 +71,14 @@ jobs:
           version: v1.64
           verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
           working-directory: apps/gateway
+          args: --timeout=5m
+
+      - name: golangci-lint (apps/asset-service)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
+          working-directory: apps/asset-service
           args: --timeout=5m
 
       - name: golangci-lint (apps/poetry-service)
@@ -161,6 +169,14 @@ jobs:
           working-directory: libs/observability
           args: --timeout=5m
 
+      - name: golangci-lint (libs/security)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          verify: false  # 不在线校验配置 schema（v1.64 需联网拉取，runner 网络抖动会超时）
+          working-directory: libs/security
+          args: --timeout=5m
+
       - name: golangci-lint (libs/storage)
         uses: golangci/golangci-lint-action@v6
         with:
@@ -211,6 +227,9 @@ jobs:
           # 当前较低覆盖率的包（storage/observability/http）先设为「不低于现有水平」，
           # 待补齐测试后可上调至 70+。其余包已达标，直接锁 70。
           declare -A PER_PKG_MIN=(
+            ["peak/apps/asset-service/internal/handler"]=75
+            ["peak/apps/asset-service/internal/repository"]=85
+            ["peak/apps/asset-service/internal/service"]=80
             ["peak/apps/gateway"]=60
             ["peak/apps/question-service/internal/handler"]=80
             ["peak/apps/question-service/internal/repository"]=85
@@ -220,6 +239,7 @@ jobs:
             ["peak/apps/recognition-service/internal/service"]=80
             ["peak/libs/config"]=90
             ["peak/libs/domain"]=70
+            ["peak/libs/security"]=90
             ["peak/libs/errors"]=95
             ["peak/libs/http"]=60
             ["peak/libs/logger"]=90
@@ -402,6 +422,17 @@ jobs:
           tags: |
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-recognition-service:${{ github.sha }}
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-recognition-service:latest
+
+      - name: Build & push asset-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/asset-service/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          provenance: false
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-asset-service:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/peak-asset-service:latest
 
       - name: Build & push web image
         uses: docker/build-push-action@v6

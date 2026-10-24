@@ -43,6 +43,9 @@ func httpStatus(code errors.Code) int {
 		return http.StatusConflict
 	case errors.CodeRateLimited:
 		return http.StatusTooManyRequests
+	case errors.CodeReauthRequired:
+		// 428 Precondition Required：要求重新验证身份（如导出、注销等敏感操作）。
+		return http.StatusPreconditionRequired
 	default:
 		return http.StatusInternalServerError
 	}

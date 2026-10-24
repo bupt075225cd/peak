@@ -30,9 +30,9 @@ function buildRouter() {
   })
 }
 
-async function mountRegister() {
+async function mountRegister(target = '/register') {
   const router = buildRouter()
-  router.push('/register')
+  router.push(target)
   await router.isReady()
   const wrapper = mount(Register, { global: { plugins: [router] } })
   return { wrapper, router }
@@ -64,6 +64,13 @@ describe('Register.vue', () => {
     expect(wrapper.find('#reg-confirm').exists()).toBe(true)
     expect(wrapper.find('#reg-code').exists()).toBe(true)
     expect(wrapper.text()).toContain('注册 Peak 错题本')
+  })
+
+  it('带账本 redirect 时展示账本品牌', async () => {
+    const { wrapper } = await mountRegister('/register?redirect=/ledger')
+    expect(wrapper.find('[data-test="register-title"]').text()).toBe('注册 Peak 家庭账本')
+    const login = wrapper.findAll('a').find((a) => a.text().includes('直接登录'))
+    expect(login?.attributes('href')).toContain('/login?redirect=/ledger')
   })
 
   it('邮箱、密码与确认密码的校验提示', async () => {

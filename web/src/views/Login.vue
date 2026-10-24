@@ -3,23 +3,24 @@ import { ref, computed, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, LogIn, ArrowLeft, Loader2, Smartphone, ShieldCheck,
-  KeyRound, Mail, Lock, Eye, EyeOff,
+  KeyRound, Mail, Lock, Eye, EyeOff, Wallet,
 } from 'lucide-vue-next'
 import { sendSmsCode, smsLogin, passwordLogin } from '../api'
 import { useAuth } from '../composables/useAuth'
+import { useAppBrand } from '../composables/useAppBrand'
 import { SMS_LOGIN_ENABLED } from '../config/features'
+import { safeRedirect } from '../utils/redirect'
 
 const router = useRouter()
 const route = useRoute()
 const { login } = useAuth()
+// 从账本被拦到登录页时沿用账本品牌，避免「登录 Peak 错题本」的错位。
+const { isLedger } = useAppBrand()
 
-// 登录成功后的回跳目标：来自 redirect 查询参数。
-// 仅接受站内绝对路径（以单个 / 开头），防止开放重定向。
-const redirectTarget = computed(() => {
-  const r = route.query.redirect
-  if (typeof r === 'string' && r.startsWith('/') && !r.startsWith('//')) return r
-  return '/home'
-})
+// 登录成功后的回跳目标：来自 redirect 查询参数（只接受站内绝对路径）。
+const redirectTarget = computed(() => safeRedirect(route.query.redirect))
+// 去注册时带上回跳目标，注册完成后仍回到原本要访问的页面（含账本）。
+const registerLink = computed(() => (route.query.redirect ? { path: '/register', query: { redirect: redirectTarget.value } } : '/register'))
 
 // 登录方式：sms（验证码）/ password（账号密码），Tab 切换。
 // 短信服务未接入时（SMS_LOGIN_ENABLED=false）隐藏验证码登录，默认密码登录。
@@ -139,13 +140,21 @@ function goBack() {
     <div class="mt-6 bg-white rounded-2xl border border-slate-200/80 p-8 shadow-sm animate-fade-up">
       <div class="flex flex-col items-center text-center">
         <div
-          class="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center shadow-lg shadow-blue-500/20"
+          class="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"
+          :class="isLedger
+            ? 'bg-gradient-to-br from-ledger-ink to-[#3A4B72] shadow-slate-500/25'
+            : 'bg-gradient-to-br from-primary to-primary-light shadow-blue-500/20'"
+          data-test="login-logo"
         >
-          <BookOpen class="w-6 h-6 text-white" />
+          <Wallet v-if="isLedger" class="w-6 h-6 text-white" />
+          <BookOpen v-else class="w-6 h-6 text-white" />
         </div>
-        <h1 class="mt-4 text-xl font-semibold text-ink">登录 Peak 错题本</h1>
+        <h1 class="mt-4 text-xl font-semibold text-ink" data-test="login-title">
+          登录 Peak {{ isLedger ? '家庭账本' : '错题本' }}
+        </h1>
         <p class="mt-1 text-sm text-ink-soft">
-          {{ mode === 'sms' ? '输入手机号，验证码登录；新手机号将自动创建账号' : '使用手机号或邮箱 + 密码登录' }}
+          <template v-if="isLedger">使用账号密码登录，账本数据以密文存储，仅你本人可见</template>
+          <template v-else>{{ mode === 'sms' ? '输入手机号，验证码登录；新手机号将自动创建账号' : '使用手机号或邮箱 + 密码登录' }}</template>
         </p>
       </div>
 
@@ -302,7 +311,7 @@ function goBack() {
 
         <p class="text-center text-sm text-ink-soft">
           还没有账号？
-          <router-link to="/register" class="text-primary hover:text-primary-light font-medium transition-colors">
+          <router-link :to="registerLink" class="text-primary hover:text-primary-light font-medium transition-colors">
             邮箱注册
           </router-link>
         </p>

@@ -24,3 +24,9 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["user-service:8083"]
+
+  # 家庭资产账本：指标标签不含用户维度，仅按错误类型与耗时聚合。
+  - job_name: "asset-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["asset-service:8085"]

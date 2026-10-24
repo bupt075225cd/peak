@@ -4,12 +4,14 @@
 #   docker compose -f docker-compose.prod.yml up -d
 #   镜像 tag 通过 .env 的 IMAGE_TAG 指定（commit sha 或 latest，默认 latest）
 # 应用级选择部署（多应用模型，profile 分组）：
-#   部署全部应用：  --profile mistake --profile poetry up -d
+#   部署全部应用：  --profile mistake --profile poetry --profile ledger up -d
 #   仅古诗文应用：  --profile poetry up -d            （core + poetry-service）
 #   仅错题本应用：  --profile mistake up -d           （core + question/recognition）
+#   仅家庭账本：    --profile ledger up -d            （core + asset-service，需注入账本密钥）
 #   指定单个服务：  up -d poetry-service              （显式目标可无视 profile）
 #   其中 core（始终启动）= gateway + user-service + web（多应用共享层）；
-#   mistake = question-service + recognition-service；poetry = poetry-service。
+#   mistake = question-service + recognition-service；poetry = poetry-service；
+#   ledger = asset-service（家庭资产账本，加密存储，密钥必须由环境注入）。
 #   应用间共享 user-service 与数据库，停用某应用 profile 不影响其他应用。
 # 说明：
 #   - 业务镜像来自阿里云 ACR（CI 推送），私有仓库需先 docker login
@@ -72,6 +74,9 @@ services:
       poetry-service:
         condition: service_started
         required: false
+      asset-service:
+        condition: service_started
+        required: false
     environment:
       SERVER_PORT: "8080"
       LOG_DEV: "false"
@@ -79,6 +84,7 @@ services:
       RECOGNITION_SERVICE_URL: "http://recognition-service:8082"
       USER_SERVICE_URL: "http://user-service:8083"
       POETRY_SERVICE_URL: "http://poetry-service:8084"
+      ASSET_SERVICE_URL: "http://asset-service:8085"
       # JWT 密钥须与 user-service 一致
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
@@ -248,6 +254,43 @@ services:
       - "8084"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8084/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  # asset-service 家庭资产账本：敏感字段信封加密（AES-256-GCM），
+  # 业务表只存 HMAC 伪名。三把密钥必须由 .env / 环境注入，缺失即拒绝启动；
+  # LEDGER_ALLOW_DEV_KEYS 固定为 false，禁止内置开发密钥上生产。
+  # 归入 ledger profile（应用级选择部署）。
+  asset-service:
+    image: crpi-vb458bo8ja2welze.cn-chengdu.personal.cr.aliyuncs.com/peak2026/peak-asset-service:${IMAGE_TAG:-latest}
+    container_name: peak-asset-service
+    restart: unless-stopped
+    profiles: ["ledger"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+        # 切换外部数据库时本地 postgres 容器（self-hosted-db profile）不启动，
+        # 依赖降级为可选，避免 Compose 因依赖服务被 profile 禁用而报错。
+        required: false
+    environment:
+      SERVER_PORT: "8085"
+      LOG_DEV: "false"
+      DB_DIALECT: "postgres"
+      DB_DSN: "host=${POSTGRES_HOST:-postgres} port=${POSTGRES_PORT:-5432} user=${POSTGRES_USER:-peak} password=${POSTGRES_PASSWORD:-peak123456} dbname=${POSTGRES_DB:-peak} sslmode=${POSTGRES_SSLMODE:-disable} TimeZone=${TZ:-Asia/Shanghai}"
+      # 三把密钥职责分离：主密钥（派生 DEK）/ 伪名密钥 / 行 MAC 密钥。
+      LEDGER_MASTER_KEY: ${LEDGER_MASTER_KEY:?LEDGER_MASTER_KEY is required}
+      LEDGER_MASTER_KEY_PREVIOUS: ${LEDGER_MASTER_KEY_PREVIOUS:-}
+      LEDGER_ID_KEY: ${LEDGER_ID_KEY:?LEDGER_ID_KEY is required}
+      LEDGER_MAC_KEY: ${LEDGER_MAC_KEY:?LEDGER_MAC_KEY is required}
+      LEDGER_KEY_VERSION: ${LEDGER_KEY_VERSION:-1}
+      LEDGER_ALLOW_DEV_KEYS: "false"
+      TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
+    expose:
+      - "8085"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8085/healthz"]
       interval: 15s
       timeout: 3s
       retries: 5

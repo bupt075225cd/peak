@@ -1,0 +1,39 @@
+server:
+  port: "${SERVER_PORT:-8085}"
+
+log:
+  development: ${LOG_DEV:-true}
+
+tracing:
+  endpoint: "${TRACING_ENDPOINT:-}"  # OpenTelemetry collector 地址，留空则不启用追踪
+
+database:
+  dialect: "${DB_DIALECT:-postgres}"  # postgres / sqlite
+  dsn: "${DB_DSN:-host=127.0.0.1 port=5432 user=peak password=peak123456 dbname=peak sslmode=disable TimeZone=Asia/Shanghai}"
+  slow_query_threshold: "${DB_SLOW_QUERY_THRESHOLD:-200ms}"
+  max_open_conns: "${DB_MAX_OPEN_CONNS:-10}"
+  max_idle_conns: "${DB_MAX_IDLE_CONNS:-5}"
+  conn_max_lifetime: "${DB_CONN_MAX_LIFETIME:-1h}"
+  conn_max_idle_time: "${DB_CONN_MAX_IDLE_TIME:-10m}"
+
+# 隐私与安全：三把密钥必须由环境变量注入，职责分离。
+# - ledger_master_key：KEK，仅用于派生每用户 DEK（HKDF）
+# - ledger_id_key：user_id → owner_ref 伪名映射，业务库不落真实 ID
+# - ledger_mac_key：行级 HMAC，检出数据库层静默篡改
+# 生产环境请设置 LEDGER_ALLOW_DEV_KEYS=false，缺失或使用内置开发密钥时进程拒绝启动。
+security:
+  ledger_master_key: "${LEDGER_MASTER_KEY:-}"
+  # 上一版本主密钥：仅在轮换期用于解密历史数据（版本号 = key_version - 1）。
+  ledger_master_key_previous: "${LEDGER_MASTER_KEY_PREVIOUS:-}"
+  ledger_id_key: "${LEDGER_ID_KEY:-}"
+  ledger_mac_key: "${LEDGER_MAC_KEY:-}"
+  key_version: "${LEDGER_KEY_VERSION:-1}"
+  allow_dev_keys: "${LEDGER_ALLOW_DEV_KEYS:-true}"
+  # 敏感操作（导出/注销）要求令牌在以下窗口内签发，否则返回 428 要求重新登录。
+  reauth_window: "${LEDGER_REAUTH_WINDOW:-5m}"
+  # 单用户条目软上限：超出后拒绝新增，引导归档（内存聚合为 O(n)）。
+  max_items: "${LEDGER_MAX_ITEMS:-2000}"
+  # 注销冷静期天数。
+  deletion_grace_days: "${LEDGER_DELETION_GRACE_DAYS:-30}"
+  # 到期注销清扫间隔。
+  sweeper_interval: "${LEDGER_SWEEPER_INTERVAL:-1h}"

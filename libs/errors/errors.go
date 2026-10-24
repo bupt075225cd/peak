@@ -11,17 +11,18 @@ type Code int
 
 // 通用错误码段。
 const (
-	CodeOK               Code = 0
-	CodeInvalidArgument  Code = 1001
-	CodeUnauthorized     Code = 1002
-	CodeForbidden        Code = 1003
-	CodeNotFound         Code = 1004
-	CodeConflict         Code = 1005
-	CodeRateLimited      Code = 1006
-	CodeInternal         Code = 5000
-	CodeUpstream         Code = 5001
-	CodeRecognitionFail  Code = 5002
-	CodeStorageFail      Code = 5003
+	CodeOK              Code = 0
+	CodeInvalidArgument Code = 1001
+	CodeUnauthorized    Code = 1002
+	CodeForbidden       Code = 1003
+	CodeNotFound        Code = 1004
+	CodeConflict        Code = 1005
+	CodeRateLimited     Code = 1006
+	CodeReauthRequired  Code = 1007
+	CodeInternal        Code = 5000
+	CodeUpstream        Code = 5001
+	CodeRecognitionFail Code = 5002
+	CodeStorageFail     Code = 5003
 )
 
 // Error 业务错误，包含错误码与消息。

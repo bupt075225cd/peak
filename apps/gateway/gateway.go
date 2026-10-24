@@ -34,6 +34,10 @@ type Gateway struct {
 	corsOrigins []string
 	// allowLegacyTokens 是否放行无 aud 的历史令牌（默认 true，收紧前置为 false）。
 	allowLegacyTokens bool
+	// limiter 按用户令牌桶限流（仅对配置前缀生效，默认 /api/ledger）。
+	limiter *rateLimiter
+	// csp Content-Security-Policy 头；空表示不下发。
+	csp string
 }
 
 // NewGateway 从配置构建网关路由表。
@@ -91,12 +95,39 @@ func NewGateway(cfg *config.Loader, log *logger.Logger) *Gateway {
 			}
 		}
 	}
+	// 限流：仅暴露给高风险前缀，默认只覆盖账本接口。
+	rateLimitRPS := 2.0
+	if raw := cfg.String("ratelimit.rps", ""); raw != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
+			rateLimitRPS = v
+		}
+	}
+	limitPrefixes := splitList(cfg.String("ratelimit.prefixes", "/api/ledger"))
+	limiter := newRateLimiter(rateLimitRPS, cfg.Int("ratelimit.burst", 30), limitPrefixes)
+
 	return &Gateway{
 		cfg: cfg, log: log, routes: routes,
 		audienceRoutes:    audienceRoutes,
 		corsOrigins:       corsOrigins,
 		allowLegacyTokens: cfg.Bool("auth.allow_legacy_tokens", true),
+		limiter:           limiter,
+		csp:               cfg.String("security.csp", defaultCSP),
 	}
+}
+
+// defaultCSP 同源策略：前端为同域 SPA，无外部 CDN 依赖。
+const defaultCSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+// splitList 解析逗号分隔配置项。
+func splitList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // RegisterRoutes 注册网关路由。
@@ -120,8 +151,10 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 	// 跨域处理。
 	engine.Use(g.corsMiddleware())
 
-	// 预留鉴权中间件（当前为透传，后续接入 user-service）。
+	// 鉴权（JWT + 应用受众）→ 按用户限流 → 安全响应头。
 	engine.Use(g.authMiddleware())
+	engine.Use(g.limiter.middleware())
+	engine.Use(securityHeaders(g.csp))
 
 	// 为每个前缀注册反向代理。
 	for prefix, backend := range g.routes {
@@ -180,13 +213,16 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 客户端真实 IP：网关是唯一可信入口，覆盖外部传入的头。
 		c.Request.Header.Set("X-Real-IP", c.ClientIP())
+		// 令牌签发时间同样只信任网关的解析结果：先剔除外部可能伪造的头。
+		c.Request.Header.Del("X-Token-Iat")
 
 		if isPublicPath(c.Request.Method, c.Request.URL.Path) {
 			// 已登录用户访问公开接口时仍解析身份（尽力而为，失败不阻断）。
 			if h := c.GetHeader("Authorization"); h != "" {
-				if uid, _, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret); err == nil {
-					c.Set("user_id", uid)
-					c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
+				if claims, err := auth.ParseClaims(strings.TrimPrefix(h, "Bearer "), secret); err == nil {
+					c.Set("user_id", claims.UserID)
+					c.Request.Header.Set("X-User-Id", strconv.FormatUint(claims.UserID, 10))
+					injectIssuedAt(c, claims)
 				}
 			}
 			c.Next()
@@ -199,25 +235,37 @@ func (g *Gateway) authMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		uid, aud, err := auth.Parse(strings.TrimPrefix(h, "Bearer "), secret)
-		if err != nil || uid == 0 {
+		claims, err := auth.ParseClaims(strings.TrimPrefix(h, "Bearer "), secret)
+		if err != nil || claims.UserID == 0 {
 			g.log.Warn("invalid token", zap.String("path", c.Request.URL.Path), zap.Error(err))
 			httpx.Fail(c, bizerr.New(bizerr.CodeUnauthorized, "未登录或令牌已过期"))
 			c.Abort()
 			return
 		}
 		// 应用受众校验：令牌声明的应用必须与路由允许的应用匹配（应用间令牌不通用）。
-		if err := g.checkAudience(c.Request.URL.Path, aud); err != nil {
-			g.log.Warn("audience mismatch", zap.String("path", c.Request.URL.Path), zap.String("aud", aud))
+		if err := g.checkAudience(c.Request.URL.Path, claims.Audience); err != nil {
+			g.log.Warn("audience mismatch", zap.String("path", c.Request.URL.Path), zap.String("aud", claims.Audience))
 			httpx.Fail(c, err)
 			c.Abort()
 			return
 		}
 		// 以真实身份覆盖 X-User-Id（含外部伪造值），后端服务零改动获得用户隔离。
-		c.Set("user_id", uid)
-		c.Request.Header.Set("X-User-Id", strconv.FormatUint(uid, 10))
+		c.Set("user_id", claims.UserID)
+		c.Request.Header.Set("X-User-Id", strconv.FormatUint(claims.UserID, 10))
+		injectIssuedAt(c, claims)
 		c.Next()
 	}
+}
+
+// injectIssuedAt 把令牌签发时间注入下游请求头。
+//
+// 账本的导出/注销等敏感操作据此判断"令牌是否新鲜"，不足则要求重新登录；
+// 该头只由网关写入，客户端传入的同名头已在上游被删除。
+func injectIssuedAt(c *gin.Context, claims *auth.Claims) {
+	if claims.IssuedAt.IsZero() {
+		return
+	}
+	c.Request.Header.Set("X-Token-Iat", strconv.FormatInt(claims.IssuedAt.Unix(), 10))
 }
 
 // checkAudience 校验令牌 aud 与路由前缀允许的应用受众是否匹配：
@@ -283,10 +331,10 @@ func (g *Gateway) proxy(engine *gin.Engine, prefix, backend string) {
 }
 
 // injectTraceContext 向下游请求注入追踪上下文：
-// - 请求上下文有激活 span（tracing 已启用）时，写标准 W3C traceparent，
-//   下游 span 以网关 span 为父，形成完整链路；
-// - 无激活 span 时，若 trace_id 为 32 位 hex 也可构造 traceparent（仅关联、不采样）；
-// - 始终透传自定义 X-Trace-Id 头，保持与旧后端/测试兼容。
+//   - 请求上下文有激活 span（tracing 已启用）时，写标准 W3C traceparent，
+//     下游 span 以网关 span 为父，形成完整链路；
+//   - 无激活 span 时，若 trace_id 为 32 位 hex 也可构造 traceparent（仅关联、不采样）；
+//   - 始终透传自定义 X-Trace-Id 头，保持与旧后端/测试兼容。
 func injectTraceContext(c *gin.Context) {
 	tid := c.GetString("trace_id")
 	spanID := func() string {

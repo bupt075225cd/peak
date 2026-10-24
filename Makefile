@@ -32,6 +32,7 @@ QUESTION_DIR := $(CURDIR)/apps/question-service
 RECOGNITION_DIR := $(CURDIR)/apps/recognition-service
 USER_DIR := $(CURDIR)/apps/user-service
 POETRY_DIR := $(CURDIR)/apps/poetry-service
+ASSET_DIR := $(CURDIR)/apps/asset-service
 GATEWAY_DIR := $(CURDIR)/apps/gateway
 # recognition-service 默认用 aliyun provider，可覆盖：make run-sqlite RECOGNITION_PROVIDER=mock
 RECOGNITION_PROVIDER ?= aliyun
@@ -77,8 +78,8 @@ lint:
 		GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 	fi
 	@echo "==> golangci-lint (逐模块)"
-	@set -e; for m in apps/gateway apps/poetry-service apps/question-service apps/recognition-service apps/user-service \
-		libs/config libs/domain libs/errors libs/filesign libs/http libs/logger libs/observability libs/storage; do \
+	@set -e; for m in apps/asset-service apps/gateway apps/poetry-service apps/question-service apps/recognition-service apps/user-service \
+		libs/auth libs/config libs/domain libs/errors libs/filesign libs/http libs/logger libs/observability libs/security libs/storage; do \
 		$(GOLANGCI_LINT) run --timeout=5m ./$$m/... ; \
 	done
 	@echo "✓ golangci-lint 通过"
@@ -123,7 +124,7 @@ watch:
 
 # 停止记录的调测进程（按 .pid 文件，不误杀编译进程）
 define stop-sqlite-proc
-	@for f in poetry question recognition user gateway; do \
+	@for f in poetry question recognition user asset gateway; do \
 		pidf=$(PEAK_RUN)/$$f.pid; \
 		if [ -f "$$pidf" ]; then \
 			pid=$$(cat "$$pidf" 2>/dev/null); \
@@ -149,16 +150,18 @@ run-sqlite:
 	go build -o $(PEAK_BIN)/recognition-service ./apps/recognition-service
 	go build -o $(PEAK_BIN)/user-service ./apps/user-service
 	go build -o $(PEAK_BIN)/poetry-service ./apps/poetry-service
+	go build -o $(PEAK_BIN)/asset-service ./apps/asset-service
 	@echo "==> 启动服务（sqlite 空库）"
 	cd $(QUESTION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/question.db STORAGE_ROOT=$(PEAK_DATA)/storage STORAGE_SOURCE_ROOT=$(PEAK_DATA)/storage nohup $(PEAK_BIN)/question-service > $(PEAK_RUN)/question.log 2>&1 & echo $$! > $(PEAK_RUN)/question.pid
 	cd $(RECOGNITION_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/recognition.db STORAGE_ROOT=$(PEAK_DATA)/storage RECOGNITION_PROVIDER=$(RECOGNITION_PROVIDER) GEOMETRY_ENABLED=$(GEOMETRY_ENABLED) nohup $(PEAK_BIN)/recognition-service > $(PEAK_RUN)/recognition.log 2>&1 & echo $$! > $(PEAK_RUN)/recognition.pid
 	cd $(USER_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/user.db JWT_SECRET=$(JWT_SECRET) AUTH_MASTER_CODE=$(AUTH_MASTER_CODE) nohup $(PEAK_BIN)/user-service > $(PEAK_RUN)/user.log 2>&1 & echo $$! > $(PEAK_RUN)/user.pid
 	cd $(POETRY_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/poetry.db nohup $(PEAK_BIN)/poetry-service > $(PEAK_RUN)/poetry.log 2>&1 & echo $$! > $(PEAK_RUN)/poetry.pid
+	cd $(ASSET_DIR) && exec env DB_DIALECT=sqlite DB_DSN=$(PEAK_DATA)/asset.db LEDGER_ALLOW_DEV_KEYS=true nohup $(PEAK_BIN)/asset-service > $(PEAK_RUN)/asset.log 2>&1 & echo $$! > $(PEAK_RUN)/asset.pid
 	cd $(GATEWAY_DIR) && exec env JWT_SECRET=$(JWT_SECRET) nohup $(PEAK_BIN)/gateway > $(PEAK_RUN)/gateway.log 2>&1 & echo $$! > $(PEAK_RUN)/gateway.pid
 	@sleep 2
-	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082  user=:8083  poetry=:8084"
-	@echo "  日志: $(PEAK_RUN)/{gateway,question,recognition,user,poetry}.log"
-	@echo "  数据库(空库): $(PEAK_DATA)/{question,recognition,user,poetry}.db"
+	@echo "✓ 已启动: gateway=:8080  question=:8081  recognition=:8082  user=:8083  poetry=:8084  asset=:8085"
+	@echo "  日志: $(PEAK_RUN)/{gateway,question,recognition,user,poetry,asset}.log"
+	@echo "  数据库(空库): $(PEAK_DATA)/{question,recognition,user,poetry,asset}.db"
 
 ## 停止本地 SQLite 调测服务并清空数据目录
 stop-sqlite:
@@ -166,7 +169,7 @@ stop-sqlite:
 	$(stop-sqlite-proc)
 	@sleep 1
 	@rm -rf $(PEAK_DATA)
-	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/user.log $(PEAK_RUN)/poetry.log $(PEAK_RUN)/gateway.log
+	@rm -f $(PEAK_RUN)/question.log $(PEAK_RUN)/recognition.log $(PEAK_RUN)/user.log $(PEAK_RUN)/poetry.log $(PEAK_RUN)/asset.log $(PEAK_RUN)/gateway.log
 	@echo "✓ 已停止并清空 $(PEAK_RUN)/data 与日志"
 
 .PHONY: check lint build test coverage-gate ci watch install-tools run-sqlite stop-sqlite

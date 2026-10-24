@@ -71,6 +71,24 @@ describe('Login.vue 默认状态', () => {
     expect(wrapper.text()).toContain('忘记密码？')
     expect(wrapper.text()).toContain('邮箱注册')
   })
+
+  it('默认展示错题本品牌', () => {
+    const { wrapper } = mountLogin()
+    expect(wrapper.find('[data-test="login-title"]').text()).toBe('登录 Peak 错题本')
+  })
+
+  it('从账本被拦截时登录页沿用账本品牌', async () => {
+    const router = buildRouter()
+    router.push('/login?redirect=/ledger')
+    await router.isReady()
+    const wrapper = mount(Login, { global: { plugins: [router] } })
+
+    expect(wrapper.find('[data-test="login-title"]').text()).toBe('登录 Peak 家庭账本')
+    expect(wrapper.text()).toContain('密文存储')
+    // 注册链接携带回跳目标，注册完仍回账本。
+    const register = wrapper.findAll('a').find((a) => a.text().includes('邮箱注册'))
+    expect(register?.attributes('href')).toContain('/register?redirect=/ledger')
+  })
 })
 
 describe('Login.vue 密码登录', () => {

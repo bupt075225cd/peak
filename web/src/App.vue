@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { Camera, BookOpen, BookMarked, Search, User, LogIn, ChevronDown, Pencil } from 'lucide-vue-next'
+import { Camera, BookOpen, BookMarked, Search, User, LogIn, ChevronDown, Pencil, Wallet, PieChart, List, Share2, Calendar } from 'lucide-vue-next'
 import { ref, computed, watch } from 'vue'
 import { useAuth } from './composables/useAuth'
+import { useAppBrand } from './composables/useAppBrand'
 import { getMe, updateMyName } from './api'
 
 const route = useRoute()
@@ -10,9 +11,21 @@ const router = useRouter()
 const { isLoggedIn, logout } = useAuth()
 const active = computed(() => route.name)
 
-// 应用外壳按路由前缀切换：/poetry* 为古诗文应用（独立品牌与导航），
-// 其余为错题本应用；用户菜单属共享账号体系，两个应用保持一致。
-const isPoetry = computed(() => route.path.startsWith('/poetry'))
+// 应用外壳按路由前缀切换：/poetry* 古诗文、/ledger* 家庭资产账本、
+// 其余为错题本应用；登录/注册页按 redirect 归属，用户菜单各应用共享。
+const { isPoetry, isLedger } = useAppBrand()
+
+// 账本应用内导航（顺序与页面信息层级一致）。
+const ledgerNav = [
+  { name: 'ledger-dashboard', to: '/ledger', label: '总览', icon: PieChart },
+  { name: 'ledger-items', to: '/ledger/items', label: '资产明细', icon: List },
+  { name: 'ledger-composition', to: '/ledger/composition', label: '资产组成', icon: Share2 },
+  { name: 'ledger-calendar', to: '/ledger/calendar', label: '资产月历', icon: Calendar },
+]
+
+// 未登录时点「登录」：保留当前所在应用，登录后回到原页面（登录页自身不重复带参）。
+const loginTarget = computed(() =>
+  route.path === '/login' ? '/login' : { path: '/login', query: { redirect: route.fullPath } })
 
 function handleLogout() {
   // 退出登录并回到主页（未登录形态）。
@@ -86,17 +99,22 @@ async function handleSaveName() {
         <div class="flex items-center gap-2">
           <div
             class="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg transition-colors"
-            :class="isPoetry ? 'bg-poetry-cinnabar shadow-poetry-cinnabar/25' : 'bg-gradient-to-br from-primary to-primary-light shadow-blue-500/20'"
+            :class="isPoetry
+              ? 'bg-poetry-cinnabar shadow-poetry-cinnabar/25'
+              : isLedger
+                ? 'bg-gradient-to-br from-ledger-ink to-[#3A4B72] shadow-slate-500/25'
+                : 'bg-gradient-to-br from-primary to-primary-light shadow-blue-500/20'"
           >
             <BookMarked v-if="isPoetry" class="w-5 h-5 text-white" />
+            <Wallet v-else-if="isLedger" class="w-5 h-5 text-white" />
             <BookOpen v-else class="w-5 h-5 text-white" />
           </div>
           <RouterLink
-            :to="isPoetry ? '/poetry' : '/home'"
+            :to="isPoetry ? '/poetry' : isLedger ? '/ledger' : '/home'"
             class="text-lg font-semibold tracking-tight text-ink cursor-pointer"
             data-test="app-brand"
           >
-            {{ isPoetry ? 'Peak 古诗文' : 'Peak 错题本' }}
+            {{ isPoetry ? 'Peak 古诗文' : isLedger ? 'Peak 家庭账本' : 'Peak 错题本' }}
           </RouterLink>
         </div>
         <nav class="flex items-center gap-1">
@@ -119,8 +137,21 @@ async function handleSaveName() {
               篇目检索
             </RouterLink>
           </template>
+          <!-- 家庭资产账本导航（私有数据，需登录） -->
+          <template v-if="isLoggedIn && isLedger">
+            <RouterLink
+              v-for="item in ledgerNav"
+              :key="item.name"
+              :to="item.to"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :class="active === item.name ? 'bg-ledger-ink/10 text-ledger-ink' : 'text-ink-soft hover:bg-slate-100'"
+            >
+              <component :is="item.icon" class="w-4 h-4" />
+              {{ item.label }}
+            </RouterLink>
+          </template>
           <!-- 错题本应用导航 -->
-          <template v-if="isLoggedIn && !isPoetry">
+          <template v-if="isLoggedIn && !isPoetry && !isLedger">
             <RouterLink
               to="/entry"
               class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -178,7 +209,7 @@ async function handleSaveName() {
             </template>
             <RouterLink
               v-else
-              to="/login"
+              :to="loginTarget"
               class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold shadow-md shadow-blue-500/20 hover:bg-primary-light transition-colors cursor-pointer"
             >
               <LogIn class="w-4 h-4" />

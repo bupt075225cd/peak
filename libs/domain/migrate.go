@@ -15,6 +15,15 @@ func Migrate(db *gorm.DB) error {
 		&RecognitionTask{},
 		&Poem{},
 		&AppClient{},
+		// 家庭资产账本：密文业务表 + 每用户密钥盐 + 审计链 + 同意/注销留痕。
+		&LedgerKeyring{},
+		&LedgerItem{},
+		&LedgerMember{},
+		&LedgerSnapshot{},
+		&LedgerAuditLog{},
+		&LedgerAuditHead{},
+		&LedgerConsent{},
+		&LedgerDeletionRequest{},
 	); err != nil {
 		return err
 	}

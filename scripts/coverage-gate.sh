@@ -13,6 +13,9 @@ WEB_TOTAL_MIN=${WEB_TOTAL_MIN:-80} # 前端总体语句覆盖率门槛（%）
 # 每个 Go 包的最低覆盖率门槛（%）。key 为包路径，value 为阈值。
 # 与 .github/workflows/ci.yml 保持一致。
 declare -A PER_PKG_MIN=(
+  ["peak/apps/asset-service/internal/handler"]=75
+  ["peak/apps/asset-service/internal/repository"]=85
+  ["peak/apps/asset-service/internal/service"]=80
   ["peak/apps/gateway"]=60
   ["peak/apps/question-service/internal/handler"]=80
   ["peak/apps/question-service/internal/repository"]=85
@@ -26,6 +29,7 @@ declare -A PER_PKG_MIN=(
   ["peak/apps/user-service/internal/mail"]=85
   ["peak/libs/config"]=90
   ["peak/libs/domain"]=70
+  ["peak/libs/security"]=90
   ["peak/libs/errors"]=95
   ["peak/libs/filesign"]=85
   ["peak/libs/http"]=60

@@ -89,14 +89,15 @@ Docker Compose 通过 `--env-file .env.production` 读取。
 docker login --username=<ACR用户名> <ACR实例地址>
 
 # 拉取镜像并后台启动（默认轻量模式；业务服务按应用分组，需激活对应 profile）
-# 全部应用：--profile mistake --profile poetry；core（gateway/user-service/web）始终启动
+# 全部应用：--profile mistake --profile poetry --profile ledger；core（gateway/user-service/web）始终启动
 docker compose --env-file .env.production -f docker-compose.prod.yml \
-  --profile mistake --profile poetry pull
+  --profile mistake --profile poetry --profile ledger pull
 docker compose --env-file .env.production -f docker-compose.prod.yml \
-  --profile mistake --profile poetry up -d
+  --profile mistake --profile poetry --profile ledger up -d
 
 # 应用级选择部署：
 #   仅古诗文应用：--profile poetry        仅错题本应用：--profile mistake
+#   仅家庭账本：  --profile ledger        （core + asset-service，需先注入账本密钥）
 #   指定单个服务：up -d poetry-service    （显式目标可无视 profile）
 # 需要观测栈时，追加 --profile observability（GRAFANA_ADMIN_PASSWORD 必须已设强密码）
 # docker compose --env-file .env.production --profile observability -f docker-compose.prod.yml up -d
@@ -107,7 +108,8 @@ docker compose --env-file .env.production -f docker-compose.prod.yml \
 ```bash
 ./deploy/deploy-to-host.sh root@<host>          # 生产模式（全部应用，轻量，不含观测栈）
 ./deploy/deploy-to-host.sh -a poetry root@<host>          # 仅古诗文应用（core + poetry）
-./deploy/deploy-to-host.sh -a mistake,poetry root@<host>  # 全部应用（等价缺省）
+./deploy/deploy-to-host.sh -a ledger root@<host>          # 仅家庭资产账本（core + asset-service）
+./deploy/deploy-to-host.sh -a mistake,poetry,ledger root@<host>  # 全部应用（等价缺省）
 ./deploy/deploy-to-host.sh -s "poetry-service web" root@<host>  # 指定服务子集
 ./deploy/deploy-to-host.sh --obs root@<host>    # 生产模式 + 观测栈
 ./deploy/deploy-to-host.sh -d root@<host>       # 开发调试模式：额外上传并叠加
@@ -124,10 +126,33 @@ docker compose --env-file .env.production -f docker-compose.prod.yml \
 | gateway | 8080 | `http://<host>:8080`（或经 web 反代 `/api`） |
 | question-service | 8081 | 仅内网 |
 | recognition-service | 8082 | 仅内网 |
+| asset-service | 8085 | 仅内网（`--profile ledger`） |
 | postgres | 5432 | 仅内网 |
 | prometheus | 9090 | `http://<host>:9090`（仅 `--obs` 开启观测栈时） |
 
 > 前端 `web` 容器内 Nginx 已配置将 `/api` 反代到 `gateway:8080`，因此生产环境浏览器直接访问 `http://<host>/` 即可同时访问前端与后端 API。
+
+### 家庭资产账本密钥注入与轮换
+
+asset-service 的加密密钥**不在编排里写默认值**，缺失时容器直接启动失败（fail-fast，避免带弱密钥上线）：
+
+```bash
+# .env.production（每把 32 字节随机值的 base64，分别生成，勿复用）
+LEDGER_MASTER_KEY=$(openssl rand -base64 32)
+LEDGER_ID_KEY=$(openssl rand -base64 32)
+LEDGER_MAC_KEY=$(openssl rand -base64 32)
+LEDGER_KEY_VERSION=1
+# 编排内已固定 LEDGER_ALLOW_DEV_KEYS=false，禁止内置开发密钥上生产
+```
+
+- **三把密钥分工**：主密钥派生每用户 DEK（HKDF）、伪名密钥把 user_id 映射为 `owner_ref`、MAC 密钥做行级完整性校验
+- **丢失主密钥 = 数据永久不可解**，务必纳入密钥管理系统的备份与权限控制（与数据库备份分开存放）
+- **轮换主密钥**：新值写入 `LEDGER_MASTER_KEY` 并把 `LEDGER_KEY_VERSION` 加 1，旧值写入
+  `LEDGER_MASTER_KEY_PREVIOUS`（仅用于解密历史数据），重启后新写入数据使用新版本；
+  历史条目仍按其 `key_version` 解密，全部重写完成后再移除旧密钥
+- **伪名密钥 / MAC 密钥轮换**会破坏历史数据的可关联性（伪名为派生值，MAC 需重签），
+  需配合一次全量重写，不建议在线轮换
+- **注销生效**：用户注销冷静期结束后销毁 `ledger_keyrings` 中的密钥盐，密文即使留在备份中也无法解密
 
 ## 4. 健康检查与监控
 

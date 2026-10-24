@@ -1,10 +1,12 @@
 # Peak · 中学生学习平台
 
-Peak 是面向中学生的学习平台，采用多应用架构：各应用独立域名部署、独立演进，
-共用统一的用户体系与基础设施。当前包含两个应用：
+Peak 是多应用平台，采用多应用架构：各应用独立域名部署、独立演进，
+共用统一的用户体系与基础设施。当前包含三个应用：
 
 - **错题本**（mistake）：拍照收录错题 → AI 识别整理 → 分类管理 → 组卷练习
 - **古诗文**（poetry）：统编版初中教材古诗文可视化总览、篇目检索与 AI 智能问答（RAG 二阶段）
+- **家庭资产账本**（ledger）：按月登记家庭资产与负债，查看总资产/净资产/负债率、资产组成桑基图与月度快照；
+  敏感字段信封加密存储、业务库只存不可逆伪名（见[隐私与安全](#隐私与安全家庭资产账本)）
 
 新应用可低成本接入：在应用注册表登记 → 网关加路由前缀与受众映射 → 前端配置自己的 client_id（详见[多应用模型](#多应用模型)）。
 
@@ -35,7 +37,8 @@ Peak 是面向中学生的学习平台，采用多应用架构：各应用独立
 ```
 
 - **core（多应用共享层）**：gateway、user-service、web（当前统一前端，未来按应用拆分独立前端）
-- **mistake 应用**：question-service + recognition-service；**poetry 应用**：poetry-service
+- **mistake 应用**：question-service + recognition-service；**poetry 应用**：poetry-service；
+  **ledger 应用**：asset-service（独立密钥体系，见[隐私与安全](#隐私与安全家庭资产账本)）
 - 各业务服务独立数据库（按服务拆库），仅通过 user-service 共享账号体系
 
 ## 多应用模型
@@ -43,9 +46,10 @@ Peak 是面向中学生的学习平台，采用多应用架构：各应用独立
 各应用独立域名、独立登录态，共用一套账号（OAuth 多客户端模型）：
 
 ```
-用户中心(user-service) ──┬─ 错题本   client_id: app-mistake
-（账号唯一）             ├─ 古诗文   client_id: app-poetry
-                        └─ 新应用…  client_id: app-xxx（注册表加一条记录即可）
+用户中心(user-service) ──┬─ 错题本    client_id: app-mistake
+（账号唯一）             ├─ 古诗文    client_id: app-poetry
+                        ├─ 家庭账本  client_id: app-ledger
+                        └─ 新应用…   client_id: app-xxx（注册表加一条记录即可）
 ```
 
 - **应用注册表**（`libs/domain.AppClient`，迁移时幂等播种默认客户端）：
@@ -79,6 +83,7 @@ peak/
 │   ├── question-service/    # 题目/错题服务 (:8081，mistake 应用)
 │   ├── recognition-service/ # 识别服务 (:8082，mistake 应用，含内置几何渲染 internal/geom)
 │   ├── poetry-service/      # 古诗文服务 (:8084，poetry 应用)
+│   ├── asset-service/       # 家庭资产账本 (:8085，ledger 应用)：加密仓储/聚合/隐私接口
 │   └── user-service/        # 用户服务 (:8083，core)：登录认证/用户信息/应用注册表
 ├── libs/                    # 公共库
 │   ├── auth/                # JWT 签发解析（含 aud 应用受众）+ 登录凭证
@@ -87,9 +92,11 @@ peak/
 │   ├── errors/              # 统一错误码
 │   ├── http/                # HTTP 封装、中间件
 │   ├── storage/             # FileStorage 接口 + LocalStorage + S3Storage(对象存储)
-│   ├── domain/              # 领域模型 + GORM 迁移 + 数据库方言（含 AppClient 应用注册表）
+│   ├── domain/              # 领域模型 + GORM 迁移 + 数据库方言（含 AppClient 应用注册表、账本模型）
+│   ├── security/            # 账本加密：AES-256-GCM / HKDF 派生 / HMAC 伪名与行校验
 │   └── observability/       # Prometheus 指标 + OTel 追踪
 ├── web/                     # Vue3 统一前端（多应用页面，未来按域名拆分）
+├── docs/privacy/            # 个人信息保护影响评估（PIA）等合规文档
 └── deploy/                  # 部署配置（compose 编排、观测栈、一键部署脚本）
 ```
 
@@ -223,8 +230,9 @@ make run-sqlite RECOGNITION_PROVIDER=mock    # 用 mock 识别，无需 API Key�
 make stop-sqlite                             # 停止服务并清空 /tmp/peak-run/data 与日志
 ```
 
-服务端口：gateway `:8080`、question `:8081`、recognition `:8082`、user `:8083`、poetry `:8084`；
-日志见 `/tmp/peak-run/*.log`。
+服务端口：gateway `:8080`、question `:8081`、recognition `:8082`、user `:8083`、poetry `:8084`、asset `:8085`；
+日志见 `/tmp/peak-run/*.log`。本地 `run-sqlite` 以 `LEDGER_ALLOW_DEV_KEYS=true` 启动账本服务，
+使用内置开发密钥（重启后历史密文仍可解），生产必须注入真实密钥并置 false。
 
 ## AI 识别服务（provider 可配置切换）
 
@@ -410,6 +418,23 @@ export:
 - **预置看板**（Grafana `:3000`，provisioning 自动导入）：全局总览、Go 运行时、数据库连接池、识别业务、前端监控
 - **告警规则**（`deploy/grafana/provisioning/alerting/`）：服务宕机、5xx 率、P99 延迟、识别失败率、AI 错误率、DB 池等待、前端错误突增；通知渠道在同目录 `contact-points.yml` 配置 webhook
 
+## 隐私与安全（家庭资产账本）
+
+账本按「数据库被拖库、甚至应用主机沦陷都尽量识别不到个人信息主体」设计，
+完整评估见 [`docs/privacy/ledger-pia.md`](docs/privacy/ledger-pia.md)。
+
+- **信封加密**：金额、名称、备注、子类、成员名与快照载荷以 AES-256-GCM 密文落库；
+  `DEK = HKDF-SHA256(KEK, 每用户随机盐)`，AAD 绑定主体、行标识与字段名，防跨行重放
+- **去标识化**：业务表不存 `user_id`/手机号/邮箱/姓名，只存 `owner_ref = HMAC(ID_KEY, user_id)`；
+  主密钥、伪名密钥、MAC 密钥三把分离，仅存在于进程环境变量
+- **完整性**：行级 HMAC 检出数据库层静默篡改、`version` 乐观锁防并发覆盖、审计日志哈希链不可无声改写
+- **访问控制**：网关按用户令牌桶限流、越权统一 404、导出与注销要求 5 分钟内新鲜令牌（否则 428）
+- **脱敏**：日志与控制台不出现金额与成员名；金额不进 URL 与本地存储；切后台自动隐藏；下载图叠加会话伪名水印
+- **合规**：首次使用需对敏感个人信息处理单独同意并留痕，支持全量导出（可携带权）与注销
+  （30 天冷静期后销毁密钥实现密码学删除）
+- **密钥注入**：生产 `LEDGER_MASTER_KEY` / `LEDGER_ID_KEY` / `LEDGER_MAC_KEY` 缺失、长度不符或仍为内置开发密钥时，
+  asset-service 直接拒绝启动（`LEDGER_ALLOW_DEV_KEYS=false`）；轮换见 `deploy/README.md`
+
 ## 生产部署
 
 业务镜像由 CI 自动构建并推送到**阿里云 ACR**（`docker-push` job，见下文 CI 章节），
@@ -422,22 +447,25 @@ cp deploy/.env.production.example deploy/.env.production   # 填入真实配置
 ./deploy/deploy-to-host.sh -d root@<host>     # 开发调试模式（叠加 dev.yml，
                                               # 开启超级验证码 000000 与 debug_code）
 ./deploy/deploy-to-host.sh -a poetry root@<host>          # 仅古诗文应用
-./deploy/deploy-to-host.sh -a mistake,poetry root@<host>  # 全部应用（等价缺省）
+./deploy/deploy-to-host.sh -a ledger root@<host>          # 仅家庭资产账本（需注入账本密钥）
+./deploy/deploy-to-host.sh -a mistake,poetry,ledger root@<host>  # 全部应用（等价缺省）
 ./deploy/deploy-to-host.sh -s "poetry-service web" root@<host>  # 指定服务子集
 
 # 方式二：手动部署（在部署机上，仓库中的 docker-compose.prod.yml + deploy/prometheus.yml）
 docker compose --env-file .env.production -f docker-compose.prod.yml \
-  --profile mistake --profile poetry pull          # 部署全部应用
+  --profile mistake --profile poetry --profile ledger pull   # 部署全部应用
 docker compose --env-file .env.production -f docker-compose.prod.yml \
-  --profile mistake --profile poetry up -d
+  --profile mistake --profile poetry --profile ledger up -d
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   --profile poetry up -d                           # 仅古诗文应用（core + poetry）
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile ledger up -d                           # 仅家庭资产账本（core + asset-service）
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   up -d poetry-service                             # 指定单个服务（显式目标无视 profile）
 ```
 
 - **应用级选择部署**：业务服务按应用分组（`mistake` = question + recognition，
-  `poetry` = poetry-service）；core（gateway / user-service / web 多应用共享层）
+  `poetry` = poetry-service，`ledger` = asset-service）；core（gateway / user-service / web 多应用共享层）
   始终启动，停用某应用 profile 不影响其他应用，网关对缺席后端的路由返回 502
 - 镜像版本由 `.env.production` 的 `IMAGE_TAG` 控制（`latest` 或 commit sha，回滚即改此值重新 pull + up）
 - 私有镜像仓库需先在部署机 `docker login`（见 `deploy/deploy.env.example`）

@@ -19,6 +19,7 @@ auth:
     /api/categories: ["app-mistake", "app-peak"]
     /api/recognition: ["app-mistake", "app-peak"]
     /api/poetry: ["app-poetry", "app-peak"]
+    /api/ledger: ["app-ledger", "app-peak"]
   # 是否放行无 aud 的历史令牌；前端全部接入 X-Client-Id 后置为 false 收紧。
   allow_legacy_tokens: "${AUTH_ALLOW_LEGACY_TOKENS:-true}"
 
@@ -35,3 +36,14 @@ routes:
   /api/mistakes: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
   /api/categories: "${QUESTION_SERVICE_URL:-http://localhost:8081}"
   /api/poetry: "${POETRY_SERVICE_URL:-http://localhost:8084}"
+  /api/ledger: "${ASSET_SERVICE_URL:-http://localhost:8085}"
+
+# 按用户令牌桶限流：仅对账本等高敏感前缀生效，避免影响既有应用。
+ratelimit:
+  prefixes: "${RATELIMIT_PREFIXES:-/api/ledger}"
+  rps: "${RATELIMIT_RPS:-2}"
+  burst: "${RATELIMIT_BURST:-30}"
+
+# 安全响应头：CSP 置空可关闭（按环境放开外部资源时需要）。
+security:
+  csp: "${SECURITY_CSP:-default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'}"

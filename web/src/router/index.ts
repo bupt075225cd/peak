@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { TOKEN_KEY } from '../composables/useAuth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -52,7 +53,40 @@ const router = createRouter({
       name: 'poetry-detail',
       component: () => import('../views/PoetryDetail.vue'),
     },
+    // 家庭资产账本：全部为私有数据，未登录统一引导登录。
+    {
+      path: '/ledger',
+      name: 'ledger-dashboard',
+      component: () => import('../views/LedgerDashboard.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/ledger/items',
+      name: 'ledger-items',
+      component: () => import('../views/LedgerItems.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/ledger/composition',
+      name: 'ledger-composition',
+      component: () => import('../views/LedgerComposition.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/ledger/calendar',
+      name: 'ledger-calendar',
+      component: () => import('../views/LedgerCalendar.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
+})
+
+// 仅拦 requiresAuth 路由，不改动错题本/古诗文现有导航行为。
+router.beforeEach((to) => {
+  if (to.meta.requiresAuth && !localStorage.getItem(TOKEN_KEY)) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  return true
 })
 
 export default router

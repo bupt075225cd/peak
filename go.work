@@ -3,6 +3,7 @@ go 1.24.1
 toolchain go1.24.4
 
 use (
+	./apps/asset-service
 	./apps/gateway
 	./apps/poetry-service
 	./apps/question-service
@@ -16,5 +17,6 @@ use (
 	./libs/http
 	./libs/logger
 	./libs/observability
+	./libs/security
 	./libs/storage
 )
