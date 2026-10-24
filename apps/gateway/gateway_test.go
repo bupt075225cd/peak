@@ -72,6 +72,48 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+// 安全头必须在鉴权失败时也存在：401/429 响应同样可能渲染到浏览器，
+// 缺少 CSP 与 nosniff 会让防护在最需要的时候失效。
+func TestSecurityHeadersOnAllResponses(t *testing.T) {
+	r := setupGateway(t, "")
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"healthz", http.MethodGet, "/healthz", http.StatusOK},
+		{"unauthorized ledger", http.MethodGet, "/api/ledger/meta", http.StatusUnauthorized},
+		// 未知路径同样先被鉴权拦下，不泄露路由存在性。
+		{"unknown route", http.MethodGet, "/api/unknown/path", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("X-Client-Id", "app-peak")
+			r.ServeHTTP(w, req)
+
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+			for header, want := range map[string]string{
+				"X-Content-Type-Options": "nosniff",
+				"X-Frame-Options":        "DENY",
+				"Referrer-Policy":        "no-referrer",
+			} {
+				if got := w.Header().Get(header); got != want {
+					t.Fatalf("%s = %q, want %q", header, got, want)
+				}
+			}
+			if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+				t.Fatalf("CSP = %q", csp)
+			}
+		})
+	}
+}
+
 func TestDefaultRoutes(t *testing.T) {
 	// 空配置 -> 使用默认路由表。
 	cfg := mustLoad(t, "")

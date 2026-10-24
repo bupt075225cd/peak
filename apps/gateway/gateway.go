@@ -141,6 +141,10 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 		_ = engine.SetTrustedProxies(nil)
 	}
 
+	// 安全响应头必须最先挂载：鉴权/限流/跨域都会在失败时提前中止请求链，
+	// 若排在后面，401、429 这类响应就会缺少 CSP 与 sniff 防护。
+	engine.Use(securityHeaders(g.csp))
+
 	engine.GET("/healthz", func(c *gin.Context) {
 		httpx.OK(c, gin.H{"status": "ok"})
 	})
@@ -151,10 +155,9 @@ func (g *Gateway) RegisterRoutes(engine *gin.Engine) {
 	// 跨域处理。
 	engine.Use(g.corsMiddleware())
 
-	// 鉴权（JWT + 应用受众）→ 按用户限流 → 安全响应头。
+	// 鉴权（JWT + 应用受众）→ 按用户限流。
 	engine.Use(g.authMiddleware())
 	engine.Use(g.limiter.middleware())
-	engine.Use(securityHeaders(g.csp))
 
 	// 为每个前缀注册反向代理。
 	for prefix, backend := range g.routes {
