@@ -94,18 +94,20 @@ beforeEach(() => {
 })
 
 describe('LedgerComposition.vue 资产组成', () => {
-  it('只展示桑基图与图例，不出现右侧汇总卡与口径说明', async () => {
+  it('只展示桑基图与总资产方框，不出现右侧汇总卡、图例与口径说明', async () => {
     const wrapper = await mountView()
 
     expect(wrapper.find('[data-test="composition-chart"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('流动资金')
-    expect(wrapper.text()).toContain('固定资产')
+    // 总资产不进桑基节点，单独在图上方的方框里展示。
+    expect(wrapper.find('[data-test="chart-total-asset"]').text()).toBe('30,000.00')
 
-    // 需求：用户只看桑基图，右侧三项汇总与"面值/汇率"口径说明都不要。
     expect(wrapper.find('[data-test="composition-total"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="composition-liability"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="composition-net"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('金额按录入币种面值计入')
+    // 副标题与五色图例都按反馈移除。
+    expect(wrapper.text()).not.toContain('从净资产与负债出发')
+    expect(wrapper.text()).not.toContain('应收款')
   })
 
   it('不再提供排除固定资产的范围切换', async () => {

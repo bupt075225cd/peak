@@ -35,34 +35,23 @@ interface SankeyLink {
 const COLORS = {
   net: '#3E9E7E',
   debt: '#B9B4C7',
-  total: '#7C8DB5',
   liquid: '#E9A66B',
   fixed: '#9DBCC4',
   investment: '#A9A3D4',
   receivable: '#63C6A5',
-  liability: '#B9B4C7',
 }
-
-/** 图例：与节点配色保持一致，顺序即页面展示顺序。 */
-export const COMPOSITION_LEGEND: { key: string; label: string; color: string }[] = [
-  { key: 'liquid', label: '流动资金', color: COLORS.liquid },
-  { key: 'fixed', label: '固定资产', color: COLORS.fixed },
-  { key: 'investment', label: '投资理财', color: COLORS.investment },
-  { key: 'receivable', label: '应收款', color: COLORS.receivable },
-  { key: 'liability', label: '负债', color: COLORS.liability },
-]
 
 /**
  * 构建资产组成桑基数据。
  *
- * 四列：净资产/负债来源 → 总资产/负债 → 四大资产分类 → 子类明细。
- * 全部节点与连线均由聚合结果推导，金额隐藏模式下只保留名称。
+ * 资金来源 → 资金运用两段式：左侧是净资产与每一笔负债（逐项展开，不再聚合成
+ * 「负债来源」），右侧是资产分类与其明细。总资产不占节点，由页面顶部的方框展示。
+ * 每个来源按各分类占比分摊到右侧，保证左右总量守恒。
  */
 export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode): EChartsOption {
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
   const totalAsset = view.totalAssetCents
-  const totalLiability = view.totalLiabilityCents
   const net = view.netAssetCents
 
   const label = (name: string, value: number): string => {
@@ -80,26 +69,26 @@ export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode
     nodes.push({ name, display: label(name, value), value, itemStyle: { color } })
   }
 
-  if (net > 0) {
-    addNode('净资产', net, COLORS.net)
-  }
-  if (totalLiability > 0) {
-    addNode('负债来源', totalLiability, COLORS.debt)
-  }
-  addNode('总资产', totalAsset, COLORS.total)
-  if (totalLiability > 0) {
-    addNode('负债', totalLiability, COLORS.liability)
-  }
+  const assetGroups = view.groups.filter((g) => g.kind === 'asset' && g.amount_cents > 0)
 
-  if (net > 0) links.push({ source: '净资产', target: '总资产', value: net })
-  if (totalLiability > 0) links.push({ source: '负债来源', target: '负债', value: totalLiability })
-
+  // 来源列：净资产 + 负债逐项（房屋贷款、车贷……各自一条，不合并）。
+  const sources: { name: string; value: number; color: string }[] = []
+  if (net > 0) sources.push({ name: '净资产', value: net, color: COLORS.net })
   for (const group of view.groups) {
-    if (group.kind === 'liability') continue
-    if (group.amount_cents <= 0) continue
+    if (group.kind !== 'liability') continue
+    for (const child of group.children) {
+      if (child.amount_cents <= 0) continue
+      // 负债项与资产分类重名时补后缀，避免 ECharts 合并同名节点。
+      const name = assetGroups.some((g) => g.label === child.label) ? `${child.label}（负债）` : child.label
+      sources.push({ name, value: child.amount_cents, color: COLORS.debt })
+    }
+  }
+
+  for (const source of sources) addNode(source.name, source.value, source.color)
+
+  for (const group of assetGroups) {
     const color = COLORS[group.category as keyof typeof COLORS] ?? group.color
     addNode(group.label, group.amount_cents, color)
-    links.push({ source: '总资产', target: group.label, value: group.amount_cents })
 
     // 明细列只保留金额最大的 3 项，其余合并为「其他」：避免小额节点标签互相压叠。
     const children = group.children.filter((child) => child.amount_cents > 0).sort((a, b) => b.amount_cents - a.amount_cents)
@@ -119,6 +108,20 @@ export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode
       detailNames.add(restName)
       links.push({ source: group.label, target: restName, value: restValue })
     }
+  }
+
+  // 来源 → 分类：按各分类在总资产中的占比分摊，最后一项吃下舍入余量，
+  // 保证每条来源的流出之和恰好等于它的金额、每个分类的流入之和等于该分类金额。
+  for (const source of sources) {
+    let allocated = 0
+    assetGroups.forEach((group, index) => {
+      const isLast = index === assetGroups.length - 1
+      const value = isLast
+        ? source.value - allocated
+        : Math.round(source.value * (group.amount_cents / Math.max(totalAsset, 1)))
+      allocated += value
+      if (value > 0) links.push({ source: source.name, target: group.label, value })
+    })
   }
 
   return {
