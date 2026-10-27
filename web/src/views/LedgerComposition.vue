@@ -7,27 +7,20 @@ import { COMPOSITION_LEGEND, type CompositionMode } from '../components/ledger/l
 import { buildSummaryView, errorMessage, getSummary, type LedgerSummary } from '../api/ledger'
 import { useLedgerMeta } from '../composables/useLedgerMeta'
 import { isLedgerHidden, useLedgerPrivacy } from '../composables/useLedgerPrivacy'
-import { debtRatio, formatPercent, MONEY_MASK } from '../utils/money'
 import { dataURLToBlob, downloadBlob, ledgerMark, watermarkDataURL } from '../utils/watermark'
 
 const { meta, accepting, error: metaError, consentRequired, load, accept } = useLedgerMeta()
-const { hidden, hide, show, money } = useLedgerPrivacy()
+const { hidden, hide, show } = useLedgerPrivacy()
 
 const summary = ref<LedgerSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
-const excludeFixed = ref(false)
 const mode = ref<CompositionMode>(isLedgerHidden() ? 'hidden' : 'amount')
 const exporting = ref(false)
 const chartRef = ref<InstanceType<typeof CompositionChart> | null>(null)
 
 const consentGate = computed(() => !!meta.value && consentRequired.value)
-const view = computed(() => (summary.value ? buildSummaryView(summary.value, excludeFixed.value) : null))
-const ratioText = computed(() => {
-  if (!view.value) return '0.00%'
-  if (hidden.value) return MONEY_MASK
-  return formatPercent(debtRatio(view.value.totalLiabilityCents, view.value.totalAssetCents))
-})
+const view = computed(() => (summary.value ? buildSummaryView(summary.value, false) : null))
 
 const MODES: { key: CompositionMode; label: string }[] = [
   { key: 'amount', label: '金额' },
@@ -103,26 +96,6 @@ async function handleDownload() {
         <div class="flex flex-wrap items-center gap-2">
           <div class="flex items-center rounded-xl bg-white p-1 ring-1 ring-slate-200">
             <button
-              type="button"
-              class="rounded-lg px-3 py-1.5 text-xs transition-colors cursor-pointer"
-              :class="!excludeFixed ? 'bg-ledger-mist text-ledger-ink' : 'text-ink-soft hover:text-ink'"
-              data-test="scope-all"
-              @click="excludeFixed = false"
-            >
-              全部资产
-            </button>
-            <button
-              type="button"
-              class="rounded-lg px-3 py-1.5 text-xs transition-colors cursor-pointer"
-              :class="excludeFixed ? 'bg-ledger-mist text-ledger-ink' : 'text-ink-soft hover:text-ink'"
-              data-test="scope-exclude-fixed"
-              @click="excludeFixed = true"
-            >
-              排除固定资产
-            </button>
-          </div>
-          <div class="flex items-center rounded-xl bg-white p-1 ring-1 ring-slate-200">
-            <button
               v-for="item in MODES"
               :key="item.key"
               type="button"
@@ -161,49 +134,19 @@ async function handleDownload() {
         {{ error }}
       </p>
 
-      <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <section class="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:col-span-9">
-          <div v-if="view" class="rounded-xl bg-slate-50/40">
-            <CompositionChart ref="chartRef" :view="view" :mode="mode" :loading="loading" />
-          </div>
-          <div v-else class="h-[560px] animate-pulse rounded-xl bg-slate-100" />
+      <section class="mt-6 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div v-if="view" class="rounded-xl bg-slate-50/40">
+          <CompositionChart ref="chartRef" :view="view" :mode="mode" :loading="loading" />
+        </div>
+        <div v-else class="h-[620px] animate-pulse rounded-xl bg-slate-100" />
 
-          <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-            <div class="flex flex-wrap items-center gap-3">
-              <span v-for="item in COMPOSITION_LEGEND" :key="item.key" class="flex items-center gap-1.5 text-[11px] text-ink-soft">
-                <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: item.color }" />
-                {{ item.label }}
-              </span>
-            </div>
-            <p class="text-[11px] text-ink-faint">金额按录入币种面值计入，不含汇率换算</p>
-          </div>
-        </section>
-
-        <aside class="space-y-3 lg:col-span-3">
-          <div class="rounded-2xl border border-slate-200/70 bg-white p-4">
-            <p class="text-[11px] text-ink-faint">总资产</p>
-            <p class="mt-1 text-xl font-semibold tabular-nums text-ink" data-test="composition-total">
-              {{ view ? money(view.totalAssetCents) : MONEY_MASK }}
-            </p>
-          </div>
-          <div class="rounded-2xl border border-slate-200/70 bg-white p-4">
-            <p class="text-[11px] text-ink-faint">总负债</p>
-            <p class="mt-1 text-xl font-semibold tabular-nums text-ink" data-test="composition-liability">
-              {{ view ? money(view.totalLiabilityCents) : MONEY_MASK }}
-            </p>
-          </div>
-          <div class="rounded-2xl border border-ledger-ink/12 bg-ledger-mist/70 p-4">
-            <p class="text-[11px] text-ink-faint">净资产</p>
-            <p class="mt-1 text-xl font-semibold tabular-nums text-ledger-ink" data-test="composition-net">
-              {{ view ? money(view.netAssetCents) : MONEY_MASK }}
-            </p>
-            <p class="mt-2 text-[11px] text-ink-soft">负债率 {{ ratioText }}</p>
-          </div>
-          <p class="px-1 text-[11px] leading-relaxed text-ink-faint">
-            图内明细名称已按隐私策略隐藏，仅展示分类与子类聚合；下载的图片附带会话伪名水印，便于外泄溯源。
-          </p>
-        </aside>
-      </div>
+        <div class="mt-3 flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
+          <span v-for="item in COMPOSITION_LEGEND" :key="item.key" class="flex items-center gap-1.5 text-[11px] text-ink-soft">
+            <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: item.color }" />
+            {{ item.label }}
+          </span>
+        </div>
+      </section>
     </div>
 
     <PrivacyConsentDialog

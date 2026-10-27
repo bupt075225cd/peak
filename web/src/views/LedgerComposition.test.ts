@@ -4,7 +4,6 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import LedgerComposition from './LedgerComposition.vue'
 import { resetLedgerMetaCache } from '../composables/useLedgerMeta'
 import { useLedgerPrivacy } from '../composables/useLedgerPrivacy'
-import { MONEY_MASK } from '../utils/money'
 
 const { getMeta, getConsent, getSummary, listMembers, downloadBlob, watermarkDataURL } = vi.hoisted(() => ({
   getMeta: vi.fn(),
@@ -95,29 +94,31 @@ beforeEach(() => {
 })
 
 describe('LedgerComposition.vue 资产组成', () => {
-  it('展示总资产、总负债、净资产与图例', async () => {
+  it('只展示桑基图与图例，不出现右侧汇总卡与口径说明', async () => {
     const wrapper = await mountView()
-    expect(wrapper.find('[data-test="composition-total"]').text()).toBe('30,000.00')
-    expect(wrapper.find('[data-test="composition-liability"]').text()).toBe('5,000.00')
-    expect(wrapper.find('[data-test="composition-net"]').text()).toBe('25,000.00')
+
+    expect(wrapper.find('[data-test="composition-chart"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('流动资金')
-    expect(wrapper.text()).toContain('金额按录入币种面值计入')
+    expect(wrapper.text()).toContain('固定资产')
+
+    // 需求：用户只看桑基图，右侧三项汇总与"面值/汇率"口径说明都不要。
+    expect(wrapper.find('[data-test="composition-total"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="composition-liability"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="composition-net"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('金额按录入币种面值计入')
   })
 
-  it('排除固定资产后重新计算总量', async () => {
+  it('不再提供排除固定资产的范围切换', async () => {
     const wrapper = await mountView()
-    await wrapper.find('[data-test="scope-exclude-fixed"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-test="composition-total"]').text()).toBe('10,000.00')
-    expect(wrapper.find('[data-test="composition-net"]').text()).toBe('5,000.00')
+    expect(wrapper.find('[data-test="scope-all"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="scope-exclude-fixed"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('排除固定资产')
   })
 
-  it('切换隐藏金额后汇总与负债率统一脱敏', async () => {
+  it('切换隐藏金额后同步全局隐藏态', async () => {
     const wrapper = await mountView()
     await wrapper.find('[data-test="mode-hidden"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="composition-total"]').text()).toBe(MONEY_MASK)
-    expect(wrapper.find('[data-test="composition-net"]').text()).toBe(MONEY_MASK)
     expect(useLedgerPrivacy().hidden.value).toBe(true)
   })
 

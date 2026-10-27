@@ -30,7 +30,7 @@ defineExpose({ toDataURL })
 </script>
 
 <template>
-  <div class="relative h-[560px] w-full">
+  <div class="relative h-[620px] w-full" data-test="composition-chart">
     <div v-if="loading" class="absolute inset-0 flex items-center justify-center rounded-xl bg-white/70">
       <div class="h-40 w-2/3 animate-pulse rounded-2xl bg-slate-100" />
     </div>

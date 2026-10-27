@@ -135,18 +135,19 @@ export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode
     series: [
       {
         type: 'sankey',
-        left: 12,
-        right: 196,
-        top: 16,
-        bottom: 16,
-        nodeWidth: 12,
-        nodeGap: 12,
+        left: 8,
+        right: 168,
+        top: 24,
+        bottom: 24,
+        // 参考稿：细长节点 + 更宽的列间距，靠留白撑出层次。
+        nodeWidth: 8,
+        nodeGap: 16,
         nodeAlign: 'left',
         draggable: false,
         emphasis: { focus: 'adjacency' },
         label: {
           color: '#475569',
-          fontSize: 12,
+          fontSize: 13,
           formatter: (params: unknown) => {
             const data = (params as { data?: { name?: string; value?: number; display?: string } }).data ?? {}
             const name = data.name ?? ''
@@ -158,7 +159,7 @@ export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode
         },
         // 兜底：即使阈值判断漏掉个别节点，也隐藏重叠标签而不是糊成一团。
         labelLayout: { hideOverlap: true },
-        lineStyle: { color: 'gradient', opacity: 0.45, curveness: 0.5 },
+        lineStyle: { color: 'gradient', opacity: 0.55, curveness: 0.55 },
         data: nodes,
         links,
       },
