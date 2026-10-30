@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { Camera, BookOpen, BookMarked, Search, User, LogIn, ChevronDown, Pencil, Wallet, PieChart, List, Share2, Calendar } from 'lucide-vue-next'
+import { Camera, BookOpen, BookMarked, Search, User, LogIn, ChevronDown, Pencil, Wallet, PieChart, List, Share2 } from 'lucide-vue-next'
 import { ref, computed, watch } from 'vue'
 import { useAuth } from './composables/useAuth'
 import { useAppBrand } from './composables/useAppBrand'
@@ -20,7 +20,6 @@ const ledgerNav = [
   { name: 'ledger-dashboard', to: '/ledger', label: '总览', icon: PieChart },
   { name: 'ledger-items', to: '/ledger/items', label: '资产明细', icon: List },
   { name: 'ledger-composition', to: '/ledger/composition', label: '资产组成', icon: Share2 },
-  { name: 'ledger-calendar', to: '/ledger/calendar', label: '资产月历', icon: Calendar },
 ]
 
 // 未登录时点「登录」：保留当前所在应用，登录后回到原页面（登录页自身不重复带参）。

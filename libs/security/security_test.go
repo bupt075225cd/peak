@@ -181,6 +181,64 @@ func TestRowMAC(t *testing.T) {
 	}
 }
 
+// 行 MAC 覆盖 UpdatedAt，但数据库（PostgreSQL timestamptz）只保留微秒：
+// 写入时带纳秒、回读时被截断的行必须仍能通过校验，否则生产环境所有
+// 账本行都会报"数据完整性校验失败"。
+func TestRowMACIgnoresSubMicrosecondTime(t *testing.T) {
+	keys, _ := LoadKeys(prodConfig(t))
+	stored := time.Now().UTC()
+	row := ItemRow{
+		OwnerRef: "owner", RowUID: "row", Category: "liquid", Currency: "CNY",
+		RiskType: "cash", KeyVersion: 1, Version: 1, UpdatedAt: stored,
+		NameCipher: []byte("n"), SubCipher: []byte("s"), AmtCipher: []byte("a"),
+		NoteCipher: []byte("t"), MemCipher: []byte("m"),
+	}
+	mac := keys.RowMAC(row.Canonical())
+
+	row.UpdatedAt = stored.Truncate(time.Microsecond)
+	if !keys.VerifyRowMAC(row.Canonical(), mac) {
+		t.Fatal("microsecond truncation must not break row mac")
+	}
+
+	member := MemberRow{OwnerRef: "o", RowUID: "r", KeyVersion: 1, UpdatedAt: stored, NameCipher: []byte("x")}
+	memberMAC := keys.RowMAC(member.Canonical())
+	member.UpdatedAt = stored.Truncate(time.Microsecond)
+	if !keys.VerifyRowMAC(member.Canonical(), memberMAC) {
+		t.Fatal("microsecond truncation must not break member mac")
+	}
+}
+
+// 升级前的行 MAC 用纳秒时间计算：SQLite 旧库保留纳秒，旧 MAC 必须仍可校验，
+// 同时任何字段被改写都要继续被检出。
+func TestVerifyMACAcceptsLegacyNanoForm(t *testing.T) {
+	keys, _ := LoadKeys(prodConfig(t))
+	stored := time.Now().UTC()
+	row := ItemRow{
+		OwnerRef: "owner", RowUID: "row", Category: "liquid", Currency: "CNY",
+		RiskType: "cash", KeyVersion: 1, Version: 1, UpdatedAt: stored,
+		NameCipher: []byte("n"), SubCipher: []byte("s"), AmtCipher: []byte("a"),
+		NoteCipher: []byte("t"), MemCipher: []byte("m"),
+	}
+	legacy := keys.RowMAC(row.legacyCanonical())
+	if !keys.VerifyItemMAC(row, legacy) {
+		t.Fatal("legacy nanosecond row mac must still verify")
+	}
+	row.Version = 2
+	if keys.VerifyItemMAC(row, legacy) {
+		t.Fatal("tampered legacy row must be detected")
+	}
+
+	member := MemberRow{OwnerRef: "o", RowUID: "r", KeyVersion: 1, UpdatedAt: stored, NameCipher: []byte("x")}
+	memberLegacy := keys.RowMAC(member.legacyCanonical())
+	if !keys.VerifyMemberMAC(member, memberLegacy) {
+		t.Fatal("legacy member mac must still verify")
+	}
+	member.SortOrder = 9
+	if keys.VerifyMemberMAC(member, memberLegacy) {
+		t.Fatal("tampered legacy member must be detected")
+	}
+}
+
 func TestMemberRowCanonical(t *testing.T) {
 	row := MemberRow{OwnerRef: "o", RowUID: "r", SortOrder: 1, KeyVersion: 1, UpdatedAt: time.Unix(1, 0), NameCipher: []byte("x")}
 	if !bytes.Contains(row.Canonical(), []byte("member")) {

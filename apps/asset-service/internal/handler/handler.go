@@ -39,7 +39,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.DELETE("/items/:id", h.deleteItem)
 		api.GET("/members", h.listMembers)
 		api.POST("/members", h.createMember)
-		api.PUT("/members/:id", h.renameMember)
+		api.PUT("/members/:id", h.updateMember)
 		api.DELETE("/members/:id", h.deleteMember)
 		api.GET("/snapshots", h.snapshots)
 		api.GET("/privacy/consent", h.consentStatus)
@@ -72,12 +72,12 @@ func (h *Handler) summary(c *gin.Context) {
 	if !ok {
 		return
 	}
-	memberID, err := optionalIDParam(c, "member_id")
+	memberID, onlySelf, err := memberScopeParam(c)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
 	}
-	summary, err := h.svc.Summary(c.Request.Context(), owner, memberID)
+	summary, err := h.svc.SummaryScoped(c.Request.Context(), owner, memberID, onlySelf)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -185,12 +185,18 @@ func (h *Handler) createMember(c *gin.Context) {
 	}
 	var body struct {
 		Name string `json:"name"`
+		// Visible 缺省为 true：不传时成员默认在记账中显示。
+		Visible *bool `json:"visible"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "请求参数格式错误"))
 		return
 	}
-	member, err := h.svc.CreateMember(c.Request.Context(), owner, traceID(c), body.Name)
+	visible := true
+	if body.Visible != nil {
+		visible = *body.Visible
+	}
+	member, err := h.svc.CreateMemberVisible(c.Request.Context(), owner, traceID(c), body.Name, visible)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -198,7 +204,7 @@ func (h *Handler) createMember(c *gin.Context) {
 	httpx.OK(c, member)
 }
 
-func (h *Handler) renameMember(c *gin.Context) {
+func (h *Handler) updateMember(c *gin.Context) {
 	owner, ok := h.owner(c)
 	if !ok {
 		return
@@ -209,13 +215,16 @@ func (h *Handler) renameMember(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name    *string `json:"name"`
+		Visible *bool   `json:"visible"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httpx.Fail(c, errors.New(errors.CodeInvalidArgument, "请求参数格式错误"))
 		return
 	}
-	member, err := h.svc.RenameMember(c.Request.Context(), owner, traceID(c), id, body.Name)
+	member, err := h.svc.UpdateMember(c.Request.Context(), owner, traceID(c), id, service.MemberInput{
+		Name: body.Name, Visible: body.Visible,
+	})
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -410,17 +419,21 @@ func parseID(c *gin.Context) (uint64, error) {
 	return id, nil
 }
 
-// optionalIDParam 解析可选的正整数查询参数，缺省或空串视为未指定。
-func optionalIDParam(c *gin.Context, key string) (*uint64, error) {
-	raw := strings.TrimSpace(c.Query(key))
+// memberScopeParam 解析成员范围：空串为全部，self 为未归属成员的条目
+// （总览里的「我」），其余为正整数成员 ID。
+func memberScopeParam(c *gin.Context) (*uint64, bool, error) {
+	raw := strings.TrimSpace(c.Query("member_id"))
 	if raw == "" {
-		return nil, nil
+		return nil, false, nil
+	}
+	if raw == "self" {
+		return nil, true, nil
 	}
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil || id == 0 {
-		return nil, errors.New(errors.CodeInvalidArgument, "成员 ID 不合法")
+		return nil, false, errors.New(errors.CodeInvalidArgument, "成员 ID 不合法")
 	}
-	return &id, nil
+	return &id, false, nil
 }
 
 func intParam(c *gin.Context, key string, def int) int {

@@ -61,6 +61,14 @@ func New(repo *repository.Repository, keys *security.Keys, opts Options) *Servic
 	return &Service{repo: repo, keys: keys, opts: opts, now: time.Now}
 }
 
+// nowUTC 返回规整到微秒精度的 UTC 时间。
+//
+// UpdatedAt 参与行 MAC，而数据库时间列（PostgreSQL timestamptz）只存微秒；
+// 若写入纳秒，回读时精度已被截断，MAC 必然校验失败。写入前统一规整。
+func (s *Service) nowUTC() time.Time {
+	return security.RowTime(s.now())
+}
+
 // OwnerRef 把登录用户映射为业务伪名。
 func (s *Service) OwnerRef(userID uint64) string {
 	return s.keys.OwnerRef(userID)

@@ -110,7 +110,6 @@ function buildRouter() {
     routes: [
       { path: '/ledger/items', name: 'ledger-items', component: LedgerItems },
       { path: '/ledger', name: 'ledger-dashboard', component: { template: '<div />' } },
-      { path: '/ledger/calendar', name: 'ledger-calendar', component: { template: '<div />' } },
       { path: '/ledger/composition', name: 'ledger-composition', component: { template: '<div />' } },
     ],
   })

@@ -6,16 +6,19 @@ import { resetLedgerMetaCache } from '../composables/useLedgerMeta'
 import { useLedgerPrivacy } from '../composables/useLedgerPrivacy'
 import { MONEY_MASK } from '../utils/money'
 
-const { getMeta, getConsent, acceptConsent, getSummary, listItems, listMembers, createItem, createMember } = vi.hoisted(() => ({
-  getMeta: vi.fn(),
-  getConsent: vi.fn(),
-  acceptConsent: vi.fn(),
-  getSummary: vi.fn(),
-  listItems: vi.fn(),
-  listMembers: vi.fn(),
-  createItem: vi.fn(),
-  createMember: vi.fn(),
-}))
+const { getMeta, getConsent, acceptConsent, getSummary, listItems, listMembers, createItem, createMember, updateMember, deleteMember } =
+  vi.hoisted(() => ({
+    getMeta: vi.fn(),
+    getConsent: vi.fn(),
+    acceptConsent: vi.fn(),
+    getSummary: vi.fn(),
+    listItems: vi.fn(),
+    listMembers: vi.fn(),
+    createItem: vi.fn(),
+    createMember: vi.fn(),
+    updateMember: vi.fn(),
+    deleteMember: vi.fn(),
+  }))
 
 vi.mock('../api/ledger', async () => {
   const actual = await vi.importActual<typeof import('../api/ledger')>('../api/ledger')
@@ -29,6 +32,8 @@ vi.mock('../api/ledger', async () => {
     listMembers,
     createItem,
     createMember,
+    updateMember,
+    deleteMember,
   }
 })
 
@@ -108,7 +113,6 @@ function buildRouter() {
     routes: [
       { path: '/ledger', name: 'ledger-dashboard', component: LedgerDashboard },
       { path: '/ledger/items', name: 'ledger-items', component: { template: '<div />' } },
-      { path: '/ledger/calendar', name: 'ledger-calendar', component: { template: '<div />' } },
       { path: '/ledger/composition', name: 'ledger-composition', component: { template: '<div />' } },
     ],
   })
@@ -135,6 +139,8 @@ beforeEach(() => {
   listMembers.mockReset()
   createItem.mockReset()
   createMember.mockReset()
+  updateMember.mockReset()
+  deleteMember.mockReset()
 
   getMeta.mockResolvedValue(meta)
   getConsent.mockResolvedValue({ policy_version: 'v1', required: false, consented_at: '2026-10-01T00:00:00Z' })
@@ -183,16 +189,23 @@ describe('LedgerDashboard.vue 总览', () => {
     await wrapper.find('[data-test="ledger-eye"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="ledger-total"]').text()).toBe(MONEY_MASK)
-    expect(wrapper.find('[data-test="month-total-asset"]').text()).toBe(MONEY_MASK)
+    expect(wrapper.find('[data-test="ledger-net"]').text()).toBe(MONEY_MASK)
   })
 
-  it('排除固定资产后总资产与负债率同步重算', async () => {
+  it('排除固定资产后标题改为资产汇总、金额扣除固定资产，净资产与负债率不变', async () => {
     const wrapper = await mountView()
+    const title = () => wrapper.find('[data-test="ledger-total-title"]').text()
+    expect(title()).toBe('总资产（元）')
+
     await wrapper.find('[data-test="exclude-fixed"]').trigger('click')
     await flushPromises()
-    // 3,000,000 - 2,000,000 = 1,000,000 分 => 10,000.00 元
+
+    // 标题切换为「资产汇总」，金额 = 3,000,000 - 2,000,000 = 1,000,000 分 => 10,000.00 元
+    expect(title()).toBe('资产汇总')
     expect(wrapper.find('[data-test="ledger-total"]').text()).toBe('10,000.00')
-    expect(wrapper.text()).toContain('50.00%')
+    // 净资产（2,500,000 分）与负债率（500,000 / 3,000,000）仍按全部资产口径，不随开关变化。
+    expect(wrapper.find('[data-test="ledger-net"]').text()).toBe('25,000.00')
+    expect(wrapper.text()).toContain('16.67%')
     expect(wrapper.find('[data-test="structure-fixed"]').exists()).toBe(false)
   })
 
@@ -212,10 +225,77 @@ describe('LedgerDashboard.vue 总览', () => {
     expect(getSummary).toHaveBeenCalledTimes(2)
   })
 
-  it('最近更新展示条目名称与金额', async () => {
+  it('不再展示资产月历与最近更新', async () => {
     const wrapper = await mountView()
-    expect(wrapper.text()).toContain('招行活期')
-    expect(wrapper.text()).toContain('10,000.00')
+    expect(wrapper.text()).not.toContain('资产月历')
+    expect(wrapper.text()).not.toContain('最近更新')
+    expect(wrapper.find('[data-test="month-total-asset"]').exists()).toBe(false)
+    // 总览只拉取一次汇总，不再为最近列表多发一次条目请求。
+    expect(listItems).not.toHaveBeenCalled()
+  })
+
+  it('成员切换条展示可见成员，点击成员按 member_id 重新聚合', async () => {
+    listMembers.mockResolvedValue([
+      { id: 3, name: '配偶', sort_order: 1, visible: true },
+      { id: 4, name: '隐藏成员', sort_order: 2, visible: false },
+    ])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="member-scope-all"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="member-scope-self"]').text()).toBe('我')
+    expect(wrapper.find('[data-test="member-scope-3"]').text()).toBe('配偶')
+    // 关闭「在记账中显示」的成员不出现在切换条。
+    expect(wrapper.find('[data-test="member-scope-4"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="member-scope-3"]').trigger('click')
+    await flushPromises()
+    expect(getSummary).toHaveBeenLastCalledWith('3')
+
+    await wrapper.find('[data-test="member-scope-self"]').trigger('click')
+    await flushPromises()
+    expect(getSummary).toHaveBeenLastCalledWith('self')
+  })
+
+  it('管理入口打开家庭成员对话框，可添加成员', async () => {
+    listMembers.mockResolvedValue([{ id: 3, name: '配偶', sort_order: 1, visible: true }])
+    createMember.mockResolvedValue({ id: 5, name: '孩子', sort_order: 2, visible: true })
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="manage-members"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="member-manager"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="manager-member-3"]').text()).toContain('配偶')
+
+    await wrapper.find('[data-test="manager-add"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="member-form-title"]').text()).toBe('添加成员')
+
+    await wrapper.find('[data-test="member-name"]').setValue('孩子')
+    await wrapper.find('[data-test="member-submit"]').trigger('click')
+    await flushPromises()
+    expect(createMember).toHaveBeenCalledWith('孩子', true)
+  })
+
+  it('关闭成员显示开关后该成员从切换条移除并回落「全部」', async () => {
+    listMembers.mockResolvedValue([{ id: 3, name: '配偶', sort_order: 1, visible: true }])
+    updateMember.mockResolvedValue({ id: 3, name: '配偶', sort_order: 1, visible: false })
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="member-scope-3"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-test="manage-members"]').trigger('click')
+    await wrapper.find('[data-test="manager-member-3"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="member-visible"]').trigger('click')
+
+    listMembers.mockResolvedValue([{ id: 3, name: '配偶', sort_order: 1, visible: false }])
+    await wrapper.find('[data-test="member-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(updateMember).toHaveBeenCalledWith(3, { name: '配偶', visible: false })
+    expect(wrapper.find('[data-test="member-scope-3"]').exists()).toBe(false)
+    expect(getSummary).toHaveBeenLastCalledWith('')
   })
 
   it('加载失败时展示错误提示', async () => {

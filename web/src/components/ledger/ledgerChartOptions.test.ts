@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { buildSankeyOption, buildTrendOption } from './ledgerChartOptions'
-import type { LedgerCategory, LedgerSnapshot, LedgerSummaryView } from '../../api/ledger'
+import { beforeEach, describe, it, expect } from 'vitest'
+import { buildSankeyOption } from './ledgerChartOptions'
+import { useLedgerPrivacy } from '../../composables/useLedgerPrivacy'
+import type { LedgerCategory, LedgerSummaryView } from '../../api/ledger'
 
 function view(amounts: number[], debts: number[] = []): LedgerSummaryView {
   const children = amounts.map((amount, i) => ({
@@ -107,6 +108,11 @@ function sankey(option: ReturnType<typeof buildSankeyOption>) {
 }
 
 describe('buildSankeyOption', () => {
+  // 金额默认隐藏（见 useLedgerPrivacy），指标方框会显示脱敏占位，这里先显式打开。
+  beforeEach(() => {
+    useLedgerPrivacy().show()
+  })
+
   it('隐藏金额模式下标签只保留名称', () => {
     const option = buildSankeyOption(view([100_000, 900_000]), 'hidden')
     const names = sankey(option).data.map((n) => n.display)
@@ -449,30 +455,5 @@ describe('buildSankeyOption', () => {
     const option = buildSankeyOption(v, 'amount')
     const names = sankey(option).data.map((n) => n.name)
     expect(names).toContain('流动资金（负债）')
-  })
-})
-
-describe('buildTrendOption', () => {
-  const snap = (period: string, net: number): LedgerSnapshot =>
-    ({
-      period,
-      updated_at: `${period}-01T00:00:00Z`,
-      payload: { total_asset_cents: net, total_liability_cents: 0, net_asset_cents: net, breakdown: [] },
-    }) as LedgerSnapshot
-
-  it('单个月份也显示数据点，避免看起来像空图', () => {
-    const option = buildTrendOption([snap('2026-10', 2_674_500_00)], false)
-    const series = (option.series as unknown[])[0] as { showSymbol: boolean; data: number[] }
-    expect(series.showSymbol).toBe(true)
-    expect(series.data).toEqual([267_450_000])
-  })
-
-  it('多个月份时用平滑折线，不显示数据点', () => {
-    const option = buildTrendOption([snap('2026-09', 100), snap('2026-10', 200)], false)
-    const series = (option.series as unknown[])[0] as { showSymbol: boolean }
-    expect(series.showSymbol).toBe(true) // 2 个点仍显示，保证可读
-
-    const many = buildTrendOption([snap('2026-08', 1), snap('2026-09', 2), snap('2026-10', 3)], false)
-    expect((many.series as unknown[])[0]).toMatchObject({ showSymbol: false })
   })
 })

@@ -6,6 +6,8 @@ import { debtRatio, formatCents, formatDate, formatPercent, MONEY_MASK } from '.
 
 const props = defineProps<{
   view: LedgerSummaryView
+  // 全量总资产：主金额可能排除固定资产，净资产与负债率仍按全部资产口径算。
+  fullTotalAssetCents: number
   updatedAt: string
   hasForeign: boolean
   hidden: boolean
@@ -16,9 +18,11 @@ const emit = defineEmits<{
   (e: 'toggle-hidden'): void
 }>()
 
+// 排除固定资产时主金额是「总资产 - 固定资产」，标题同步改成「资产汇总」。
 const totalText = computed(() => (props.hidden ? MONEY_MASK : formatCents(props.view.totalAssetCents)))
-const netText = computed(() => (props.hidden ? MONEY_MASK : formatCents(props.view.netAssetCents)))
-const ratio = computed(() => debtRatio(props.view.totalLiabilityCents, props.view.totalAssetCents))
+const netAssetCents = computed(() => props.fullTotalAssetCents - props.view.totalLiabilityCents)
+const netText = computed(() => (props.hidden ? MONEY_MASK : formatCents(netAssetCents.value)))
+const ratio = computed(() => debtRatio(props.view.totalLiabilityCents, props.fullTotalAssetCents))
 const ratioText = computed(() => (props.hidden ? MONEY_MASK : formatPercent(ratio.value)))
 </script>
 
@@ -30,7 +34,9 @@ const ratioText = computed(() => (props.hidden ? MONEY_MASK : formatPercent(rati
 
     <div class="relative flex items-start justify-between gap-4">
       <div class="flex items-center gap-2">
-        <h2 class="text-sm font-medium text-ink-soft">总资产（元）</h2>
+        <h2 class="text-sm font-medium text-ink-soft" data-test="ledger-total-title">
+          {{ view.excludeFixed ? '资产汇总' : '总资产（元）' }}
+        </h2>
         <button
           type="button"
           class="rounded-lg p-1.5 text-ink-faint transition-colors hover:bg-white/70 hover:text-ink-soft cursor-pointer"
@@ -45,17 +51,19 @@ const ratioText = computed(() => (props.hidden ? MONEY_MASK : formatPercent(rati
 
       <div class="flex items-center gap-2">
         <span class="text-xs text-ink-soft">排除固定资产</span>
+        <!-- 关闭态轨道不能取近白色：卡片底色本身就是淡紫灰（ledger-mist → ledger-haze），
+             白点在白底上看不出轮廓，这里用半透明灰做轨道，靠明度差把圆点托出来。 -->
         <button
           type="button"
           role="switch"
           :aria-checked="view.excludeFixed"
           class="relative h-6 w-11 rounded-full transition-colors duration-200 cursor-pointer"
-          :class="view.excludeFixed ? 'bg-ledger-ink' : 'bg-white/90 ring-1 ring-slate-300/70'"
+          :class="view.excludeFixed ? 'bg-ledger-ink' : 'bg-slate-400/60 ring-1 ring-inset ring-slate-500/35'"
           data-test="exclude-fixed"
           @click="emit('update:excludeFixed', !view.excludeFixed)"
         >
           <span
-            class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all duration-200"
+            class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow ring-1 ring-slate-900/5 transition-all duration-200"
             :class="view.excludeFixed ? 'left-[22px]' : 'left-0.5'"
           />
         </button>
@@ -80,7 +88,7 @@ const ratioText = computed(() => (props.hidden ? MONEY_MASK : formatPercent(rati
         <p class="text-xs text-ink-faint">净资产</p>
         <p
           class="mt-1 text-lg font-semibold tabular-nums"
-          :class="view.netAssetCents < 0 && !hidden ? 'text-ledger-up' : 'text-ledger-ink'"
+          :class="netAssetCents < 0 && !hidden ? 'text-ledger-up' : 'text-ledger-ink'"
           data-test="ledger-net"
         >
           {{ netText }}

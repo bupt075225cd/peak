@@ -181,13 +181,14 @@ func (r *Repository) CreateMember(ctx context.Context, member *domain.LedgerMemb
 	return r.db.WithContext(ctx).Create(member).Error
 }
 
-// UpdateMember 更新成员（名称密文 + 行 MAC）。
+// UpdateMember 更新成员（名称密文 + 显示状态 + 行 MAC）。
 func (r *Repository) UpdateMember(ctx context.Context, member *domain.LedgerMember) error {
 	return r.db.WithContext(ctx).Model(&domain.LedgerMember{}).
 		Where("id = ? AND owner_ref = ?", member.ID, member.OwnerRef).
 		Updates(map[string]any{
 			"name_cipher": member.NameCipher,
 			"sort_order":  member.SortOrder,
+			"hidden":      member.Hidden,
 			"key_version": member.KeyVersion,
 			"row_mac":     member.RowMAC,
 			"updated_at":  member.UpdatedAt,

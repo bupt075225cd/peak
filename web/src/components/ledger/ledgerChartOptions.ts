@@ -1,9 +1,9 @@
 import { use } from 'echarts/core'
-import { SankeyChart, LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { SankeyChart } from 'echarts/charts'
+import { TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsOption } from 'echarts'
-import type { LedgerSnapshot, LedgerSummaryView } from '../../api/ledger'
+import type { LedgerSummaryView } from '../../api/ledger'
 import { formatCents, formatPercent, formatWan, share, MONEY_MASK } from '../../utils/money'
 import { isLedgerHidden } from '../../composables/useLedgerPrivacy'
 
@@ -12,7 +12,7 @@ let registered = false
 
 export function ensureLedgerECharts(): void {
   if (registered) return
-  use([SankeyChart, LineChart, GridComponent, TooltipComponent, CanvasRenderer])
+  use([SankeyChart, TooltipComponent, CanvasRenderer])
   registered = true
 }
 
@@ -521,67 +521,6 @@ export function buildSankeyOption(view: LedgerSummaryView, mode: CompositionMode
         lineStyle: { color: 'target', opacity: LINK_OPACITY, curveness: 0.3 },
         data: spacedNodes,
         links,
-      },
-    ],
-  }
-}
-
-/** 近 12 个月净资产趋势（渐变面积）。 */
-export function buildTrendOption(snapshots: LedgerSnapshot[], hidden: boolean): EChartsOption {
-  const points = snapshots.map((s) => ({
-    label: `${Number(s.period.split('-')[1])}月`,
-    value: s.payload.net_asset_cents,
-  }))
-  return {
-    grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const list = params as { name: string; value: number }[]
-        const first = list[0]
-        if (!first) return ''
-        const text = hidden ? '••••••' : `${formatCents(first.value)} 元`
-        return `${first.name} · 净资产 ${text}`
-      },
-    },
-    xAxis: {
-      type: 'category',
-      data: points.map((p) => p.label),
-      axisLine: { lineStyle: { color: '#E2E8F0' } },
-      axisTick: { show: false },
-      axisLabel: { color: '#94A3B8', fontSize: 11 },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#F1F5F9' } },
-      axisLabel: {
-        color: '#94A3B8',
-        fontSize: 11,
-        formatter: (value: number) => (hidden ? '••' : `${Math.round(value / 1_000_000)}万`),
-      },
-    },
-    series: [
-      {
-        type: 'line',
-        smooth: true,
-        // 只有 1~2 个数据点时折线不可见，改为显示数据点，避免看起来像空图。
-        showSymbol: points.length <= 2,
-        symbolSize: 6,
-        data: points.map((p) => p.value),
-        lineStyle: { width: 2.5, color: '#3E9E7E' },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(62,158,126,0.28)' },
-              { offset: 1, color: 'rgba(62,158,126,0.02)' },
-            ],
-          },
-        },
       },
     ],
   }

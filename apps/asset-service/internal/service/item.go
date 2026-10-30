@@ -141,7 +141,7 @@ func (s *Service) UpdateItem(ctx context.Context, owner, traceID string, id uint
 		row.MemberID = in.MemberID
 		row.KeyVersion = keyVersion
 		row.Version = expect + 1
-		row.UpdatedAt = s.now().UTC()
+		row.UpdatedAt = s.nowUTC()
 		if err := s.fillCiphers(row, dek, in.ItemInput, memberName); err != nil {
 			return err
 		}
@@ -274,7 +274,7 @@ func (s *Service) loadItems(ctx context.Context, repo *repository.Repository, ow
 
 // openItem 校验行 MAC 后解密单个条目。
 func (s *Service) openItem(dek []byte, row *domain.LedgerItem) (*ItemView, error) {
-	if !s.keys.VerifyRowMAC(s.itemRow(row).Canonical(), row.RowMAC) {
+	if !s.keys.VerifyItemMAC(s.itemRow(row), row.RowMAC) {
 		return nil, bizerr.New(bizerr.CodeInternal, "数据完整性校验失败")
 	}
 	read := func(cipher []byte, field string) (string, error) {

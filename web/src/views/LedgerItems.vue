@@ -28,7 +28,8 @@ import { useLedgerPrivacy } from '../composables/useLedgerPrivacy'
 import { useLedgerPrivacyActions } from '../composables/useLedgerPrivacyActions'
 
 const route = useRoute()
-const { meta, members, accepting, error: metaError, consentRequired, load, loadMembers, accept } = useLedgerMeta()
+const { meta, members, visibleMembers, accepting, error: metaError, consentRequired, load, loadMembers, accept } =
+  useLedgerMeta()
 const { hidden, toggle: toggleHidden, money } = useLedgerPrivacy()
 const { category, keyword, memberFilter, sort, page, items, total, sumCents, counts, loading, error, pageCount, start, reload, reloadAfterRemove } =
   useLedgerItems((route.query.category as string) ?? '')
@@ -186,7 +187,7 @@ async function confirmRemove() {
       <div class="mt-6">
         <LedgerFilterBar
           :meta="meta"
-          :members="members"
+          :members="visibleMembers"
           :category="category"
           :keyword="keyword"
           :member-filter="memberFilter"

@@ -72,12 +72,6 @@ const router = createRouter({
       component: () => import('../views/LedgerComposition.vue'),
       meta: { requiresAuth: true },
     },
-    {
-      path: '/ledger/calendar',
-      name: 'ledger-calendar',
-      component: () => import('../views/LedgerCalendar.vue'),
-      meta: { requiresAuth: true },
-    },
   ],
 })
 

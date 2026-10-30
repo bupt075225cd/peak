@@ -83,12 +83,19 @@ type LedgerItem struct {
 }
 
 // LedgerMember 成员标签（仅昵称/角色，禁止填写真实姓名与证件信息）。
+//
+// Hidden 表示"不在家庭资产记账中显示该成员"：只影响总览与筛选里的成员入口，
+// 成员本身与其名下条目都保留，避免切换显示状态时丢失数据。
+// 列名取 hidden 而非 visible，是为了避开 GORM 对带 default 标签的布尔零值
+// 直接跳过写入的问题（false 会被数据库默认值覆盖）。
+// 该字段与加密、行 MAC 无关：它只是展示偏好，不承载敏感信息。
 type LedgerMember struct {
 	ID         uint64         `gorm:"primaryKey" json:"id"`
 	OwnerRef   string         `gorm:"size:64;index:idx_ledger_members_owner,priority:1" json:"-"`
 	RowUID     string         `gorm:"size:32;index" json:"-"`
 	NameCipher []byte         `json:"-"`
 	SortOrder  int            `gorm:"default:0" json:"sort_order"`
+	Hidden     bool           `gorm:"not null;default:false" json:"-"`
 	KeyVersion int            `gorm:"not null;default:1" json:"-"`
 	RowMAC     []byte         `json:"-"`
 	CreatedAt  time.Time      `json:"created_at"`

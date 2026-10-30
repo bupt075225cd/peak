@@ -22,6 +22,7 @@ import {
   renameMember,
   requestDeletion,
   updateItem,
+  updateMember,
   type LedgerSummary,
 } from './ledger'
 
@@ -94,6 +95,14 @@ describe('元数据与聚合', () => {
     httpGet.mockResolvedValueOnce(ok(summaryFixture))
     await expect(getSummary()).resolves.toMatchObject({ net_asset_cents: 400_000 })
     expect(httpGet).toHaveBeenNthCalledWith(2, '/ledger/summary')
+  })
+
+  it('getSummary 按成员范围透传 member_id（self 表示「我」）', async () => {
+    httpGet.mockResolvedValue(ok(summaryFixture))
+    await getSummary('self')
+    expect(httpGet).toHaveBeenLastCalledWith('/ledger/summary', { params: { member_id: 'self' } })
+    await getSummary('12')
+    expect(httpGet).toHaveBeenLastCalledWith('/ledger/summary', { params: { member_id: '12' } })
   })
 
   it('buildSummaryView 不排除固定资产时保留全部分类', () => {
@@ -173,15 +182,22 @@ describe('成员与快照', () => {
     httpGet.mockResolvedValueOnce(ok({ items: [{ id: 1, name: '配偶', sort_order: 1 }] }))
     await expect(listMembers()).resolves.toHaveLength(1)
 
-    httpPost.mockResolvedValueOnce(ok({ id: 2, name: '孩子', sort_order: 2 }))
+    httpPost.mockResolvedValueOnce(ok({ id: 2, name: '孩子', sort_order: 2, visible: true }))
     await expect(createMember('孩子')).resolves.toMatchObject({ id: 2 })
+    expect(httpPost).toHaveBeenCalledWith('/ledger/members', { name: '孩子', visible: true })
 
-    httpPut.mockResolvedValueOnce(ok({ id: 2, name: '女儿', sort_order: 2 }))
+    httpPut.mockResolvedValueOnce(ok({ id: 2, name: '女儿', sort_order: 2, visible: true }))
     await expect(renameMember(2, '女儿')).resolves.toMatchObject({ name: '女儿' })
 
     httpDelete.mockResolvedValueOnce({})
     await deleteMember(2)
     expect(httpDelete).toHaveBeenCalledWith('/ledger/members/2')
+  })
+
+  it('更新成员显示状态', async () => {
+    httpPut.mockResolvedValueOnce(ok({ id: 3, name: '配偶', sort_order: 1, visible: false }))
+    await expect(updateMember(3, { visible: false })).resolves.toMatchObject({ visible: false })
+    expect(httpPut).toHaveBeenCalledWith('/ledger/members/3', { visible: false })
   })
 
   it('成员载荷缺失时返回空数组', async () => {

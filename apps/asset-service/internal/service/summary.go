@@ -72,6 +72,12 @@ type SnapshotView struct {
 // memberID 非空时只聚合该成员名下的条目，用于资产组成页按成员查看；
 // 过滤在解密后的视图上完成，避免对密文列做 SQL 条件。
 func (s *Service) Summary(ctx context.Context, owner string, memberID *uint64) (*Summary, error) {
+	return s.SummaryScoped(ctx, owner, memberID, false)
+}
+
+// SummaryScoped 按成员范围聚合：memberID 非空看该成员，
+// onlySelf 为 true 时只看未归属任何成员的条目（总览里的「我」）。
+func (s *Service) SummaryScoped(ctx context.Context, owner string, memberID *uint64, onlySelf bool) (*Summary, error) {
 	if err := s.ensureConsent(ctx, s.repo, owner); err != nil {
 		return nil, err
 	}
@@ -83,6 +89,14 @@ func (s *Service) Summary(ctx context.Context, owner string, memberID *uint64) (
 		filtered := make([]ItemView, 0, len(views))
 		for _, view := range views {
 			if view.MemberID != nil && *view.MemberID == *memberID {
+				filtered = append(filtered, view)
+			}
+		}
+		views = filtered
+	} else if onlySelf {
+		filtered := make([]ItemView, 0, len(views))
+		for _, view := range views {
+			if view.MemberID == nil {
 				filtered = append(filtered, view)
 			}
 		}

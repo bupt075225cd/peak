@@ -100,7 +100,15 @@ export interface LedgerMember {
   id: number
   name: string
   sort_order: number
+  /** 是否在家庭资产记账的成员入口中显示（关闭后仍保留成员与名下条目）。 */
+  visible: boolean
 }
+
+/**
+ * 汇总范围：'' 为全部；'self' 为未归属任何成员的条目（总览里的「我」）；
+ * 其余为成员 ID 字符串。
+ */
+export type MemberScope = '' | 'self' | `${number}`
 
 export interface SnapshotBreakdown {
   category: LedgerCategory
@@ -170,8 +178,12 @@ export async function getMeta(): Promise<LedgerMeta> {
   return data.data as LedgerMeta
 }
 
-export async function getSummary(): Promise<LedgerSummary> {
-  const { data } = await http.get<ApiResponse<LedgerSummary>>('/ledger/summary')
+/** 按成员范围取汇总；筛选在服务端解密后完成，前端无需聚合密文。 */
+export async function getSummary(scope: MemberScope = ''): Promise<LedgerSummary> {
+  const { data } =
+    scope === ''
+      ? await http.get<ApiResponse<LedgerSummary>>('/ledger/summary')
+      : await http.get<ApiResponse<LedgerSummary>>('/ledger/summary', { params: { member_id: scope } })
   return data.data as LedgerSummary
 }
 
@@ -241,14 +253,22 @@ export async function listMembers(): Promise<LedgerMember[]> {
   return data.data?.items ?? []
 }
 
-export async function createMember(name: string): Promise<LedgerMember> {
-  const { data } = await http.post<ApiResponse<LedgerMember>>('/ledger/members', { name })
+export async function createMember(name: string, visible = true): Promise<LedgerMember> {
+  const { data } = await http.post<ApiResponse<LedgerMember>>('/ledger/members', { name, visible })
+  return data.data as LedgerMember
+}
+
+/** 修改成员昵称与「是否在记账中显示」；仅传需要变更的字段。 */
+export async function updateMember(
+  id: number,
+  patch: { name?: string; visible?: boolean },
+): Promise<LedgerMember> {
+  const { data } = await http.put<ApiResponse<LedgerMember>>(`/ledger/members/${id}`, patch)
   return data.data as LedgerMember
 }
 
 export async function renameMember(id: number, name: string): Promise<LedgerMember> {
-  const { data } = await http.put<ApiResponse<LedgerMember>>(`/ledger/members/${id}`, { name })
-  return data.data as LedgerMember
+  return updateMember(id, { name })
 }
 
 export async function deleteMember(id: number): Promise<void> {

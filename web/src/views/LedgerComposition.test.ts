@@ -71,7 +71,6 @@ async function mountView() {
       { path: '/ledger/composition', name: 'ledger-composition', component: LedgerComposition },
       { path: '/ledger', name: 'ledger-dashboard', component: { template: '<div />' } },
       { path: '/ledger/items', name: 'ledger-items', component: { template: '<div />' } },
-      { path: '/ledger/calendar', name: 'ledger-calendar', component: { template: '<div />' } },
     ],
   })
   router.push('/ledger/composition')
@@ -152,6 +151,37 @@ describe('LedgerComposition.vue 资产组成', () => {
     // 图表组件收到 ratio 模式（CompositionChart 占位组件透传 props）。
     const chart = wrapper.findComponent({ name: 'CompositionChart' })
     expect(chart.exists() && (chart.props('mode') as string)).toBe('ratio')
+  })
+
+  it('标题右侧成员下拉：切换成员后按 member_id 重新聚合', async () => {
+    listMembers.mockResolvedValue([{ id: 5, name: '配偶', sort_order: 1, visible: true }])
+    const wrapper = await mountView()
+
+    expect(wrapper.text()).toContain('家庭资产组成')
+    expect(wrapper.find('[data-test="member-select-trigger"]').text()).toContain('全部')
+
+    await wrapper.find('[data-test="member-select-trigger"]').trigger('click')
+    expect(wrapper.find('[data-test="member-option-self"]').text()).toContain('我')
+    expect(wrapper.find('[data-test="member-option-5"]').text()).toContain('配偶')
+
+    await wrapper.find('[data-test="member-option-5"]').trigger('click')
+    await flushPromises()
+
+    expect(getSummary).toHaveBeenLastCalledWith('5')
+    expect(wrapper.find('[data-test="member-select-trigger"]').text()).toContain('配偶')
+    expect(wrapper.find('[data-test="member-select-menu"]').exists()).toBe(false)
+  })
+
+  it('隐藏成员不出现在下拉里', async () => {
+    listMembers.mockResolvedValue([
+      { id: 5, name: '配偶', sort_order: 1, visible: true },
+      { id: 6, name: '已隐藏', sort_order: 2, visible: false },
+    ])
+    const wrapper = await mountView()
+    await wrapper.find('[data-test="member-select-trigger"]').trigger('click')
+
+    expect(wrapper.find('[data-test="member-option-5"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="member-option-6"]').exists()).toBe(false)
   })
 
   it('加载失败展示错误提示', async () => {

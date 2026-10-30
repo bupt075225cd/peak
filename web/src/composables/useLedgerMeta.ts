@@ -24,6 +24,8 @@ let inflight: Promise<void> | null = null
 export function useLedgerMeta() {
   // 同意是访问账本数据的前置条件：服务端未留痕时 summary/items 返回 403。
   const consentRequired = computed(() => consent.value?.required ?? meta.value?.consent_required ?? true)
+  // 「在家庭资产记账中显示」关闭的成员不进成员入口，但仍保留其成员与名下条目。
+  const visibleMembers = computed(() => members.value.filter((m) => m.visible !== false))
 
   async function loadMembers(): Promise<void> {
     try {
@@ -78,6 +80,7 @@ export function useLedgerMeta() {
     meta,
     consent,
     members,
+    visibleMembers,
     loading,
     accepting,
     error,

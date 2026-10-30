@@ -221,9 +221,65 @@ func TestSummaryFilteredByMemberQuery(t *testing.T) {
 		t.Fatalf("member summary = %+v", one)
 	}
 
+	// 「我」= 未归属任何成员的条目。
+	_, resp = e.call(t, http.MethodGet, "/api/ledger/summary?member_id=self", 9, "", nil)
+	if self := decode(resp); self.ItemCount != 1 || self.TotalAssetCents != 600_000 {
+		t.Fatalf("self summary = %+v", self)
+	}
+
 	w, _ = e.call(t, http.MethodGet, "/api/ledger/summary?member_id=abc", 9, "", nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("bad member_id status = %d, want 400", w.Code)
+	}
+}
+
+// 成员的「在记账中显示」开关：只影响展示，成员与其名下条目都保留。
+func TestMemberVisibilityToggle(t *testing.T) {
+	e := setup(t)
+	e.consent(t, 15)
+
+	w, resp := e.call(t, http.MethodPost, "/api/ledger/members", 15, "", map[string]any{
+		"name": "配偶", "visible": false,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create member: %d %s", w.Code, w.Body.String())
+	}
+	var member struct {
+		ID      uint64 `json:"id"`
+		Name    string `json:"name"`
+		Visible bool   `json:"visible"`
+	}
+	if err := json.Unmarshal(resp.Data, &member); err != nil {
+		t.Fatalf("decode member: %v", err)
+	}
+	if member.Visible {
+		t.Fatalf("new member should be hidden: %+v", member)
+	}
+
+	w, resp = e.call(t, http.MethodPut, "/api/ledger/members/"+strconv.FormatUint(member.ID, 10), 15, "",
+		map[string]any{"visible": true})
+	if w.Code != http.StatusOK {
+		t.Fatalf("toggle visible: %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(resp.Data, &member); err != nil {
+		t.Fatalf("decode member: %v", err)
+	}
+	// 仅切换显示状态时昵称保持不变（需要解密回填）。
+	if !member.Visible || member.Name != "配偶" {
+		t.Fatalf("toggle result = %+v", member)
+	}
+
+	_, resp = e.call(t, http.MethodGet, "/api/ledger/members", 15, "", nil)
+	var list struct {
+		Items []struct {
+			Visible bool `json:"visible"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(resp.Data, &list); err != nil {
+		t.Fatalf("decode members: %v", err)
+	}
+	if len(list.Items) != 1 || !list.Items[0].Visible {
+		t.Fatalf("member list = %+v", list.Items)
 	}
 }
 
