@@ -281,6 +281,48 @@ func TestMemberLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemberVisibilityUpdate(t *testing.T) {
+	svc, _ := newService(t)
+	ctx, owner := consented(t, svc)
+
+	// 新增时即可标记为不在记账中显示。
+	hidden, err := svc.CreateMemberVisible(ctx, owner, "t", "配偶", false)
+	if err != nil || hidden.Visible {
+		t.Fatalf("hidden member = %+v, %v", hidden, err)
+	}
+	list, err := svc.ListMembers(ctx, owner)
+	if err != nil || len(list) != 1 || list[0].Visible || list[0].Name != "配偶" {
+		t.Fatalf("members = %+v, %v", list, err)
+	}
+
+	// 只切换显示状态：昵称需解密回填，且可再切回显示。
+	show := true
+	updated, err := svc.UpdateMember(ctx, owner, "t", hidden.ID, MemberInput{Visible: &show})
+	if err != nil || !updated.Visible || updated.Name != "配偶" {
+		t.Fatalf("toggle visible = %+v, %v", updated, err)
+	}
+
+	// 同时改名与隐藏。
+	hide := false
+	name := "爱人"
+	both, err := svc.UpdateMember(ctx, owner, "t", hidden.ID, MemberInput{Name: &name, Visible: &hide})
+	if err != nil || both.Visible || both.Name != "爱人" {
+		t.Fatalf("rename+hide = %+v, %v", both, err)
+	}
+
+	// 入参与目标校验。
+	if _, err := svc.UpdateMember(ctx, owner, "t", hidden.ID, MemberInput{}); bizerr.CodeOf(err) != bizerr.CodeInvalidArgument {
+		t.Fatalf("empty input err = %v", err)
+	}
+	blank := "  "
+	if _, err := svc.UpdateMember(ctx, owner, "t", hidden.ID, MemberInput{Name: &blank}); bizerr.CodeOf(err) != bizerr.CodeInvalidArgument {
+		t.Fatalf("blank name err = %v", err)
+	}
+	if _, err := svc.UpdateMember(ctx, owner, "t", 9999, MemberInput{Visible: &show}); bizerr.CodeOf(err) != bizerr.CodeNotFound {
+		t.Fatalf("missing member err = %v", err)
+	}
+}
+
 func TestSummaryFilteredByMember(t *testing.T) {
 	svc, _ := newService(t)
 	ctx, owner := consented(t, svc)
@@ -341,6 +383,12 @@ func TestSummaryFilteredByMember(t *testing.T) {
 	none, err := svc.Summary(ctx, owner, &missing)
 	if err != nil || none.ItemCount != 0 || none.NetAssetCents != 0 || len(none.Groups) != len(domain.LedgerCategories()) {
 		t.Fatalf("missing member summary = %+v, %v", none, err)
+	}
+
+	// 「我」= 未归属任何成员的条目。
+	self, err := svc.SummaryScoped(ctx, owner, nil, true)
+	if err != nil || self.ItemCount != 1 || self.TotalAssetCents != validInput().AmountCents {
+		t.Fatalf("self summary = %+v, %v", self, err)
 	}
 
 	// 删除成员不改写条目上的 member_id（行 MAC 保护），历史归属仍可查询。
