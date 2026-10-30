@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Download, RefreshCw } from 'lucide-vue-next'
+import { Download } from 'lucide-vue-next'
 import CompositionChart from '../components/ledger/CompositionChart.vue'
 import PrivacyConsentDialog from '../components/ledger/PrivacyConsentDialog.vue'
 import type { CompositionMode } from '../components/ledger/ledgerChartOptions'
@@ -10,21 +10,22 @@ import { isLedgerHidden, useLedgerPrivacy } from '../composables/useLedgerPrivac
 import { dataURLToBlob, downloadBlob, ledgerMark, watermarkDataURL } from '../utils/watermark'
 
 const { meta, accepting, error: metaError, consentRequired, load, accept } = useLedgerMeta()
-const { hidden, hide, show, money } = useLedgerPrivacy()
+const { hidden, hide, show } = useLedgerPrivacy()
 
 const summary = ref<LedgerSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
-const mode = ref<CompositionMode>(isLedgerHidden() ? 'hidden' : 'amount')
+const mode = ref<CompositionMode>(isLedgerHidden() ? 'hidden' : 'ratio')
 const exporting = ref(false)
 const chartRef = ref<InstanceType<typeof CompositionChart> | null>(null)
 
 const consentGate = computed(() => !!meta.value && consentRequired.value)
 const view = computed(() => (summary.value ? buildSummaryView(summary.value, false) : null))
 
+// 顺序与默认态对齐参考稿：比例在前并默认选中。
 const MODES: { key: CompositionMode; label: string }[] = [
-  { key: 'amount', label: '金额' },
   { key: 'ratio', label: '比例' },
+  { key: 'amount', label: '金额' },
   { key: 'hidden', label: '隐藏金额' },
 ]
 
@@ -104,25 +105,18 @@ async function handleDownload() {
               {{ item.label }}
             </button>
           </div>
+          <!-- 只保留图标（对齐参考稿），文案通过 aria-label / title 提供给读屏与悬停。 -->
           <button
             type="button"
-            class="rounded-xl border border-slate-200 bg-white p-2.5 text-ink-soft transition-colors hover:text-ledger-ink disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-            aria-label="刷新"
-            :disabled="loading"
-            data-test="refresh-composition"
-            @click="loadSummary"
-          >
-            <RefreshCw class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-          </button>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-xl bg-ledger-ink px-3.5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2B3A5C] disabled:cursor-not-allowed disabled:bg-slate-300 cursor-pointer"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-ledger-ink text-white transition-colors hover:bg-[#2B3A5C] disabled:cursor-not-allowed disabled:bg-slate-300 cursor-pointer"
             :disabled="exporting || !summary"
+            :aria-label="exporting ? '正在生成图片' : '下载图片'"
+            :title="exporting ? '正在生成图片' : '下载图片'"
+            :aria-busy="exporting"
             data-test="download-composition"
             @click="handleDownload"
           >
             <Download class="h-4 w-4" />
-            {{ exporting ? '生成中…' : '下载图片' }}
           </button>
         </div>
       </header>
@@ -132,20 +126,11 @@ async function handleDownload() {
       </p>
 
       <section class="mt-6 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-        <!-- 总资产不占桑基节点，单独用方框标在图的左上方 -->
-        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-          <div class="rounded-xl border border-slate-200 bg-white px-4 py-2">
-            <p class="text-[11px] text-ink-faint">总资产</p>
-            <p class="mt-0.5 text-lg font-semibold tabular-nums text-ink" data-test="chart-total-asset">
-              {{ view ? money(view.totalAssetCents) : '—' }}
-            </p>
-          </div>
-        </div>
-
-        <div v-if="view" class="mt-3 rounded-xl bg-slate-50/40">
+        <!-- 负债/总资产方框由 CompositionChart 渲染，与图内竖条垂直对齐 -->
+        <div v-if="view">
           <CompositionChart ref="chartRef" :view="view" :mode="mode" :loading="loading" />
         </div>
-        <div v-else class="mt-3 h-[620px] animate-pulse rounded-xl bg-slate-100" />
+        <div v-else class="h-[620px] animate-pulse rounded-xl bg-slate-100" />
       </section>
     </div>
 

@@ -94,12 +94,11 @@ beforeEach(() => {
 })
 
 describe('LedgerComposition.vue 资产组成', () => {
-  it('只展示桑基图与总资产方框，不出现右侧汇总卡、图例与口径说明', async () => {
+  it('只展示桑基图（含负债/总资产指标方框），不出现右侧汇总卡、图例与口径说明', async () => {
     const wrapper = await mountView()
 
     expect(wrapper.find('[data-test="composition-chart"]').exists()).toBe(true)
-    // 总资产不进桑基节点，单独在图上方的方框里展示。
-    expect(wrapper.find('[data-test="chart-total-asset"]').text()).toBe('30,000.00')
+    // 方框由 ECharts 节点标签渲染（数据层断言见 ledgerChartOptions.test.ts）。
 
     expect(wrapper.find('[data-test="composition-total"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="composition-liability"]').exists()).toBe(false)
@@ -132,12 +131,27 @@ describe('LedgerComposition.vue 资产组成', () => {
     expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), expect.stringContaining('资产组成-'))
   })
 
-  it('刷新按钮重新拉取聚合', async () => {
+  it('刷新按钮已移除，只保留三态切换与下载', async () => {
     const wrapper = await mountView()
-    getSummary.mockClear()
-    await wrapper.find('[data-test="refresh-composition"]').trigger('click')
-    await flushPromises()
-    expect(getSummary).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-test="refresh-composition"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="mode-amount"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="download-composition"]').exists()).toBe(true)
+  })
+
+  it('三态顺序为比例、金额、隐藏金额，默认选中比例', async () => {
+    const wrapper = await mountView()
+    const buttons = wrapper.findAll('[data-test^="mode-"]')
+    expect(buttons.map((b) => b.attributes('data-test'))).toEqual([
+      'mode-ratio',
+      'mode-amount',
+      'mode-hidden',
+    ])
+    // 默认比例：首个按钮高亮，图表按比例模式渲染。
+    expect(buttons[0].classes()).toContain('bg-ledger-ink')
+    expect(buttons[1].classes()).not.toContain('bg-ledger-ink')
+    // 图表组件收到 ratio 模式（CompositionChart 占位组件透传 props）。
+    const chart = wrapper.findComponent({ name: 'CompositionChart' })
+    expect(chart.exists() && (chart.props('mode') as string)).toBe('ratio')
   })
 
   it('加载失败展示错误提示', async () => {

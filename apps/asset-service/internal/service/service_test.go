@@ -74,7 +74,7 @@ func TestMetaAndConsentFlow(t *testing.T) {
 	if !meta.ConsentRequired || meta.ConsentPolicyVersion == "" || len(meta.Categories) != 5 {
 		t.Fatalf("meta = %+v", meta)
 	}
-	if _, err := svc.Summary(ctx, owner); bizerr.CodeOf(err) != bizerr.CodeForbidden {
+	if _, err := svc.Summary(ctx, owner, nil); bizerr.CodeOf(err) != bizerr.CodeForbidden {
 		t.Fatalf("summary before consent err = %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestItemLifecycleAndAggregation(t *testing.T) {
 		t.Fatalf("create liability: %v", err)
 	}
 
-	summary, err := svc.Summary(ctx, owner)
+	summary, err := svc.Summary(ctx, owner, nil)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -281,6 +281,77 @@ func TestMemberLifecycle(t *testing.T) {
 	}
 }
 
+func TestSummaryFilteredByMember(t *testing.T) {
+	svc, _ := newService(t)
+	ctx, owner := consented(t, svc)
+
+	spouse, err := svc.CreateMember(ctx, owner, "t", "配偶")
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	child, err := svc.CreateMember(ctx, owner, "t", "子女")
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+
+	// 无成员归属的条目不应出现在任何成员视图里。
+	if _, err := svc.CreateItem(ctx, owner, "t", validInput()); err != nil {
+		t.Fatalf("create unmembered item: %v", err)
+	}
+	spouseIn := validInput()
+	spouseIn.MemberID = &spouse.ID
+	if _, err := svc.CreateItem(ctx, owner, "t", spouseIn); err != nil {
+		t.Fatalf("create spouse item: %v", err)
+	}
+	childIn := validInput()
+	childIn.Category = domain.LedgerCategoryLiability
+	childIn.SubType = "mortgage"
+	childIn.MemberID = &child.ID
+	if _, err := svc.CreateItem(ctx, owner, "t", childIn); err != nil {
+		t.Fatalf("create child item: %v", err)
+	}
+
+	all, err := svc.Summary(ctx, owner, nil)
+	if err != nil || all.ItemCount != 3 {
+		t.Fatalf("all summary = %+v, %v", all, err)
+	}
+	// nil 表示不过滤，聚合口径与过滤前一致。
+	if all.TotalAssetCents != 2*spouseIn.AmountCents || all.TotalLiabilityCents != childIn.AmountCents {
+		t.Fatalf("all totals = %+v", all)
+	}
+
+	onlySpouse, err := svc.Summary(ctx, owner, &spouse.ID)
+	if err != nil || onlySpouse.ItemCount != 1 {
+		t.Fatalf("spouse summary = %+v, %v", onlySpouse, err)
+	}
+	if onlySpouse.TotalAssetCents != spouseIn.AmountCents || onlySpouse.TotalLiabilityCents != 0 {
+		t.Fatalf("spouse totals = %+v", onlySpouse)
+	}
+	// 分类骨架保持完整，未命中的分类金额为零。
+	if len(onlySpouse.Groups) != len(domain.LedgerCategories()) {
+		t.Fatalf("spouse groups = %d", len(onlySpouse.Groups))
+	}
+
+	onlyChild, err := svc.Summary(ctx, owner, &child.ID)
+	if err != nil || onlyChild.ItemCount != 1 || onlyChild.TotalLiabilityCents != childIn.AmountCents {
+		t.Fatalf("child summary = %+v, %v", onlyChild, err)
+	}
+
+	missing := uint64(9999)
+	none, err := svc.Summary(ctx, owner, &missing)
+	if err != nil || none.ItemCount != 0 || none.NetAssetCents != 0 || len(none.Groups) != len(domain.LedgerCategories()) {
+		t.Fatalf("missing member summary = %+v, %v", none, err)
+	}
+
+	// 删除成员不改写条目上的 member_id（行 MAC 保护），历史归属仍可查询。
+	if err := svc.DeleteMember(ctx, owner, "t", spouse.ID); err != nil {
+		t.Fatalf("delete member: %v", err)
+	}
+	if after, err := svc.Summary(ctx, owner, &spouse.ID); err != nil || after.ItemCount != 1 {
+		t.Fatalf("deleted member summary = %+v, %v", after, err)
+	}
+}
+
 func TestMemberLimit(t *testing.T) {
 	svc, _ := newService(t)
 	ctx, owner := consented(t, svc)
@@ -383,7 +454,7 @@ func TestLoadItemsEmpty(t *testing.T) {
 	if err != nil || len(items) != 0 {
 		t.Fatalf("empty load = %d, %v", len(items), err)
 	}
-	summary, err := svc.Summary(ctx, owner)
+	summary, err := svc.Summary(ctx, owner, nil)
 	if err != nil || summary.ItemCount != 0 || len(summary.Groups) != 5 {
 		t.Fatalf("empty summary = %+v, %v", summary, err)
 	}

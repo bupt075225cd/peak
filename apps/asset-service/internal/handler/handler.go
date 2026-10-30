@@ -72,7 +72,12 @@ func (h *Handler) summary(c *gin.Context) {
 	if !ok {
 		return
 	}
-	summary, err := h.svc.Summary(c.Request.Context(), owner)
+	memberID, err := optionalIDParam(c, "member_id")
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	summary, err := h.svc.Summary(c.Request.Context(), owner, memberID)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -403,6 +408,19 @@ func parseID(c *gin.Context) (uint64, error) {
 		return 0, errors.New(errors.CodeInvalidArgument, "记录 ID 不合法")
 	}
 	return id, nil
+}
+
+// optionalIDParam 解析可选的正整数查询参数，缺省或空串视为未指定。
+func optionalIDParam(c *gin.Context, key string) (*uint64, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return nil, errors.New(errors.CodeInvalidArgument, "成员 ID 不合法")
+	}
+	return &id, nil
 }
 
 func intParam(c *gin.Context, key string, def int) int {

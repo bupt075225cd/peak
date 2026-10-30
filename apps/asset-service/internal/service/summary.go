@@ -68,13 +68,25 @@ type SnapshotView struct {
 }
 
 // Summary 返回分类/子类聚合。
-func (s *Service) Summary(ctx context.Context, owner string) (*Summary, error) {
+//
+// memberID 非空时只聚合该成员名下的条目，用于资产组成页按成员查看；
+// 过滤在解密后的视图上完成，避免对密文列做 SQL 条件。
+func (s *Service) Summary(ctx context.Context, owner string, memberID *uint64) (*Summary, error) {
 	if err := s.ensureConsent(ctx, s.repo, owner); err != nil {
 		return nil, err
 	}
 	views, err := s.loadItems(ctx, s.repo, owner)
 	if err != nil {
 		return nil, err
+	}
+	if memberID != nil {
+		filtered := make([]ItemView, 0, len(views))
+		for _, view := range views {
+			if view.MemberID != nil && *view.MemberID == *memberID {
+				filtered = append(filtered, view)
+			}
+		}
+		views = filtered
 	}
 	return buildSummary(views), nil
 }

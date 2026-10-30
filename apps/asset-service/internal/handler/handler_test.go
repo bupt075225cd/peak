@@ -175,6 +175,58 @@ func TestCreateItemAndSummary(t *testing.T) {
 	}
 }
 
+func TestSummaryFilteredByMemberQuery(t *testing.T) {
+	e := setup(t)
+	e.consent(t, 9)
+
+	w, resp := e.call(t, http.MethodPost, "/api/ledger/members", 9, "", map[string]string{"name": "配偶"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create member: %d %s", w.Code, w.Body.String())
+	}
+	var member struct {
+		ID uint64 `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &member); err != nil {
+		t.Fatalf("decode member: %v", err)
+	}
+
+	e.createItem(t, 9, "共同存款", 600_000)
+	w, _ = e.call(t, http.MethodPost, "/api/ledger/items", 9, "", map[string]any{
+		"name": "配偶基金", "category": "investment", "sub_type": "fund",
+		"amount_cents": 400_000, "member_id": member.ID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create member item: %d %s", w.Code, w.Body.String())
+	}
+
+	type summaryResp struct {
+		TotalAssetCents int64 `json:"total_asset_cents"`
+		ItemCount       int   `json:"item_count"`
+	}
+	decode := func(resp apiResp) summaryResp {
+		var s summaryResp
+		if err := json.Unmarshal(resp.Data, &s); err != nil {
+			t.Fatalf("decode summary: %v", err)
+		}
+		return s
+	}
+
+	_, resp = e.call(t, http.MethodGet, "/api/ledger/summary", 9, "", nil)
+	if all := decode(resp); all.ItemCount != 2 || all.TotalAssetCents != 1_000_000 {
+		t.Fatalf("unfiltered summary = %+v", all)
+	}
+
+	_, resp = e.call(t, http.MethodGet, "/api/ledger/summary?member_id="+strconv.FormatUint(member.ID, 10), 9, "", nil)
+	if one := decode(resp); one.ItemCount != 1 || one.TotalAssetCents != 400_000 {
+		t.Fatalf("member summary = %+v", one)
+	}
+
+	w, _ = e.call(t, http.MethodGet, "/api/ledger/summary?member_id=abc", 9, "", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad member_id status = %d, want 400", w.Code)
+	}
+}
+
 func TestSensitiveFieldsEncryptedAtRest(t *testing.T) {
 	e := setup(t)
 	e.consent(t, 2)
