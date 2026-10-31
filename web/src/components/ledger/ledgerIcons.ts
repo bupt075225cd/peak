@@ -3,6 +3,7 @@ import {
   Banknote,
   Building2,
   Car,
+  CircleEllipsis,
   Coins,
   CreditCard,
   FileText,
@@ -44,6 +45,7 @@ const ICONS: Record<string, Component> = {
   FileText,
   CreditCard,
   Banknote,
+  CircleEllipsis,
 }
 
 /** 按名称取图标组件，未知时回退为 Package。 */

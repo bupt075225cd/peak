@@ -18,8 +18,8 @@ const { isPoetry, isLedger } = useAppBrand()
 // 账本应用内导航（顺序与页面信息层级一致）。
 const ledgerNav = [
   { name: 'ledger-dashboard', to: '/ledger', label: '总览', icon: PieChart },
-  { name: 'ledger-items', to: '/ledger/items', label: '资产明细', icon: List },
   { name: 'ledger-composition', to: '/ledger/composition', label: '资产组成', icon: Share2 },
+  { name: 'ledger-items', to: '/ledger/items', label: '资产明细', icon: List },
 ]
 
 // 未登录时点「登录」：保留当前所在应用，登录后回到原页面（登录页自身不重复带参）。

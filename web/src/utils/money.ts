@@ -72,6 +72,16 @@ export function formatDate(iso: string | null | undefined): string {
   return `${date.getFullYear()}.${month}.${day}`
 }
 
+/** ISO 时间 → "02月28日"（更新流程的条目时间）。 */
+export function formatMonthDay(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return '—'
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}月${day}日`
+}
+
 /** "2026-01" → "1月"。 */
 export function formatMonthLabel(period: string): string {
   const month = period.split('-')[1] ?? ''

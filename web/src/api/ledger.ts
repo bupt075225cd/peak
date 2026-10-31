@@ -24,6 +24,8 @@ export interface LedgerCategoryMeta {
   kind: 'asset' | 'liability'
   color: string
   sub_types: LedgerSubTypeMeta[]
+  /** 分类口径说明（更新流程的「什么是{分类}」与子类弹层顶部文案）。 */
+  description: string
 }
 
 export interface LedgerRiskMeta {

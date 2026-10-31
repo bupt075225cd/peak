@@ -114,6 +114,7 @@ function buildRouter() {
       { path: '/ledger', name: 'ledger-dashboard', component: LedgerDashboard },
       { path: '/ledger/items', name: 'ledger-items', component: { template: '<div />' } },
       { path: '/ledger/composition', name: 'ledger-composition', component: { template: '<div />' } },
+      { path: '/ledger/update', name: 'ledger-update', component: { template: '<div />' } },
     ],
   })
 }
@@ -209,20 +210,20 @@ describe('LedgerDashboard.vue 总览', () => {
     expect(wrapper.find('[data-test="structure-fixed"]').exists()).toBe(false)
   })
 
-  it('添加资产：填写表单后提交并刷新总览', async () => {
-    const wrapper = await mountView()
-    await wrapper.find('[data-test="open-add-asset"]').trigger('click')
+  it('右上角只保留「更新资产」入口，点击进入更新流程', async () => {
+    const router = buildRouter()
+    router.push('/ledger')
+    await router.isReady()
+    const wrapper = mount(LedgerDashboard, { global: { plugins: [router] } })
     await flushPromises()
 
-    await wrapper.find('input[placeholder="如：招商银行活期"]').setValue('招行活期')
-    await wrapper.find('input[placeholder="点击输入金额"]').setValue('1200')
-    await wrapper.find('[data-test="ledger-submit"]').trigger('click')
-    await flushPromises()
+    // 旧的「更多固定资产」「添加资产」两个入口已合并。
+    expect(wrapper.find('[data-test="open-fixed-picker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="open-add-asset"]').exists()).toBe(false)
 
-    expect(createItem).toHaveBeenCalledWith(
-      expect.objectContaining({ name: '招行活期', amount_cents: 120000, category: 'liquid', currency: 'CNY' }),
-    )
-    expect(getSummary).toHaveBeenCalledTimes(2)
+    await wrapper.find('[data-test="open-update-assets"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/ledger/update')
   })
 
   it('不再展示资产月历与最近更新', async () => {

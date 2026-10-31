@@ -182,6 +182,9 @@ type LedgerCategoryMeta struct {
 	Kind     string              `json:"kind"` // asset / liability
 	Color    string              `json:"color"`
 	SubTypes []LedgerSubTypeMeta `json:"sub_types"`
+	// Description 分类口径说明：更新流程里的「什么是{分类}」与子类弹层顶部文案，
+	// 与标签一样由服务端下发，避免前后端各写一份口径。
+	Description string `json:"description"`
 }
 
 // LedgerRiskMeta 资产类型元数据。
@@ -211,16 +214,19 @@ func LedgerCategories() []LedgerCategoryMeta {
 	return []LedgerCategoryMeta{
 		{
 			Key: LedgerCategoryLiquid, Label: "流动资金", Kind: "asset", Color: "#E9A66B",
+			Description: "可随用随取、即时变现的钱；大额存单、定期存单、基金、股票等流动性更低的资产推荐记入投资理财。",
 			SubTypes: []LedgerSubTypeMeta{
 				{Key: "bank_current", Label: "银行活期", Icon: "Landmark"},
 				{Key: "bank_deposit", Label: "银行定期", Icon: "PiggyBank"},
 				{Key: "cash", Label: "现金", Icon: "Wallet"},
 				{Key: "wallet_app", Label: "支付宝/微信", Icon: "Smartphone"},
 				{Key: "money_fund", Label: "货币基金", Icon: "Coins"},
+				{Key: "liquid_custom", Label: "自定义流动资金", Icon: "CircleEllipsis"},
 			},
 		},
 		{
 			Key: LedgerCategoryFixed, Label: "固定资产", Kind: "asset", Color: "#9DBCC4",
+			Description: "用于投资或自用的、流动性低的实物类资产。",
 			SubTypes: []LedgerSubTypeMeta{
 				{Key: "house_self", Label: "房产（自住）", Icon: "House", IsFixed: true},
 				{Key: "house_invest", Label: "房产（投资）", Icon: "Building2", IsFixed: true},
@@ -228,34 +234,40 @@ func LedgerCategories() []LedgerCategoryMeta {
 				{Key: "parking", Label: "车位", Icon: "MapPin", IsFixed: true},
 				{Key: "jewelry", Label: "金银珠宝", Icon: "Gem", IsFixed: true},
 				{Key: "collectible", Label: "收藏品", Icon: "Palette", IsFixed: true},
-				{Key: "fixed_custom", Label: "自定义固定资产", Icon: "Package", IsFixed: true},
+				{Key: "fixed_custom", Label: "自定义固定资产", Icon: "CircleEllipsis", IsFixed: true},
 			},
 		},
 		{
 			Key: LedgerCategoryInvestment, Label: "投资理财", Kind: "asset", Color: "#A9A3D4",
+			Description: "投资于金融产品、追求保值增值的钱；房产、收藏品等实物类投资资产推荐记入固定资产。",
 			SubTypes: []LedgerSubTypeMeta{
 				{Key: "fund", Label: "基金", Icon: "LineChart"},
 				{Key: "stock", Label: "股票", Icon: "TrendingUp"},
 				{Key: "bond", Label: "债券", Icon: "Receipt"},
 				{Key: "insurance", Label: "保险", Icon: "Shield"},
 				{Key: "pension", Label: "养老金", Icon: "PiggyBank"},
+				{Key: "investment_custom", Label: "自定义投资理财", Icon: "CircleEllipsis"},
 			},
 		},
 		{
 			Key: LedgerCategoryReceivable, Label: "应收款", Kind: "asset", Color: "#63C6A5",
+			Description: "家庭资产中应收未收的款项，如借给他人的钱、为他人垫付的资金。",
 			SubTypes: []LedgerSubTypeMeta{
 				{Key: "loan_out", Label: "借出款", Icon: "HandCoins"},
 				{Key: "other_receivable", Label: "其他应收", Icon: "FileText"},
+				{Key: "receivable_custom", Label: "自定义应收款", Icon: "CircleEllipsis"},
 			},
 		},
 		{
 			Key: LedgerCategoryLiability, Label: "负债", Kind: "liability", Color: "#B9B4C7",
+			Description: "家庭需要偿还的债务与欠款，如信用卡账单、房屋贷款、汽车贷款等。",
 			SubTypes: []LedgerSubTypeMeta{
 				{Key: "mortgage", Label: "房屋贷款", Icon: "Landmark"},
 				{Key: "car_loan", Label: "车贷", Icon: "Car"},
 				{Key: "credit_card", Label: "信用卡", Icon: "CreditCard"},
 				{Key: "consumer_loan", Label: "消费贷", Icon: "Banknote"},
 				{Key: "other_liability", Label: "其他负债", Icon: "FileText"},
+				{Key: "liability_custom", Label: "自定义负债", Icon: "CircleEllipsis"},
 			},
 		},
 	}

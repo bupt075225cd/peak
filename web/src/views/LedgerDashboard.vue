@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { ArrowRight, Plus, ShieldCheck } from 'lucide-vue-next'
 import LedgerStructureCards from '../components/ledger/LedgerStructureCards.vue'
 import LedgerSummaryCard from '../components/ledger/LedgerSummaryCard.vue'
-import AssetFormDialog from '../components/ledger/AssetFormDialog.vue'
-import FixedAssetPickerDialog from '../components/ledger/FixedAssetPickerDialog.vue'
 import LedgerConfirmDialog from '../components/ledger/LedgerConfirmDialog.vue'
 import MemberBar from '../components/ledger/MemberBar.vue'
 import MemberFormDialog from '../components/ledger/MemberFormDialog.vue'
@@ -13,14 +11,11 @@ import MemberManagerDialog from '../components/ledger/MemberManagerDialog.vue'
 import PrivacyConsentDialog from '../components/ledger/PrivacyConsentDialog.vue'
 import {
   buildSummaryView,
-  createItem,
   createMember,
   deleteMember,
   errorMessage,
   getSummary,
   updateMember,
-  type LedgerCategory,
-  type LedgerItemInput,
   type LedgerMember,
   type LedgerSummary,
   type MemberScope,
@@ -40,18 +35,13 @@ const {
   accept,
 } = useLedgerMeta()
 const { hidden, toggle: toggleHidden } = useLedgerPrivacy()
+const router = useRouter()
 
 const summary = ref<LedgerSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
 const excludeFixed = ref(false)
 const privacyOpen = ref(false)
-
-const addOpen = ref(false)
-const pickerOpen = ref(false)
-const saving = ref(false)
-const formError = ref('')
-const formInitial = ref<{ category?: LedgerCategory; sub_type?: string } | null>(null)
 
 // 家庭成员：切换条（全部 / 我 / 各成员）+ 管理、新增、编辑、删除。
 const memberScope = ref<MemberScope>('')
@@ -102,46 +92,6 @@ async function loadData() {
 async function handleAccept() {
   const ok = await accept()
   if (ok) await loadData()
-}
-
-function openAdd() {
-  formInitial.value = { category: 'liquid' }
-  formError.value = ''
-  addOpen.value = true
-}
-
-function openPicker() {
-  pickerOpen.value = true
-}
-
-function pickFixed(subType: string) {
-  pickerOpen.value = false
-  formInitial.value = { category: 'fixed', sub_type: subType }
-  formError.value = ''
-  addOpen.value = true
-}
-
-async function submitItem(input: LedgerItemInput) {
-  saving.value = true
-  formError.value = ''
-  try {
-    await createItem(input)
-    addOpen.value = false
-    await loadData()
-  } catch (err) {
-    formError.value = errorMessage(err, '保存失败，请稍后重试')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function handleCreateMember(name: string) {
-  try {
-    await createMember(name)
-    await loadMembers()
-  } catch (err) {
-    formError.value = errorMessage(err, '添加成员失败')
-  }
 }
 
 // ── 家庭成员 ──────────────────────────────────────────────
@@ -229,23 +179,15 @@ async function confirmRemoveMember() {
           <p class="mt-1.5 text-sm text-ink-soft">每月更新一次，看清资产结构与家庭净资产的变化。</p>
         </div>
         <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-ink-soft transition-colors hover:border-ledger-fixed hover:text-ledger-ink cursor-pointer"
-            data-test="open-fixed-picker"
-            @click="openPicker"
-          >
-            <Plus class="h-4 w-4" />
-            更多固定资产
-          </button>
+          <!-- 更新资产的唯一入口：进入按分类逐项更新的流程 -->
           <button
             type="button"
             class="inline-flex items-center gap-1.5 rounded-xl bg-ledger-ink px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-slate-500/20 transition-colors hover:bg-[#2B3A5C] cursor-pointer"
-            data-test="open-add-asset"
-            @click="openAdd"
+            data-test="open-update-assets"
+            @click="router.push('/ledger/update')"
           >
             <Plus class="h-4 w-4" />
-            添加资产
+            更新资产
           </button>
         </div>
       </header>
@@ -348,20 +290,6 @@ async function confirmRemoveMember() {
       :error="metaError"
       @accept="handleAccept"
     />
-    <FixedAssetPickerDialog :open="pickerOpen" :meta="meta" @close="pickerOpen = false" @pick="pickFixed" />
-    <AssetFormDialog
-      :open="addOpen"
-      mode="create"
-      :meta="meta"
-      :members="members"
-      :initial="formInitial ?? {}"
-      :saving="saving"
-      :error="formError"
-      @close="addOpen = false"
-      @submit="submitItem"
-      @create-member="handleCreateMember"
-    />
-
     <MemberManagerDialog
       :open="managerOpen"
       :members="members"

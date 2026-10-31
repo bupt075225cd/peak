@@ -72,6 +72,12 @@ const router = createRouter({
       component: () => import('../views/LedgerComposition.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/ledger/update',
+      name: 'ledger-update',
+      component: () => import('../views/LedgerUpdate.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
