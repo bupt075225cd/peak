@@ -20,6 +20,11 @@ type ZhipuConfig struct {
 	// 默认强度下单次识别耗时远超超时，因此默认 low）；设为 off 表示不下发该参数
 	// （用于不支持该参数的模型，如 glm-4v 系列）。
 	ReasoningEffort string
+	// GeometryEffort 几何描述提取专用的思考强度覆盖，默认 high：
+	// 该步骤要求看图直出坐标，low 强度下漏画直线、点跑偏等失败率明显更高；
+	// 其余调用（整题解析、OCR 等）维持 ReasoningEffort 不变。
+	// 设为 off 表示不下发该参数（与 ReasoningEffort 保持一致）。
+	GeometryEffort string
 }
 
 // NewZhipuProvider 创建智谱 provider。
@@ -38,14 +43,23 @@ func NewZhipuProvider(cfg ZhipuConfig) *ZhipuProvider {
 	} else if cfg.ReasoningEffort == "off" || cfg.ReasoningEffort == "none" {
 		cfg.ReasoningEffort = ""
 	}
-	return &ZhipuProvider{vlmCapabilities: vlmCapabilities{dash: NewChatClient(ChatConfig{
-		Provider:        "zhipu",
-		APIKey:          cfg.APIKey,
-		Model:           cfg.Model,
-		Endpoint:        cfg.Endpoint,
-		MaxTokens:       cfg.MaxTokens,
-		ReasoningEffort: cfg.ReasoningEffort,
-	})}}
+	geometryEffort := cfg.GeometryEffort
+	if geometryEffort == "" {
+		geometryEffort = "high"
+	} else if geometryEffort == "off" || geometryEffort == "none" {
+		geometryEffort = ""
+	}
+	return &ZhipuProvider{vlmCapabilities: vlmCapabilities{
+		dash: NewChatClient(ChatConfig{
+			Provider:        "zhipu",
+			APIKey:          cfg.APIKey,
+			Model:           cfg.Model,
+			Endpoint:        cfg.Endpoint,
+			MaxTokens:       cfg.MaxTokens,
+			ReasoningEffort: cfg.ReasoningEffort,
+		}),
+		geometryEffort: geometryEffort,
+	}}
 }
 
 func (z *ZhipuProvider) Name() string { return "zhipu" }

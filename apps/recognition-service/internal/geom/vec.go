@@ -27,6 +27,35 @@ func unit(v vec) vec {
 	return vec{v.X / l, v.Y / l}
 }
 
+// canvasInset 直线延伸到画布边界时预留的边距（避免描边被裁掉半条）。
+const canvasInset = 1.5
+
+// rayToCanvasEdge 从 p 沿 dir 方向射出，返回到画布边界（内缩 canvasInset）的交点。
+// 用于把 extend 的线段画成贯穿图框的直线；dir 为零向量或射线朝外时原样返回 p。
+func rayToCanvasEdge(p, dir vec, w, h float64) vec {
+	if l := math.Hypot(dir.X, dir.Y); l < 1e-6 {
+		return p
+	}
+	x0, x1 := canvasInset, w-canvasInset
+	y0, y1 := canvasInset, h-canvasInset
+
+	t := math.Inf(1)
+	if dir.X > 1e-9 {
+		t = math.Min(t, (x1-p.X)/dir.X)
+	} else if dir.X < -1e-9 {
+		t = math.Min(t, (x0-p.X)/dir.X)
+	}
+	if dir.Y > 1e-9 {
+		t = math.Min(t, (y1-p.Y)/dir.Y)
+	} else if dir.Y < -1e-9 {
+		t = math.Min(t, (y0-p.Y)/dir.Y)
+	}
+	if math.IsInf(t, 1) || t <= 0 || !isFinite(t) {
+		return p
+	}
+	return add(p, mul(dir, t))
+}
+
 // deg 弧度转角度。
 func deg(rad float64) float64 { return rad * 180 / math.Pi }
 
@@ -64,6 +93,14 @@ func clampF(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+// minInt 取两个整数中的较小值。
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // clampCount 把标记数量（等长/平行/角弧条数）限制在 1~3。

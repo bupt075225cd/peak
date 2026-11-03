@@ -420,6 +420,63 @@ func TestProcessImageRedrawFeedsValidationIssuesBack(t *testing.T) {
 	}
 }
 
+// stemSpecProvider 在脚本化 provider 基础上覆盖题干文本，用于驱动题干-图形语义核对。
+type stemSpecProvider struct {
+	*scriptedSpecProvider
+	stem string
+}
+
+func (s *stemSpecProvider) ParseQuestion(_ context.Context, _ []byte) (*provider.QuestionParseResult, error) {
+	return &provider.QuestionParseResult{Text: s.stem, Subject: "数学", QuestionType: "填空题"}, nil
+}
+
+// TestProcessImageRedrawSemanticDeviationNotReported 验证题干-图形语义偏差（AG 与 CE 不平行、
+// G 不在 CD 边上）不再报"结构校验未通过"：这类偏差多半来自题干转录不全或识别错，
+// 图形本身结构完整可渲染；同时最终输出取问题最少的一版，避免按错题干越改越差。
+func TestProcessImageRedrawSemanticDeviationNotReported(t *testing.T) {
+	// 两轮结构都合法，只有语义偏差：第一轮单子图（1 条平行关系偏差），
+	// 第二轮双子图（2 条偏差）——模拟"按错题干修正后反而更差"。
+	first := `{"title":"图1","canvas":{"width":100,"height":100},` +
+		`"points":[{"name":"A","x":10,"y":90},{"name":"G","x":40,"y":90},` +
+		`{"name":"C","x":10,"y":20},{"name":"E","x":40,"y":10}],` +
+		`"segments":[{"from":"A","to":"G"},{"from":"C","to":"E"}]}`
+	worse := `{"panels":[` +
+		`{"title":"图1","canvas":{"width":100,"height":100},` +
+		`"points":[{"name":"A","x":10,"y":90},{"name":"G","x":40,"y":90},` +
+		`{"name":"C","x":10,"y":20},{"name":"E","x":40,"y":10}],` +
+		`"segments":[{"from":"A","to":"G"},{"from":"C","to":"E"}]},` +
+		`{"title":"图2","canvas":{"width":100,"height":100},` +
+		`"points":[{"name":"A","x":10,"y":90},{"name":"G","x":60,"y":20},` +
+		`{"name":"C","x":10,"y":20},{"name":"E","x":40,"y":10}],` +
+		`"segments":[{"from":"A","to":"G"},{"from":"C","to":"E"}]}` +
+		`]}`
+	result := runGeometryTask(t, &stemSpecProvider{
+		scriptedSpecProvider: &scriptedSpecProvider{
+			Provider: provider.NewMockProvider(), specs: []string{first, worse},
+		},
+		stem: "如图，AG∥CE。",
+	})
+
+	// 输出问题最少的一版：第一轮（单子图），而不是被修正带偏的第二轮（双子图）。
+	if len(result.RedrawFigures) != 1 {
+		t.Fatalf("expected best (1 figure) version, got %v", result.RedrawFigures)
+	}
+	if result.RedrawReport == nil {
+		t.Fatal("expected redraw report")
+	}
+	// 语义偏差不会自愈，修正回路会跑到尝试上限。
+	if result.RedrawReport.Attempts < 2 {
+		t.Fatalf("expected retries while deviations remain, got %d attempt(s)", result.RedrawReport.Attempts)
+	}
+	// 语义偏差不算结构问题：不报"结构校验未通过"。
+	if !result.RedrawReport.Consistent {
+		t.Fatalf("semantic deviation should not be reported as structural failure, got %+v", result.RedrawReport)
+	}
+	if strings.Contains(result.Warning, "结构问题") {
+		t.Fatalf("unexpected structural warning: %q", result.Warning)
+	}
+}
+
 // TestProcessImageRedrawFailureAddsWarning 验证渲染持续失败时：
 // 不产出重绘 key，降级为 warning，不影响主识别结果。
 func TestProcessImageRedrawFailureAddsWarning(t *testing.T) {

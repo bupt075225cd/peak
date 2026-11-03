@@ -40,6 +40,30 @@ type Segment struct {
 	Extend bool   `json:"extend,omitempty"` // 表示延长线
 }
 
+// Axis 是平面直角坐标系的一条轴：由原点指向正方向端点，末端绘制实心箭头。
+type Axis struct {
+	To    string `json:"to"`              // 正方向端点（须在 points 中定义，通常 hidden:true）
+	Label string `json:"label,omitempty"` // 轴标签（如 "x"、"y"），缺省按 x/y 轴自动取
+}
+
+// Axes 是平面直角坐标系：原点 + 两条轴。
+// 轴与矩形的边视觉上可能重合（如矩形 OABC 的 OA/OC 落在坐标轴上），
+// 此时 axes 必须单独给出，且端点要落在图形轮廓之外，避免重绘退化成"一个矩形"。
+// 注意：坐标轴不标注任何刻度数字——产品规则是"图上不标数值"，
+// 已知长度/坐标只体现在图形与题干文字中；轴上只画 x / y 两个轴标签。
+type Axes struct {
+	Origin string `json:"origin"`
+	X      Axis   `json:"x"`
+	Y      Axis   `json:"y"`
+}
+
+// Curve 是函数图像/平滑曲线：按 through 中的点名顺序连接。
+type Curve struct {
+	Through []string `json:"through"`
+	Smooth  bool     `json:"smooth,omitempty"`
+	Dashed  bool     `json:"dashed,omitempty"`
+}
+
 // Polygon 是多边形，可按需填充。
 type Polygon struct {
 	Points []string `json:"points"`
@@ -106,14 +130,29 @@ type Label struct {
 	Size   float64 `json:"size,omitempty"`
 }
 
+// Grid 是小正方形网格背景（"在如图所示的网格中"这类题）。
+// 用一块规则网格替代"几十个隐藏点 + 虚线线段"：模型只需给出左上角、格边长与行列数，
+// 渲染器用浅灰细线补齐格线，格点坐标即 (X+i*Cell, Y+j*Cell)，A/B/C/D 等顶点应对齐格点。
+type Grid struct {
+	X      float64 `json:"x"` // 网格左上角
+	Y      float64 `json:"y"`
+	Cell   float64 `json:"cell"`             // 小正方形边长
+	Cols   int     `json:"cols"`             // 列数
+	Rows   int     `json:"rows"`             // 行数
+	Dashed bool    `json:"dashed,omitempty"` // 原图网格为虚线时置 true
+}
+
 // Spec 是一张子图的几何描述。
 //
 // 注意：子图标题不在 Spec 内，而由 Panel（多子图包装）承载，
 // 以免同一个 JSON 对象里出现两个含义不同的 title 字段。
 type Spec struct {
 	Canvas      Canvas         `json:"canvas"`
+	Grid        *Grid          `json:"grid,omitempty"`
 	Points      []Point        `json:"points"`
 	Segments    []Segment      `json:"segments"`
+	Axes        *Axes          `json:"axes,omitempty"`
+	Curves      []Curve        `json:"curves,omitempty"`
 	Polygons    []Polygon      `json:"polygons,omitempty"`
 	Circles     []Circle       `json:"circles,omitempty"`
 	Arcs        []Arc          `json:"arcs,omitempty"`

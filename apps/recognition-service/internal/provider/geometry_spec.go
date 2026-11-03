@@ -29,9 +29,53 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 - points：所有点的坐标，name 用 A、B、C、O 等。坐标系与 SVG 一致：画布左上角为原点，x 向右，y 向下。
   坐标保留 1~2 位小数即可；图形整体居中，四周留 8~15 个单位空白。
   纯构造点（只用于连线、不画实心点）可设 "hidden": true。
+- grid：小正方形网格背景。题干出现"小正方形网格/网格纸/方格纸"或原图底纹是方格时**必须**输出，
+  由程序统一画成浅灰细线：
+  {"x":网格左上角x,"y":网格左上角y,"cell":小正方形边长,"cols":列数,"rows":行数}
+  网格图的每个顶点都要落在格点上：点坐标取 (x + i*cell, y + j*cell)，i/j 为整数。
+  严禁用"几十个隐藏点 + 一堆虚线 segments"手工拼网格（既不准也画不齐）；有了 grid 就不要重复画格线。
+  确定 cols/rows 的步骤（务必照做）：
+  (1) 先只看网格本身的虚线：沿最上面一条横格线数出竖格线的间隔数 = 列数，
+      沿最左边一条竖格线数出横格线的间隔数 = 行数；格子必须近似正方形（格子宽高相等）。
+  (2) cols/rows 只按原图可见的网格边界来数，不是"图形占了几格"。
+  (3) 再给每个顶点分配格点序号 (i,j)，坐标取 (x+i*cell, y+j*cell)。
+  (4) 若某顶点算出来超出网格范围，说明步骤 (3) 的序号算错了，应改点的序号，
+      **不要**为了把点装进网格而增删行列数。
 - segments：线段，from/to 必须是同一张图 points 中已有的 name；dashed 表示虚线（辅助线）；
-  extend 表示向两端延长（用于表达直线/射线）。
-- polygons：多边形，points 为点名数组，fill 为 true 时淡色填充。
+  extend 表示向两端延长到图框边界（用于表达直线/射线）。
+  from/to 只能写点名（如 "A"、"B"），绝不能写坐标（如 "10,15"），否则无法连线。
+  函数图象（一次函数/正比例函数/反比例函数/二次函数）在原图中贯穿整个坐标系时，
+  **必须**写 extend:true：端点只需取图上标注的位置（与 x 轴/y 轴的交点、标注点等），
+  向图框外的延伸由程序补足；只有题干明确限定了取值范围（如 "0<x≤3 时"）的图象才不写 extend，
+  画成一段线段。
+  注意"图上只标出两个点"不等于"图象只有这一段"：正比例函数 y=mx 的图象必过原点 O，
+  一次函数图象与坐标轴的两个交点只是它与轴相交的位置，这类图象**一律** extend:true，
+  绝不能只连 O→C 或 A→B 两点就当成线段。
+  图中印有直线名称（l₁、l₂、l₃…）时，每条名称都必须有对应的 segments/curves，一条都不能漏，
+  哪怕它没有额外的交点、没有字母点；三条直线交于同一点也要分别输出。
+  **必须区分"原图印刷的名称"与"题干文字里的代号"**：题干写"直线 l₁：y=kx+b""图象 l₂"只说明
+  这条线叫什么，不代表原图上印了 l₁/l₂ 这个标注。只有原图确实印着名称时，才把名称写进
+  labels（如 {"text":"l₃"}，位置紧贴这条线，不要离得很远）；原图上没有印的名称一律不要画到图上。
+  没有字母标注点的直线（如只印了名称 l₃ 的直线）必须在 points 里自造两个 hidden:true 构造点
+  （坐标按原图这条线实际经过的位置取，两点不共线于坐标轴），再用 extend:true 连成直线。
+  **严禁**用已有点（O、A、B、C…）拼出一截沿坐标轴的线段来代表直线——
+  这种线段会被轴线完全盖住，等于没画。
+  只重现原图中真实存在的图形要素：题干文字（尤其是后面小问才出现的条件）提到、
+  但原图并没有画出的直线或线段（如"直线 l₃ 与 x 轴交于点 E""若△COD 的面积为 6"），
+  不要补画到图上；原图旁边给考生自己作图的"备用图"只画原图已有的线与点，
+  不要添加额外的辅助连线或三角形。
+- axes：平面直角坐标系。原图有 x 轴、y 轴时必须输出，即使轴与矩形的边完全重合也不能省略：
+  {"origin":"O","x":{"to":"x 轴正方向端点","label":"x"},"y":{"to":"y 轴正方向端点","label":"y"}}
+  轴端点要先在 points 中给出（hidden:true），且必须落在图形轮廓之外，
+  让坐标轴明显伸出矩形/三角形（末端才有箭头空间）；label 写 "x" / "y"。
+  轴端点必须是专门新增的构造点，严禁借用图形里的点（A、B、C、D…）当轴端点。
+  坐标轴上不标任何刻度数字。
+- curves：曲线图象（抛物线、双曲线等），through 为依次经过的点名数组（至少 2 个），smooth 为 true 时平滑绘制。
+  直线的函数图象（一次函数、正比例函数）**不能**用 curves 表达，必须用 segments 且 extend:true，
+  否则画出来只是两个标注点之间的一段线段，与原图贯穿坐标系的直线不一致。
+  普通几何线段仍用 segments（不写 extend），不要混用。
+- polygons：多边形，points 为点名数组，fill 为 true 时淡色填充；
+  仅当印刷图本身有填充阴影时才 fill:true，手写/铅笔排线的阴影不算。
 - circles：圆，center 为圆心点名；radius 与 through 二选一（through 指圆上一点）。
 - arcs：圆弧，radius 必填；角度单位为度，0° 指向 x 轴正方向，角度增大方向与 y 轴正向一致。
   半圆必须用 arcs 表达，严禁用整圆 circles 代替：先在 points 中补充直径的中点（hidden:true）作圆心，
@@ -44,7 +88,9 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
   忠实原图：仅当原图中确实画有角的弧线标记时才输出；原图没有弧线标记就不要输出，不要臆造。
 - ticks / parallels：等长、平行标记，from/to 为线段两端点，count 为标记数量（1~3）。
 - labels：自由文本标注（代数式、结论等非数值文字，如 "AD=2BD"），x/y 为落点，anchor 取 start|middle|end。
-  不要在图上标注数值长度（如 "2.6m"、"3"）——已知长度以题干文字为准，图上一律不标数值。
+  直线名称（l₁/l₂/l₃）只有在原图上印着时才写；原图没印的名称（哪怕题干一直在用）不要写。
+  不要在图上标注数值长度（如 "2.6m"、"3"）——已知长度以题干文字为准，图上一律不标数值，
+  坐标轴刻度数字同样不标。
 
 硬性规则：
 1. 只还原图中真实存在的几何要素，绝不臆造题目未给出的点、线、圆或结论。
@@ -53,21 +99,53 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
    已知量（角度/长度）只信题干文字，不要采信示意图目测值。
    题干中"XX恰好经过点P"表示点 P 落在线段 XX 上（P 与 X、X 共线）：必须先按题意推算
    折叠/交点关系，确定 P 的位置后再给坐标，严禁把 P 画在偏离线段 XX 的位置。
+   题干中"点P在OA边上/线段OA上"表示 P 位于 O 与 A 之间（线段内部），
+   严禁画到 OA 的延长线上或边外；折叠题先由"折痕是对应点连线的垂直平分线"反推 P 的位置。
+   题干"作AG∥CE交CD于点G"表示 G 是交点：G 必须落在线段 CD 上，且 AG 与 CE 平行，
+   要先按平行关系求出交点再给坐标，不能把 G 随手放在别的边上。
+   题干"动点D从A点出发水平向右运动"表示 D 始终在过 A 的水平线上（竖直向上/向下同理），
+   不能把动点画到竖直边或其他方向；动点位置按题干给定时刻的移动距离确定。
    题干给定的线段长度（如 AB=2.3m、BC=2.6m）必须与对应线段严格对应：
    坐标比例按题干数值画（数值大的线段更长），长度标注也必须写在题干指定的那条线段旁，
    严禁把数值标到别的线段上。
-3. segments/polygons/circles/arcs/right_angles/angle_marks/ticks/parallels 引用的每个点
-   都必须在该张图的 points 中出现。
+3. segments/polygons/circles/arcs/right_angles/angle_marks/ticks/parallels/axes/curves
+   引用的每个点都必须在该张图的 points 中出现。
 4. 图上不标注任何角度文字：不写度数、不写角名、不写 ∠ 表达式；
    角的弧线标记（angle_marks）只在原图确实画有时才如实输出，直角用 right_angles 表示。
    题干里的度数照常保留在题干中，只是不要画到图上。
 5. labels 只用于代数式、结论等非角度、非数值文字（如 "AD=2BD"），坐标要放在空白处；
    数值长度一律不标到图上；角平分线、中线、垂直平分线等不要用 ticks 表示。
+   平行、垂直、共线等位置关系不要写成文字（如 "AG∥CE"、"AB⊥CD"），关系由图形本身表达。
 6. 辅助线、延长线用 dashed 或 extend 表达。
 7. 每个子图用独立 panel 与独立坐标系，标题写"图1/图2/图3"以与题干对应；
    每张图各自的作图条件必须在该张图里如实画出，不得省略、也不得挪到别的图上。
 8. 文字（labels 与点的字母）由程序自动避让，你只需把 labels 放在大概正确的空白处。
 9. 可选字段按需出现，没有的内容直接省略，不要填 null。
+10. 平面直角坐标系题（题干出现"平面直角坐标系/坐标轴/x 轴/y 轴/抛物线"，或图中本来画有带箭头的轴）：
+    每个子图都必须输出 axes，并把轴端点放到图形轮廓之外，让轴明显伸出矩形/三角形；
+    与轴重合的边（如矩形 OABC 的 OA、OC）照常输出 segments，不要用边代替坐标轴，
+    轴端点也不得复用 A/C/D 这类图形点（否则这些点会与轴混在一起而丢失）；
+    直线型函数图象（一次函数/正比例函数）用 segments + extend:true 表达，端点取图上的交点/标注点，
+    由程序延伸到图框边界；抛物线、双曲线用 curves。坐标系题不要另外铺网格线（原图底纹本身就是方格时用 grid），
+    也不要标注任何刻度数字。
+11. 子图数量必须与题图一致：原图有几张子图（含最后那张"备用图"）就输出几个 panel，
+    哪怕备用图与前面某张几乎相同也必须还原，一张都不能少；题干"如图2"之后还有图就要继续输出。
+12. 题干出现"△DEM"或"以点D、E、M为顶点的三角形"时，三角形三条边（DE、EM、MD）都要画：
+    即使某条边与坐标轴重合，也要为该边单独输出 segments，不要依赖轴本身顶替，
+    也不要因为该点是动点就只画它的一条连线。
+13. 点名字母（A、B、C、D、E、M、O…）由 points 自动标注，不要在 labels 里再写一遍点名，
+    否则图上会出现两个同名标签。
+14. 只还原印刷图形：图上的手写笔迹、批注、涂改、手写辅助线一律忽略，
+    不得把手写内容当作图形要素或点位依据（手写标注的位置常常是错的）；
+    手写在坐标轴旁的数值/坐标（如 12、13、24、16）只是做题笔迹，绝不能当作刻度或标签画到图上。
+    学生手写连出来的线（如把两个已知点直接连起来、随手补画的对角线/延长线）不是图形要素，
+    不要为它们输出 segments；铅笔排线式的涂阴影也不是印刷填充，不要用 polygons 的 fill 去还原。
+15. 网格图（题干写"小正方形网格"、或原图底纹是方格）：
+    用 grid 描述网格，不要用"隐藏点 + 虚线 segments"手工拼格线；A、B、C、D 等顶点必须落在格点上，
+    同一行/同一列的点共用同一个格行/格列坐标（不要出现看着差不多的小数偏差）；
+    线段端点只写点名，不要写坐标。
+    网格的行列数按原图**网格自身的边界**数（见 grid 字段的四步做法），
+    不得为了让图形填满而增删行列；原图网格通常比图形略大或正好包住图形。
 
 仅当某张图完全无法用上述结构化字段表达时，才在该张图里额外提供 "svg" 字段，
 内容是一段完整的 <svg viewBox="0 0 100 100">...</svg> 字符串（必须自带 stroke、fill 等样式属性，
@@ -89,11 +167,18 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 	}
 	ctx, cancel := context.WithTimeout(ctx, 240*time.Second)
 	defer cancel()
-	out, err := v.dash.chatSystem(ctx, GeometrySpecSystemPrompt, sb.String(), geoImage)
+	// 要求服务端以 JSON 对象输出：否则模型容易夹带解释文字、把 JSON 拆成多段。
+	// 思考强度用几何专用覆盖值（默认 high）：该步骤要求看图直出坐标，
+	// 低强度下漏画直线/点跑偏的概率显著更高。
+	out, err := v.specChat().chatSystemJSON(ctx, GeometrySpecSystemPrompt, sb.String(), geoImage)
 	if err != nil {
 		return "", err
 	}
-	return extractJSON(out)
+	spec, jerr := extractJSON(out)
+	if jerr != nil {
+		return "", &ModelOutputError{Raw: out, Err: jerr}
+	}
+	return spec, nil
 }
 
 // angleMarkVerifySystemPrompt 角弧线标记核对的系统提示词：让 VLM 对原图逐子图
@@ -137,26 +222,13 @@ func (v *vlmCapabilities) VerifyAngleMarks(ctx context.Context, geoImage []byte,
 	return verdicts, nil
 }
 
-// extractJSON 从模型输出中提取 JSON 文本（容忍 ```json 包裹、前后噪声）。
-func extractJSON(text string) (string, error) {
-	t := strings.TrimSpace(text)
-	if strings.HasPrefix(t, "```") {
-		parts := strings.Split(t, "```")
-		if len(parts) > 1 {
-			t = parts[1]
-			if strings.HasPrefix(strings.TrimSpace(t), "json") {
-				t = strings.TrimSpace(t)[4:]
-			}
-		}
-	}
-	start, end := strings.Index(t, "{"), strings.LastIndex(t, "}")
-	if start < 0 || end <= start {
-		return "", fmt.Errorf("model output contains no JSON object")
-	}
-	obj := t[start : end+1]
-	// 校验是合法 JSON 后原样返回。
-	if !json.Valid([]byte(obj)) {
-		return "", fmt.Errorf("model output is not valid JSON")
-	}
-	return obj, nil
+// ModelOutputError 表示模型输出无法解析为 JSON，保留原始输出供排查日志使用。
+// Error() 保持简短（会拼进用户可见的 warning），原始输出只进日志。
+type ModelOutputError struct {
+	Raw string
+	Err error
 }
+
+func (e *ModelOutputError) Error() string { return e.Err.Error() }
+
+func (e *ModelOutputError) Unwrap() error { return e.Err }

@@ -291,6 +291,68 @@ func TestParseGeometryDropsBBoxWhenDescriptionSaysNone(t *testing.T) {
 	}
 }
 
+func TestParseGeometryRotation(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"zero omitted", `{"shape_type":"axes"}`, 0},
+		{"number", `{"shape_type":"axes","rotation":90}`, 90},
+		{"quoted", `{"shape_type":"axes","rotation":"270"}`, 270},
+		{"float", `{"shape_type":"axes","rotation":180.0}`, 180},
+		{"overflow", `{"shape_type":"axes","rotation":450}`, 90},
+		{"angle not multiple of 90", `{"shape_type":"axes","rotation":45}`, 0},
+		{"null", `{"shape_type":"axes","rotation":null}`, 0},
+		{"garbage", `{"shape_type":"axes","rotation":"sideways"}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := parseGeometry(tc.in)
+			if got := g.Rotation.Degrees(); got != tc.want {
+				t.Fatalf("rotation = %d, want %d", got, tc.want)
+			}
+			// 宽容解析不能影响其余字段。
+			if g.ShapeType != "axes" {
+				t.Fatalf("shape_type lost: %+v", g)
+			}
+		})
+	}
+
+	// rotation 与 bbox 同时存在时都要保留。
+	g := parseGeometry(`{"shape_type":"axes","rotation":90,"bounding_box":{"x":0.1,"y":0.2,"width":0.5,"height":0.4}}`)
+	if g.Rotation != 90 || g.BoundingBox == nil {
+		t.Fatalf("unexpected result: %+v", g)
+	}
+}
+
+func TestNormalizeRotation(t *testing.T) {
+	cases := map[int]int{
+		-90: 270, 0: 0, 15: 0, 45: 0, 90: 90, 105: 90, 135: 0,
+		180: 180, 270: 270, 360: 0, 450: 90, 720: 0,
+	}
+	for in, want := range cases {
+		if got := NormalizeRotation(in).Degrees(); got != want {
+			t.Fatalf("NormalizeRotation(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// TestFixDegrees 验证 rotation 存的是"内容倾斜角"，转正需要用它的反向（逆时针）。
+// 手机侧躺照片实测 VLM 答 90（文字要逆时针转 90° 才读正），此时必须顺时针转 270°。
+func TestFixDegrees(t *testing.T) {
+	cases := map[Rotation]int{
+		0: 0, 90: 270, 180: 180, 270: 90,
+		// 非法值按 0 处理，不产生旋转（负角度要先 NormalizeRotation 再比较）。
+		45: 0, -90: 0,
+	}
+	for in, want := range cases {
+		if got := in.FixDegrees(); got != want {
+			t.Fatalf("Rotation(%d).FixDegrees() = %d, want %d", int(in), got, want)
+		}
+	}
+}
+
 func TestNormalizeBBox(t *testing.T) {
 	tests := []struct {
 		name string
@@ -639,7 +701,6 @@ func TestParseOcrGeoWithColonAndEmpty(t *testing.T) {
 		t.Fatalf("unexpected geo: %q", geo)
 	}
 }
-
 
 func TestNormalizeTranscript(t *testing.T) {
 	in := "  第一行 \r\n\r\n第二行　\r\n"

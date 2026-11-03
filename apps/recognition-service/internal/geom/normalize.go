@@ -4,16 +4,96 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // maxValidateIssues 单次结构校验最多报告的问题条数（避免回喂文本过长）。
 const maxValidateIssues = 12
 
+// coordRefRe 匹配"把端点直接写成坐标"的引用（如 "10,15"、"10.5, 15"）。
+var coordRefRe = regexp.MustCompile(`^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$`)
+
+// RepairCoordRefs 把"用坐标字符串当点名"的引用补成隐藏构造点，返回修复说明。
+// 网格图上模型常把格线端点写成 {"from":"10,15","to":"70,15"}，结构校验会判
+// "引用了未定义的点"而丢掉整条线；这里按坐标造点，保住模型已经定好的位置。
+func (s *Spec) RepairCoordRefs() []string {
+	if s == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(s.Points))
+	for _, p := range s.Points {
+		seen[strings.TrimSpace(p.Name)] = true
+	}
+	var notes []string
+	fix := func(ref *string) {
+		raw := strings.TrimSpace(*ref)
+		if raw == "" || seen[raw] {
+			return
+		}
+		m := coordRefRe.FindStringSubmatch(raw)
+		if m == nil {
+			return
+		}
+		x, errX := strconv.ParseFloat(m[1], 64)
+		y, errY := strconv.ParseFloat(m[2], 64)
+		if errX != nil || errY != nil {
+			return
+		}
+		name := fmt.Sprintf("p%d", len(s.Points)+1)
+		for seen[name] {
+			name += "_"
+		}
+		seen[name] = true
+		s.Points = append(s.Points, Point{Name: name, X: x, Y: y, Hidden: true})
+		notes = append(notes, raw+"→"+name)
+		*ref = name
+	}
+	for i := range s.Segments {
+		fix(&s.Segments[i].From)
+		fix(&s.Segments[i].To)
+	}
+	for i := range s.Polygons {
+		for j := range s.Polygons[i].Points {
+			fix(&s.Polygons[i].Points[j])
+		}
+	}
+	for i := range s.Curves {
+		for j := range s.Curves[i].Through {
+			fix(&s.Curves[i].Through[j])
+		}
+	}
+	return notes
+}
+
 // numericLabelRe 纯数值长度标注（如 "2.6"、"2.6m"、"2.6米"）。
 // 已知长度以题干文字为准，图上不标数值长度，渲染前直接剔除。
 var numericLabelRe = regexp.MustCompile(
 	`(?i)^[≈≈~]?\s*\d+(?:\.\d+)?\s*(mm|cm|dm|km|m|米|厘米|毫米|分米|千米)?[。.。]?$`)
+
+// relationLabelRe 纯位置关系标注：如 "AG∥CE"、"AB ⊥ CD"、"AG//CE"、"AG平行于CE"、
+// "A、B、C三点共线"（可用 、，；且 连接多条关系）。
+// 平行、垂直、共线等关系应体现在图形本身，图上不写这类说明文字。
+var relationLabelRe = regexp.MustCompile(
+	`^(?:\s*(?:` +
+		`[A-Z][0-9]?[A-Z][0-9]?\s*(?:∥|//|⊥|平行于|垂直于|平行|垂直)\s*[A-Z][0-9]?[A-Z][0-9]?` +
+		`|(?:[A-Z][0-9]?\s*[、,，]\s*){2,}[A-Z][0-9]?\s*(?:三点)?\s*共线` +
+		`|(?:[A-Z][0-9]?){3}\s*(?:三点)?\s*共线` +
+		`)\s*(?:[，,、且；;。.]\s*)*)+$`)
+
+// coordLabelRe 纯坐标标注（如 "A(-4,0)"、"(-4, 0)"）。
+// 坐标属于数值信息，按"图上不标数值"的规则同样不画到图上。
+var coordLabelRe = regexp.MustCompile(
+	`^\s*(?:[A-Z][0-9]?\s*)?[（(]\s*[-−－+]?\s*\d+(?:\.\d+)?\s*[,，]\s*[-−－+]?\s*\d+(?:\.\d+)?\s*[)）]\s*$`)
+
+// axisAuxPointRe 匹配模型自造的坐标轴辅助点（如 x1/y1、x_axis/yax）。
+// 这类小写点名只用于画轴，不是题图中的点名。
+var axisAuxPointRe = regexp.MustCompile(`^[xy](?:[0-9]+|_?(?:ax(?:is)?|end)[0-9]*)$`)
+
+// isAxisAuxPoint 判断点名是否是坐标轴辅助点。
+func isAxisAuxPoint(name string) bool {
+	return axisAuxPointRe.MatchString(strings.TrimSpace(name))
+}
 
 // Normalize 对模型输出做健壮性处理：补齐画布、裁剪坐标、剔除引用了不存在点的图元。
 func (s *Spec) Normalize() {
@@ -28,6 +108,19 @@ func (s *Spec) Normalize() {
 	}
 	w, h := s.Canvas.Width, s.Canvas.Height
 	maxR := maxRadiusRatio * math.Max(w, h)
+
+	// 网格背景：参数非法就整体丢弃（装饰性元素，不值得回喂修正），
+	// 合法时把范围收进画布、行列数收进上限。
+	if g := s.Grid; g != nil {
+		if !isFinite(g.Cell) || g.Cell <= 0 || g.Cols <= 0 || g.Rows <= 0 {
+			s.Grid = nil
+		} else {
+			g.Cols = minInt(g.Cols, maxGridCols)
+			g.Rows = minInt(g.Rows, maxGridRows)
+			g.X = clampF(g.X, 0, w)
+			g.Y = clampF(g.Y, 0, h)
+		}
+	}
 
 	// 点：去重、裁剪坐标。
 	seen := make(map[string]bool, len(s.Points))
@@ -107,6 +200,63 @@ func (s *Spec) Normalize() {
 	}
 	s.Arcs = arcs
 
+	// 坐标系：原点必须存在，否则整组丢弃（没有原点就无法确定轴的位置）。
+	// 轴端点缺失/引用未定义的点/与原点或彼此重合时，自动按"从原点延伸到画布边缘"
+	// 生成隐藏构造点补齐——这类问题模型经常犯，补齐比丢弃或回喂重试都划算。
+	if a := s.Axes; a != nil {
+		a.Origin = strings.TrimSpace(a.Origin)
+		a.X.To = strings.TrimSpace(a.X.To)
+		a.Y.To = strings.TrimSpace(a.Y.To)
+		a.X.Label = strings.TrimSpace(a.X.Label)
+		a.Y.Label = strings.TrimSpace(a.Y.Label)
+		origin, okOrigin := s.PointByName(a.Origin)
+		if a.Origin == "" || !okOrigin {
+			s.Axes = nil
+		} else {
+			take := func(name string, horizontal bool, other string) string {
+				if name != "" && exists(name) && name != a.Origin && name != other {
+					return name
+				}
+				p := s.autoAxisEnd(origin, horizontal)
+				p.Name = s.uniquePointName(axisEndName(horizontal), seen)
+				seen[p.Name] = true
+				s.Points = append(s.Points, p)
+				return p.Name
+			}
+			a.X.To = take(a.X.To, true, "")
+			a.Y.To = take(a.Y.To, false, a.X.To)
+		}
+	}
+
+	// 坐标轴辅助点（模型常用 x1/y1 这类小写点表示轴的另一端）不是题图要素：
+	// 未被任何图元引用时一律隐藏，避免被渲染成带 "x1"/"y1" 名字的点与标签。
+	// 保留坐标是有意的：轴线仍按这些点延伸到图形之外，原图的负半轴不会丢。
+	used := figurePointNames(s)
+	for i := range s.Points {
+		if p := &s.Points[i]; !used[p.Name] && isAxisAuxPoint(p.Name) {
+			p.Hidden = true
+		}
+	}
+
+	// 曲线：过滤引用了不存在点的节点，剩余不足 2 个则整条丢弃。
+	if len(s.Curves) > 0 {
+		curves := s.Curves[:0]
+		for _, c := range s.Curves {
+			nodes := make([]string, 0, len(c.Through))
+			for _, name := range c.Through {
+				if exists(name) {
+					nodes = append(nodes, name)
+				}
+			}
+			if len(nodes) < 2 {
+				continue
+			}
+			c.Through = nodes
+			curves = append(curves, c)
+		}
+		s.Curves = curves
+	}
+
 	rightAngles := s.RightAngles[:0]
 	for _, ra := range s.RightAngles {
 		if exists(ra.Vertex) && exists(ra.A) && exists(ra.B) &&
@@ -151,8 +301,16 @@ func (s *Spec) Normalize() {
 		if l.Text == "" {
 			continue
 		}
-		// 图上不标数值长度：纯数值（可带单位）标注直接剔除，保留代数式/结论等文字。
-		if numericLabelRe.MatchString(l.Text) {
+		// 图上不标数值长度：纯数值（可带单位）、纯坐标标注直接剔除，保留代数式/结论等文字。
+		if numericLabelRe.MatchString(l.Text) || coordLabelRe.MatchString(l.Text) {
+			continue
+		}
+		// 点名由 points 自动标注：labels 里重复写点名会在图上出现两个同名标签。
+		if seen[l.Text] {
+			continue
+		}
+		// 平行/垂直/共线等位置关系由图形本身表达，图上不写 "AG∥CE" 这类说明文字。
+		if relationLabelRe.MatchString(l.Text) {
 			continue
 		}
 		l.X = clampF(l.X, 0, w)
@@ -169,6 +327,42 @@ func (s *Spec) Normalize() {
 	s.SVG = strings.TrimSpace(s.SVG)
 }
 
+// axisEndName 自动生成的轴端点基础点名（不会被渲染成标签）。
+func axisEndName(horizontal bool) string {
+	if horizontal {
+		return "xax_end"
+	}
+	return "yax_end"
+}
+
+// uniquePointName 返回不与已有点重名的点名（必要时追加序号）。
+func (s *Spec) uniquePointName(base string, seen map[string]bool) string {
+	name := base
+	for i := 2; seen[name]; i++ {
+		name = base + strconv.Itoa(i)
+	}
+	return name
+}
+
+// autoAxisEnd 为缺失的轴端点生成兜底坐标：从原点延伸到画布边缘。
+// 约定 x 轴向右、y 轴向上；原点已靠右/靠上时自动反向，保证轴始终伸出图形之外。
+func (s *Spec) autoAxisEnd(origin Point, horizontal bool) Point {
+	const margin = 4.0
+	w, h := s.Canvas.Width, s.Canvas.Height
+	if horizontal {
+		x := w - margin
+		if origin.X > w*0.55 {
+			x = margin
+		}
+		return Point{X: clampF(x, 0, w), Y: origin.Y, Hidden: true}
+	}
+	y := margin
+	if origin.Y < h*0.45 {
+		y = h - margin
+	}
+	return Point{X: origin.X, Y: clampF(y, 0, h), Hidden: true}
+}
+
 // Empty 判断该图形描述是否没有任何可绘制内容。
 // 仅有 svg 兜底字段（无结构化图元）不算空。
 func (s *Spec) Empty() bool {
@@ -176,7 +370,7 @@ func (s *Spec) Empty() bool {
 		return true
 	}
 	if len(s.Points) == 0 && len(s.Segments) == 0 && len(s.Polygons) == 0 &&
-		len(s.Circles) == 0 && len(s.Arcs) == 0 {
+		len(s.Circles) == 0 && len(s.Arcs) == 0 && len(s.Curves) == 0 && s.Axes == nil {
 		return strings.TrimSpace(s.SVG) == ""
 	}
 	return false
@@ -321,9 +515,29 @@ func (s *Spec) Validate() []string {
 			add("第 %d 个文字标注内容为空", i+1)
 		}
 	}
+	if a := s.Axes; a != nil {
+		// 轴端点缺失/未定义/与原点重合都可自动补齐（见 Normalize.autoAxisEnd），
+		// 只有原点缺失无法修复，才作为问题回喂。
+		if strings.TrimSpace(a.Origin) == "" {
+			add("axes 缺少 origin（原点点名）")
+		} else if !exists(a.Origin) {
+			add("axes 的原点引用了未定义的点 %s", a.Origin)
+		}
+	}
+	for i, c := range s.Curves {
+		n := 0
+		for _, name := range c.Through {
+			if exists(name) {
+				n++
+			}
+		}
+		if n < 2 {
+			add("第 %d 条曲线有效点不足 2 个", i+1)
+		}
+	}
 
 	if !hasSVG && len(s.Points) == 0 && len(s.Segments) == 0 && len(s.Polygons) == 0 &&
-		len(s.Circles) == 0 && len(s.Arcs) == 0 {
+		len(s.Circles) == 0 && len(s.Arcs) == 0 && len(s.Curves) == 0 && s.Axes == nil {
 		add("没有任何可绘制的图元")
 	}
 	if len(issues) >= maxValidateIssues {

@@ -29,17 +29,23 @@ import (
 // 图片上传：单题结构（StemText 等字段）。
 // 文档上传：多题结构（Questions 数组）。
 type RecognitionResult struct {
-	StemText     string                  `json:"stem_text"`
-	Answer       string                  `json:"answer"`
-	Subject      string                  `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
-	QuestionType string                  `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
-	Geometry     provider.GeometryResult `json:"geometry"`
+	StemText     string `json:"stem_text"`
+	Answer       string `json:"answer"`
+	Subject      string `json:"subject,omitempty"`       // 学科：数学/语文/英语/物理/化学
+	QuestionType string `json:"question_type,omitempty"` // 题型：选择题/填空题/解答题
+	// Tables 题干中的表格（分档计费表、数据对照表等）：StemText 里以 {{table1}} 占位，
+	// 前端渲染成表格、导出时序列化成 Markdown 表格。
+	Tables   []provider.Table        `json:"tables,omitempty"`
+	Geometry provider.GeometryResult `json:"geometry"`
 	// RedrawFigures 几何重绘输出的子图列表：key 为独立 SVG 的存储 key，
 	// label 为该子图在题干中的图号（如"图1"）。一张原图含多个几何子图时逐个填充
 	// （启用了内置几何渲染时填充）。
 	RedrawFigures []RedrawFigure `json:"redraw_figures,omitempty"`
 	// RedrawReport 几何重绘报告（重试轮数、结构校验是否通过）。
 	RedrawReport *RedrawReport `json:"redraw_report,omitempty"`
+	// ImageRotation 入口把整图转正所用的顺时针角度（0/90/180/270，不含 EXIF 那部分）。
+	// 前端据此把本地预览图转到与服务端识别时相同的朝向，避免"用户看的图"与"模型看的图"不一致。
+	ImageRotation int `json:"image_rotation,omitempty"`
 	// Questions 文档识别出的多道题（仅文档上传时填充）。
 	Questions []QuestionItem `json:"questions,omitempty"`
 	// Warning 非致命错误提示（如公式/几何识别失败），供前端展示。
@@ -276,8 +282,13 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	if err != nil {
 		return nil, err
 	}
+	// 图片方向统一在入口处理：几何识别的 bbox 是相对"视觉正立图"给的归一化坐标，
+	// 侧躺/倒立的图不先生转正，会出现"框到别处、图形被切掉一半"，倒立图甚至被判成
+	// 没有几何图形。EXIF 有方向标记就按标记转（零网络成本），没有标记（微信转发图、
+	// 截图常见）时让模型判一次倾斜角。
+	imageData, rotation := s.uprightImage(ctx, taskID, imageData)
 
-	result := &RecognitionResult{}
+	result := &RecognitionResult{ImageRotation: rotation}
 	s.updateProgress(taskID, 10, "正在识别题干…")
 
 	// 几何识别与整题解析相互独立 → 并行发起，二者耗时重叠。
@@ -315,6 +326,7 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	result.StemText = parse.Text
 	result.Subject = parse.Subject
 	result.QuestionType = parse.QuestionType
+	result.Tables = parse.Tables
 	// 模型未给出学科/题型时降级为规则判断（不再额外调 VLM）。
 	if result.Subject == "" {
 		result.Subject = detectSubject(result.StemText)
@@ -322,7 +334,7 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	if result.QuestionType == "" {
 		result.QuestionType = detectQuestionType(result.StemText)
 	}
-	s.updateProgress(taskID, 40, "正在识别几何图形…")
+	s.updateProgress(taskID, 40, "正在识别图形…")
 
 	// 接收并发几何识别的结果（增强步骤，失败仅记录 warning）。
 	// 模型返回 bounding_box 即认为图中含几何图形，用于决定是否触发重绘。
@@ -336,7 +348,29 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 		result.Warning += "几何识别失败：" + gout.err.Error()
 	} else {
 		result.Geometry = *gout.res
-		geomBBox = gout.res.BoundingBox
+		// 入口已按模型判定的倾斜角把整图转正；几何识别若仍报倾斜角，一般是同一张图被重复判读，
+		// 以入口结论为准。但报 180° 是特例：说明入口把顺时针 90/270 判反了，整图被转成了倒立图——
+		// 这种图上"上下左右"全反（实测把 B(0,4) 画到原点下方、l1 斜率取成负），必须翻回来再提取。
+		if rotation != 0 && result.Geometry.Rotation == 180 {
+			if fixed, ferr := rotateImageData(imageData, 180); ferr == nil {
+				imageData = fixed
+				rotation = (rotation + 180) % 360
+				result.ImageRotation = rotation
+				geomBBox = flipBBox180(gout.res.BoundingBox)
+				s.log.Warn("entry rotation looked upside down, image flipped back 180",
+					zap.Uint64("task_id", taskID), zap.Int("tilt", 180),
+					zap.Int("rotation", rotation))
+			}
+		} else if rotation != 0 && result.Geometry.Rotation != 0 {
+			s.log.Info("geometry tilt ignored, image already upright at entry",
+				zap.Uint64("task_id", taskID), zap.Int("tilt", result.Geometry.Rotation.Degrees()),
+				zap.Int("entry_rotation", rotation))
+		}
+		// 入口（含上面的翻转）已经决定了朝向，几何阶段不再二次旋转。
+		result.Geometry.Rotation = 0
+		if geomBBox == nil {
+			geomBBox = gout.res.BoundingBox
+		}
 		hasGeometry = geomBBox != nil
 	}
 	s.updateProgress(taskID, 60, "识别完成")
@@ -358,6 +392,31 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	}
 
 	return result, nil
+}
+
+// flipBBox180 把归一化 bbox 换算到图片旋转 180° 后的坐标系：
+// 原图左上角对应新图右下角，宽高不变。
+func flipBBox180(b *provider.BoundingBox) *provider.BoundingBox {
+	if b == nil {
+		return nil
+	}
+	return &provider.BoundingBox{
+		X:      clamp01(1 - b.X - b.Width),
+		Y:      clamp01(1 - b.Y - b.Height),
+		Width:  b.Width,
+		Height: b.Height,
+	}
+}
+
+func clamp01(v float64) float64 {
+	switch {
+	case v < 0:
+		return 0
+	case v > 1:
+		return 1
+	default:
+		return v
+	}
 }
 
 // updateProgress 更新任务进度与当前阶段文案（前端展示"正在做什么"）。
@@ -389,26 +448,42 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	}
 
 	// 提取的 VLM 输入：优先使用几何区域小图（输入瘦身）；失败则回退整张原图。
-	// bbox 四周加 12% 余量再裁剪：几何识别的外接框偶尔偏紧/偏移，直接按框裁剪
-	// 可能把图形切掉一部分，导致提取阶段把残片误判为"碎片"而拒绝绘制。
+	// 裁剪前会按墨迹连通域做"区域完整性"规划：模型框偏紧时被切断的轴线/边会被补全，
+	// 框内没有墨迹或并集过大时回退整图，避免把 E 这类端点裁到画面外。
 	extractImage := imageData
 	regionFallback := false // 是否还可回退整张原图（空 panels 拒绝时用）
+	// 网格图的格线是很淡的虚线，缩到 960 宽会被糊掉、模型数不准格子，放宽分辨率。
+	regionMaxDim := geometryRegionMaxDim
+	if isGridFigure(result.StemText, result.Geometry.Description) {
+		regionMaxDim = geometryGridRegionMaxDim
+	}
 	if bbox != nil {
-		padded := &provider.BoundingBox{
-			X:      bbox.X - bbox.Width*0.12,
-			Y:      bbox.Y - bbox.Height*0.12,
-			Width:  bbox.Width * 1.24,
-			Height: bbox.Height * 1.24,
-		}
-		if small, cerr := cropAndScaleRegion(imageData, padded, geometryRegionMaxDim); cerr == nil {
+		if small, plan, cerr := cropAndScaleRegionPlanned(imageData, bbox, regionMaxDim); cerr == nil {
 			extractImage = small
 			regionFallback = true
 			s.log.Info("geometry extract input shrunk",
-				zap.Uint64("task_id", taskID),
+				zap.Uint64("task_id", taskID), zap.String("plan", plan),
 				zap.Int("src_bytes", len(imageData)), zap.Int("region_bytes", len(small)))
 		} else {
 			s.log.Warn("geometry region prep failed, fallback to full image",
 				zap.Uint64("task_id", taskID), zap.String("error", cerr.Error()))
+		}
+	}
+	// 图片侧躺时把几何区域转正：bbox 仍按原图坐标裁剪，故在裁剪之后旋转。
+	// rotation 存的是"内容顺时针倾斜角"，转正要用 FixDegrees 取反向修正量；
+	// regionImage 保留未旋转版本，供旋转方向判断错误时换个方向重试。
+	regionImage := extractImage
+	rotationFix := 0
+	if deg := result.Geometry.Rotation.FixDegrees(); deg != 0 {
+		if upright, rerr := rotateImageData(regionImage, deg); rerr != nil {
+			s.log.Warn("geometry region rotate failed",
+				zap.Uint64("task_id", taskID), zap.Int("rotation", deg), zap.String("error", rerr.Error()))
+		} else {
+			extractImage = upright
+			rotationFix = deg
+			s.log.Info("geometry region rotated upright",
+				zap.Uint64("task_id", taskID), zap.Int("tilt", result.Geometry.Rotation.Degrees()),
+				zap.Int("rotation", deg))
 		}
 	}
 
@@ -416,6 +491,12 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	var lastErr error
 	correction := ""
 	attempts := 0
+	// 修正回路里问题最少的一版（结构问题数、语义偏差数），循环结束后据此输出。
+	var best []geom.PanelResult
+	bestHard, bestSoft := 0, 0
+	var bestIssues []string
+	// 入口转正方向判反时的撤销重试只做一次，避免来回旋转耗光重试轮数。
+	entryUprightOppositeTried := false
 	for attempt := 1; attempt <= s.geometryMaxAttempts; attempt++ {
 		attempts = attempt
 		// 重绘轮次可能较久（VLM 提取几何描述），实时更新进度文案让用户感知。
@@ -423,7 +504,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		if p > 94 {
 			p = 94
 		}
-		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘几何图形（第 %d 次尝试）…", attempt))
+		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘图形（第 %d 次尝试）…", attempt))
 		var spec string
 		var eerr error
 		s.callProvider(ctx, "geometry_spec_extract", func(c context.Context) (err error) {
@@ -432,7 +513,17 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		})
 		if eerr != nil {
 			lastErr = eerr
-			s.log.Warn("geometry spec extract failed", zap.Int("attempt", attempt), zap.String("error", eerr.Error()))
+			fields := []zap.Field{zap.Int("attempt", attempt), zap.String("error", eerr.Error())}
+			// 模型输出不是合法 JSON 时把原文带进日志：否则只剩一句
+			// "model output is not valid JSON"，完全看不出是截断、多段还是转义问题。
+			if moe, ok := eerr.(*provider.ModelOutputError); ok {
+				fields = append(fields, zap.String("raw", truncate(moe.Raw, 2048)))
+			}
+			s.log.Warn("geometry spec extract failed", fields...)
+			// 下一轮必须给出反馈，否则重试请求与上一轮完全相同，只会重复失败。
+			correction = "上一轮输出不是合法的 JSON（可能是被截断、夹带了说明文字或含非法转义）。" +
+				"请只输出一个完整的 JSON 对象：不要 Markdown 代码块、不要任何解释文字；" +
+				"字符串里不要写 LaTeX（如 \\frac、\\angle），需要时用普通文字描述。"
 			continue
 		}
 		parsed, perr := geom.ParsePanels(spec)
@@ -448,6 +539,37 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		// 回退整张原图重试（提取有题干在手，能从整图找到对应图形）；
 		// 整张原图仍被拒绝才干净跳过重绘（本题确无几何图形）。
 		if len(parsed) == 0 {
+			// 入口按模型判读把整图转正过，这里却判"没有几何图形"：可能是入口方向判反了，
+			// 撤销入口旋转（转回原始方向）再试一次。
+			if rotationFix == 0 && result.ImageRotation != 0 && !entryUprightOppositeTried {
+				entryUprightOppositeTried = true
+				opp := (360 - result.ImageRotation) % 360
+				if upright, rerr := rotateImageData(regionImage, opp); rerr == nil {
+					extractImage = upright
+					s.log.Warn("geometry spec empty, retry with entry rotation undone",
+						zap.Uint64("task_id", taskID), zap.Int("attempt", attempt),
+						zap.Int("entry_rotation", result.ImageRotation), zap.Int("rotation", opp))
+					correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
+						"但几何识别阶段已在该题目图片中检测到几何图形，可能是图片朝向被转错导致误判。" +
+						"请基于这张图片（题干文字可能侧躺，请按文字实际可读方向理解图形），完整输出其几何描述 JSON。"
+					continue
+				}
+			}
+			// 再怀疑旋转方向判断错（VLM 的倾斜方向不稳）：按相反方向转一次再试，
+			// 若仍为空再回退整张原图，避免把"图被转反了"误判成"区域里没有图形"。
+			if rotationFix != 0 {
+				opp := (360 - rotationFix) % 360
+				if upright, rerr := rotateImageData(regionImage, opp); rerr == nil {
+					extractImage = upright
+					rotationFix = opp
+					s.log.Warn("geometry spec empty after rotate, retry with opposite rotation",
+						zap.Uint64("task_id", taskID), zap.Int("attempt", attempt), zap.Int("rotation", opp))
+					correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
+						"但几何识别阶段已在该题目图片中检测到几何图形，可能是图片朝向被转错导致误判。" +
+						"请基于这张图片（题干文字可能侧躺，请按文字实际可读方向理解图形），完整输出其几何描述 JSON。"
+					continue
+				}
+			}
 			if regionFallback {
 				regionFallback = false
 				extractImage = imageData
@@ -464,12 +586,46 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			return nil
 		}
 		s.verifyAngleMarks(ctx, taskID, extractImage, parsed)
+		// 直线名称标签只跟着原图走：题干里的 l₁/l₂ 若原图没印，就不要画到图上。
+		// 印刷名称取识别与描述两个独立看图阶段的共识，单侧误报不能当依据。
+		printedLineNames := geom.PrintedLineNamesConsensus(result.Geometry.LineLabels, parsed)
+		geom.StripUnprintedLineNames(parsed, printedLineNames)
+		// 语义核对之前先留一份"结构类"问题快照（点引用缺失、坐标非法、图元字段不全等）。
+		// 结构问题会直接渲染出坏图，必须报错；而语义偏差（题干与图形不一致）常常源于
+		// 题干转录不准（如漏掉"点 E 从 B 出发"半句、把"水平向右"录成"竖直向上"），
+		// 只用于回喂模型修正，不应向用户报"结构校验未通过"。
+		structCount := 0
+		for i := range parsed {
+			structCount += len(parsed[i].Issues)
+		}
 		// 题干-图形语义核对：半圆被画成整圆、半圆朝向不对、题干给定线段
 		// 长度与图形矛盾等结构合法但语义错误的情况。
 		geom.CheckSemicircle(parsed, result.StemText)
 		geom.CheckSemicircleDirection(parsed, result.StemText)
 		geom.CheckStemLengths(parsed, result.StemText)
 		geom.CheckStemPassPoints(parsed, result.StemText)
+		// 子图数量核对：几何识别的文字描述里常写明"三幅图（图1、图2、备用图）"，
+		// 与该描述合并后核对，避免模型整张漏掉"备用图"。
+		geom.CheckFigureCount(parsed, result.StemText+"\n"+result.Geometry.Description)
+		// 点在边上核对：题干"点P在OA边上"要求 P 落在两端点之间，不得画到延长线上。
+		geom.CheckPointOnEdge(parsed, result.StemText)
+		// 三角形完整性核对：题干"以点D、E、M为顶点的三角形"要求三边都画出（轴上的边可由轴覆盖）。
+		geom.CheckTriangleEdges(parsed, result.StemText)
+		// 动点方向核对：题干"从A点出发水平向右运动"要求动点落在过 A 的水平线上。
+		geom.CheckMotionConstraints(parsed, result.StemText)
+		// 平行关系核对：题干"AG∥CE"要求两条线段确实平行（决定交点位置）。
+		geom.CheckParallelRelations(parsed, result.StemText)
+		// 网格覆盖核对：顶点跑出网格说明行列数/格边长估错（网格图常见）。
+		geom.CheckGridCoverage(parsed)
+		// 与坐标轴重合的线段核对：这类线段画出来会被轴线盖住（等于没画），
+		// 模型常把没有字母点的直线（如 l₃）退化成一截沿轴的线段。
+		geom.CheckAxisCoincidentSegments(parsed)
+		// 标注点漂浮核对：点必须落在某条线/坐标轴上（顶点、交点都不会漂浮）。
+		geom.CheckFloatingPoints(parsed)
+		// 直线名称核对：题干点名 l₁/l₂/l₃ 时，图上每条都要画出来并标注名称。
+		// 必须同时用几何描述（VLM 对图的判读）把关：题干后面小问才会引入的直线
+		// （如"直线 l₃ 与 x 轴交于点 E"）原图并没有画，不能要求模型凭空补画。
+		geom.CheckNamedLines(parsed, result.StemText, result.Geometry.Description, printedLineNames)
 
 		panels = panels[:0]
 		renderFailed := false
@@ -492,6 +648,15 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		}
 		// 结构校验（点引用完整性、坐标有限性、图元字段完备性等）替代原残差判据。
 		issues := geom.CollectIssues(panels)
+		// 语义核对新增的问题条数（= 总问题数 - 结构类问题数）：题干可能有错，只用于修正。
+		semanticCount := len(issues) - structCount
+		// 记录当前最优版本：题干本身可能转录有误，按它反复"修正"只会让图越改越差，
+		// 因此最终输出问题最少的一版；同分保留最早的一版（更接近模型对原图的原始判读）。
+		if best == nil || structCount < bestHard ||
+			(structCount == bestHard && semanticCount < bestSoft) {
+			best, bestHard, bestSoft = snapshotPanels(panels), structCount, semanticCount
+			bestIssues = issues
+		}
 		if len(issues) == 0 {
 			break // 结构完整，提前结束。
 		}
@@ -504,6 +669,14 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			return lastErr
 		}
 		return errors.New(errors.CodeUpstream, "geometry redraw produced no result")
+	}
+	if best != nil {
+		panels = best
+	}
+	if bestSoft > 0 && bestHard == 0 {
+		// 语义偏差只记日志：多半是题干转录与图形不一致，图本身可正常渲染。
+		s.log.Info("geometry redraw kept best version with semantic deviations",
+			zap.Uint64("task_id", taskID), zap.Int("deviations", bestSoft), zap.Strings("issues", bestIssues))
 	}
 
 	// 逐子图存储独立 SVG，并带上图号（如"图1"）。
@@ -518,7 +691,8 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	}
 	result.RedrawFigures = figures
 
-	consistent := geom.AllConsistent(panels)
+	// 一致性只看结构问题：语义偏差多由题干转录不准引起，不该对用户报"结构校验未通过"。
+	consistent := bestHard == 0
 	result.RedrawReport = &RedrawReport{Attempts: attempts, Consistent: consistent}
 	if !consistent {
 		if result.Warning != "" {
@@ -529,6 +703,17 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	s.log.Info("geometry redraw done", zap.Uint64("task_id", taskID),
 		zap.Int("svg_count", len(figures)), zap.Int("attempts", attempts), zap.Bool("consistent", consistent))
 	return nil
+}
+
+// snapshotPanels 深拷贝渲染结果，避免后续轮次往 Issues 里追加问题、
+// 覆盖已保存的最优版本。
+func snapshotPanels(src []geom.PanelResult) []geom.PanelResult {
+	out := make([]geom.PanelResult, len(src))
+	for i, p := range src {
+		out[i] = p
+		out[i].Issues = append([]string(nil), p.Issues...)
+	}
+	return out
 }
 
 // verifyAngleMarks 原图核对角弧线标记（忠实原图）。

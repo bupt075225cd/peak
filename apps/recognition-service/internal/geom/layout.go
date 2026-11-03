@@ -35,6 +35,13 @@ type textItem struct {
 	Weight   int
 	Anchor   string
 	Priority int
+	// MoveWeight 覆盖"每挪一个步长"的代价权重（<=0 用默认 textCostMove）。
+	// 点标签要设得高：否则一旦点周围被线包围，字母会被挤到很远的地方，
+	// 看上去就像"点标错了位置"。
+	MoveWeight float64
+	// NearWeight 覆盖"贴近线段/圆周"的代价权重（<=0 用默认 textCostNear）。
+	// 点标签可以贴线（教材图里字母压着线很常见），比重低于"离点太远"。
+	NearWeight float64
 }
 
 // textLayout 文字摆放器：先登记线/圆/点等障碍，再逐个为文字选代价最低的落点。
@@ -103,6 +110,14 @@ func (l *textLayout) place(item textItem) vec {
 	found := false
 	var bestCost float64
 	var best vec
+	moveCost := item.MoveWeight
+	if moveCost <= 0 {
+		moveCost = textCostMove
+	}
+	nearCost := item.NearWeight
+	if nearCost <= 0 {
+		nearCost = textCostNear
+	}
 	for ring := 0; ring <= 4; ring++ {
 		for i := range textDirs {
 			if ring == 0 && i > 0 {
@@ -116,7 +131,7 @@ func (l *textLayout) place(item textItem) vec {
 			if r.X0 < -0.6 || r.Y0 < -0.6 || r.X1 > l.w+0.6 || r.Y1 > l.h+0.6 {
 				continue // 越界的位置直接丢弃
 			}
-			cost := l.costOf(r, pad) + textCostMove*dist(pos, item.Pos)/step
+			cost := l.costOf(r, pad, nearCost) + moveCost*dist(pos, item.Pos)/step
 			if !found || cost < bestCost-1e-9 {
 				found = true
 				bestCost = cost
@@ -139,8 +154,8 @@ func (l *textLayout) place(item textItem) vec {
 	return best
 }
 
-// costOf 计算把文字放在 r 处的避让代价。
-func (l *textLayout) costOf(r rect, pad float64) float64 {
+// costOf 计算把文字放在 r 处的避让代价；near 为"贴近线段/圆周"的权重。
+func (l *textLayout) costOf(r rect, pad, near float64) float64 {
 	var cost float64
 	for _, b := range l.boxes {
 		if ov := overlapArea(r, b); ov > 0 {
@@ -150,13 +165,13 @@ func (l *textLayout) costOf(r rect, pad float64) float64 {
 	for _, s := range l.segs {
 		if d := segRectDistance(s.A, s.B, r); d < pad {
 			t := 1 - d/pad
-			cost += textCostNear * t * t
+			cost += near * t * t
 		}
 	}
 	for _, c := range l.rings {
 		if d := ringRectDistance(c, r); d < pad {
 			t := 1 - d/pad
-			cost += textCostNear * t * t
+			cost += near * t * t
 		}
 	}
 	return cost

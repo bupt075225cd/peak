@@ -71,10 +71,16 @@ func NewChatClient(cfg ChatConfig) *ChatClient {
 
 // chatRequest OpenAI 兼容 chat.completions 请求体。
 type chatRequest struct {
-	Model           string        `json:"model"`
-	Messages        []chatMessage `json:"messages"`
-	MaxTokens       int           `json:"max_tokens,omitempty"`
-	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Model           string              `json:"model"`
+	Messages        []chatMessage       `json:"messages"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	ResponseFormat  *chatResponseFormat `json:"response_format,omitempty"`
+}
+
+// chatResponseFormat 约束模型输出为单个 JSON 对象（OpenAI 兼容字段）。
+type chatResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type chatMessage struct {
@@ -99,11 +105,22 @@ type chatResponse struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
+		// FinishReason 为 "length" 表示输出被 max_tokens 截断。
+		// 不检查它的话，截断的 JSON 只会表现为"模型输出不是合法 JSON"，无法定位。
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
 	} `json:"error"`
+}
+
+// withEffort 返回一个仅思考强度不同的客户端副本（其余配置共享）。
+// effort 为空表示不下发 reasoning_effort 参数。
+func (d *ChatClient) withEffort(effort string) *ChatClient {
+	c := *d
+	c.reasoningEffort = effort
+	return &c
 }
 
 // chat 发送一次多模态对话请求，返回模型输出的文本。
@@ -115,6 +132,16 @@ func (d *ChatClient) chat(ctx context.Context, prompt string, image []byte) (str
 // chatSystem 与 chat 相同，但支持额外的 system 提示词（几何描述提取等场景）。
 // image 为 nil 时仅发送文本。
 func (d *ChatClient) chatSystem(ctx context.Context, system, user string, image []byte) (string, error) {
+	return d.chatWith(ctx, system, user, image, false)
+}
+
+// chatSystemJSON 同 chatSystem，并要求服务端以 JSON 对象输出（response_format: json_object）。
+// 用于"必须返回结构化 JSON"的场景（几何描述提取），避免模型夹带解释文字或 Markdown。
+func (d *ChatClient) chatSystemJSON(ctx context.Context, system, user string, image []byte) (string, error) {
+	return d.chatWith(ctx, system, user, image, true)
+}
+
+func (d *ChatClient) chatWith(ctx context.Context, system, user string, image []byte, jsonMode bool) (string, error) {
 	parts := []chatPart{{Type: "text", Text: user}}
 	if image != nil {
 		parts = append(parts, chatPart{Type: "image_url", ImageURL: &chatImageURL{
@@ -133,6 +160,9 @@ func (d *ChatClient) chatSystem(ctx context.Context, system, user string, image 
 		Messages:        messages,
 		MaxTokens:       d.maxTokens,
 		ReasoningEffort: d.reasoningEffort,
+	}
+	if jsonMode {
+		reqBody.ResponseFormat = &chatResponseFormat{Type: "json_object"}
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -169,7 +199,12 @@ func (d *ChatClient) chatSystem(ctx context.Context, system, user string, image 
 	if len(out.Choices) == 0 {
 		return "", fmt.Errorf("%s empty response", d.provider)
 	}
-	return out.Choices[0].Message.Content, nil
+	choice := out.Choices[0]
+	// 截断要说清楚：否则半截 JSON 只会报"不是合法 JSON"，排查时看不出真实原因。
+	if choice.FinishReason == "length" {
+		return "", fmt.Errorf("%s output truncated: finish_reason=length (max_tokens=%d)", d.provider, d.maxTokens)
+	}
+	return choice.Message.Content, nil
 }
 
 // chatTextOnly 纯文本调用（无图片）。

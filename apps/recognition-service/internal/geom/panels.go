@@ -74,9 +74,15 @@ func ParsePanels(raw string) ([]Panel, error) {
 
 	panels := make([]Panel, 0, len(multi.Panels))
 	for i, pj := range multi.Panels {
-		issues := pj.Spec.Validate()
 		spec := pj.Spec
+		// 先把"端点写成坐标字符串"的引用补成隐藏点，再做结构校验：
+		// 这类写法在网格图里很常见，不修就会被判成悬空引用、整条线丢掉。
+		spec.RepairCoordRefs()
+		issues := spec.Validate()
 		spec.Normalize()
+		// 渲染前做点-线-轴对齐：模型给的坐标是目测值，常出现"点浮在直线旁边""直线
+		// 没穿过它该穿过的点"。这里只做小幅吸附，不改变图元的拓扑关系。
+		spec.Reconcile()
 		if spec.Empty() {
 			continue
 		}

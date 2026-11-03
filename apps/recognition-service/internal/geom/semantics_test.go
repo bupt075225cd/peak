@@ -1,6 +1,9 @@
 package geom
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func semicirclePanels(circles, arcs int) []Panel {
 	p := Panel{Title: "图1"}
@@ -171,9 +174,9 @@ func TestParseStemLengths(t *testing.T) {
 	}{
 		{"AB=2.3m，BC=2.6m", []stemLengthConstraint{{"A", "B", 2.3}, {"B", "C", 2.6}}},
 		{"其中AB＝2.3", []stemLengthConstraint{{"A", "B", 2.3}}},
-		{"∠ABC=60°", nil},        // 角名不是线段
-		{"2AB=6", nil},           // 系数表达不是线段长度
-		{"AE=AD，AB=5", []stemLengthConstraint{{"A", "B", 5}}}, // 符号关系不计，只留数值项
+		{"∠ABC=60°", nil}, // 角名不是线段
+		{"2AB=6", nil},    // 系数表达不是线段长度
+		{"AE=AD，AB=5", []stemLengthConstraint{{"A", "B", 5}}},      // 符号关系不计，只留数值项
 		{"AB=2.3，AB=2.3", []stemLengthConstraint{{"A", "B", 2.3}}}, // 去重
 	}
 	for _, c := range cases {
@@ -342,5 +345,250 @@ func TestNormalizeDropsNumericLengthLabels(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("labels after normalize = %v, want %v", got, want)
 		}
+	}
+}
+
+func edgePanel(py float64, px float64) []Panel {
+	return []Panel{{Title: "图1", Spec: Spec{
+		Canvas: Canvas{Width: 100, Height: 100},
+		Points: []Point{
+			{Name: "O", X: 20, Y: 80},
+			{Name: "A", X: 20, Y: 20},
+			{Name: "C", X: 80, Y: 80},
+			{Name: "P", X: px, Y: py},
+		},
+	}}}
+}
+
+const stemOnEdge = "点D在OC边上，OD=13，点P在OA边上，将矩形OABC沿直线PD翻折"
+
+func TestCheckPointOnEdgeFlagsExtension(t *testing.T) {
+	// P 画在 A 的外侧（OA 延长线上）→ 必须报"延长线"问题。
+	panels := edgePanel(8, 20)
+	CheckPointOnEdge(panels, stemOnEdge)
+	if len(panels[0].Issues) == 0 {
+		t.Fatal("expected issue for point on edge extension")
+	}
+	if !strings.Contains(panels[0].Issues[0], "延长线") {
+		t.Fatalf("expected extension issue, got %v", panels[0].Issues)
+	}
+}
+
+func TestCheckPointOnEdgePassesInside(t *testing.T) {
+	// P 落在 O 与 A 之间 → 不报。
+	panels := edgePanel(50, 20)
+	CheckPointOnEdge(panels, stemOnEdge)
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestCheckPointOnEdgeFlagsFarOffLine(t *testing.T) {
+	// P 远离线段 OA → 报偏离问题。
+	panels := edgePanel(50, 60)
+	CheckPointOnEdge(panels, stemOnEdge)
+	if len(panels[0].Issues) == 0 || !strings.Contains(panels[0].Issues[0], "偏离") {
+		t.Fatalf("expected off-line issue, got %v", panels[0].Issues)
+	}
+}
+
+func TestCheckPointOnEdgeSkipsMissingPoints(t *testing.T) {
+	// 图里没有 P（模型漏点）→ 保守跳过，交给结构校验处理。
+	panels := []Panel{{Title: "图1", Spec: Spec{
+		Points: []Point{{Name: "O", X: 20, Y: 80}, {Name: "A", X: 20, Y: 20}},
+	}}}
+	CheckPointOnEdge(panels, stemOnEdge)
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestExpectedFigureCount(t *testing.T) {
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"如图1，点P在OA边上；（2）如图2，点M从点D出发", 2},
+		{"三幅带x轴、y轴箭头的子图（图1、图2、备用图）", 3},
+		{"如图1，如图2，备用图", 3},
+		{"图1/图2/图3", 3},
+		{"如图，求阴影面积", 0},
+	}
+	for _, c := range cases {
+		if got := expectedFigureCount(c.text); got != c.want {
+			t.Fatalf("expectedFigureCount(%q) = %d, want %d", c.text, got, c.want)
+		}
+	}
+}
+
+func TestCheckFigureCountFlagsMissingPanel(t *testing.T) {
+	panels := []Panel{{Title: "图1"}, {Title: "图2"}}
+	hint := "如图1；（2）如图2\n三幅带x轴、y轴箭头的子图（图1、图2、备用图）"
+	CheckFigureCount(panels, hint)
+	if len(panels[0].Issues) == 0 || !strings.Contains(panels[0].Issues[0], "3 张子图") {
+		t.Fatalf("expected missing-panel issue, got %v", panels[0].Issues)
+	}
+
+	// 数量已齐 → 不报。
+	ok := []Panel{{Title: "图1"}, {Title: "图2"}, {Title: "备用图"}}
+	CheckFigureCount(ok, hint)
+	if len(ok[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", ok[0].Issues)
+	}
+}
+
+func trianglePanel(withEM bool) []Panel {
+	p := Panel{Title: "图2", Spec: Spec{
+		Canvas: Canvas{Width: 100, Height: 100},
+		Points: []Point{
+			{Name: "O", X: 10, Y: 90, Hidden: true},
+			{Name: "XA", X: 92, Y: 90, Hidden: true},
+			{Name: "YA", X: 10, Y: 5, Hidden: true},
+			{Name: "D", X: 45, Y: 90},
+			{Name: "E", X: 30, Y: 20},
+			{Name: "M", X: 70, Y: 90},
+		},
+		Segments: []Segment{{From: "D", To: "E"}, {From: "D", To: "M"}},
+		Axes: &Axes{
+			Origin: "O",
+			X:      Axis{To: "XA", Label: "x"},
+			Y:      Axis{To: "YA", Label: "y"},
+		},
+	}}
+	if withEM {
+		p.Spec.Segments = append(p.Spec.Segments, Segment{From: "E", To: "M"})
+	}
+	return []Panel{p}
+}
+
+const stemTriangle = "以点 D、E、M 为顶点的三角形的面积记为 S"
+
+func TestCheckTriangleEdgesFlagsMissingEdge(t *testing.T) {
+	// 只有 DE 与 DM（DM 与 x 轴重合被轴覆盖），缺 EM → 报缺失。
+	panels := trianglePanel(false)
+	CheckTriangleEdges(panels, stemTriangle)
+	if len(panels[0].Issues) == 0 || !strings.Contains(panels[0].Issues[0], "EM") {
+		t.Fatalf("expected missing EM issue, got %v", panels[0].Issues)
+	}
+}
+
+func TestCheckTriangleEdgesPassesWithAllEdges(t *testing.T) {
+	panels := trianglePanel(true)
+	CheckTriangleEdges(panels, stemTriangle)
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestCheckTriangleEdgesSkipsPanelWithoutVertices(t *testing.T) {
+	// 图里没有 M（如折叠前的图1）→ 保守跳过，不误报。
+	panels := []Panel{{Title: "图1", Spec: Spec{
+		Points:   []Point{{Name: "D", X: 45, Y: 90}, {Name: "E", X: 30, Y: 20}},
+		Segments: []Segment{{From: "D", To: "E"}},
+	}}}
+	CheckTriangleEdges(panels, stemTriangle)
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestNormalizeDropsLabelEqualToPointName(t *testing.T) {
+	// 模型在 labels 里重复写点名 → 剔除，避免图上出现两个 M。
+	s := &Spec{
+		Canvas: Canvas{Width: 100, Height: 100},
+		Points: []Point{{Name: "M", X: 70, Y: 90}},
+		Labels: []Label{{X: 74, Y: 92, Text: "M"}, {X: 30, Y: 40, Text: "AB=2BD"}},
+	}
+	s.Normalize()
+	if len(s.Labels) != 1 || s.Labels[0].Text != "AB=2BD" {
+		t.Fatalf("duplicate point-name label should be dropped, got %+v", s.Labels)
+	}
+}
+
+func TestCheckPointOnEdgeHandlesIntersectionPhrase(t *testing.T) {
+	// 题干"交CD于点G"：G 必须落在线段 CD 上。
+	build := func(gx, gy float64) []Panel {
+		return []Panel{{Title: "图1", Spec: Spec{
+			Points: []Point{
+				{Name: "C", X: 20, Y: 20}, {Name: "D", X: 60, Y: 80},
+				{Name: "G", X: gx, Y: gy},
+			},
+		}}}
+	}
+	stem := "过点A作AG∥CE交CD于点G，当线段OG的值最小时，则运动时间t的值为____"
+
+	bad := build(60, 30) // 远离 CD
+	CheckPointOnEdge(bad, stem)
+	if len(bad[0].Issues) == 0 {
+		t.Fatalf("expected G-on-CD issue, got none")
+	}
+
+	good := build(40, 50) // 恰在 CD 中点
+	CheckPointOnEdge(good, stem)
+	if len(good[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", good[0].Issues)
+	}
+}
+
+func motionPanel(px, py float64) []Panel {
+	return []Panel{{Title: "图1", Spec: Spec{
+		Canvas: Canvas{Width: 100, Height: 75},
+		Points: []Point{
+			{Name: "A", X: 18, Y: 55},
+			{Name: "D", X: px, Y: py},
+			{Name: "B", X: 46, Y: 27},
+			{Name: "E", X: px, Y: py},
+		},
+	}}}
+}
+
+const stemMotion = "动点D从A点出发，以每秒1个单位的速度水平向右运动，动点E从点B出发，以每秒1个单位的速度竖直向上运动"
+
+func TestCheckMotionConstraintsFlagsWrongLine(t *testing.T) {
+	// D 被画在竖直边 AC 上（x 与 A 不同、y 变了），E 也被画到同一处 → 两条都报。
+	panels := motionPanel(18, 44.5)
+	CheckMotionConstraints(panels, stemMotion)
+	if len(panels[0].Issues) < 2 {
+		t.Fatalf("expected issues for D (not horizontal from A) and E (not vertical from B), got %v", panels[0].Issues)
+	}
+}
+
+func TestCheckMotionConstraintsPassesCorrectPositions(t *testing.T) {
+	// D 在过 A 的水平线上（向右），E 在过 B 的竖直线上（向上）。
+	panels := []Panel{{Title: "图1", Spec: Spec{
+		Canvas: Canvas{Width: 100, Height: 75},
+		Points: []Point{
+			{Name: "A", X: 18, Y: 55},
+			{Name: "D", X: 30, Y: 55},
+			{Name: "B", X: 46, Y: 27},
+			{Name: "E", X: 46, Y: 13},
+		},
+	}}}
+	CheckMotionConstraints(panels, stemMotion)
+	if len(panels[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", panels[0].Issues)
+	}
+}
+
+func TestCheckParallelRelations(t *testing.T) {
+	stem := "过点A作AG∥CE交CD于点G"
+	// AG 竖直、CE 水平 → 不平行，报问题。
+	bad := []Panel{{Title: "图1", Spec: Spec{Points: []Point{
+		{Name: "A", X: 10, Y: 50}, {Name: "G", X: 10, Y: 20},
+		{Name: "C", X: 20, Y: 30}, {Name: "E", X: 60, Y: 30},
+	}}}}
+	CheckParallelRelations(bad, stem)
+	if len(bad[0].Issues) == 0 {
+		t.Fatalf("expected non-parallel issue")
+	}
+
+	// 两段都竖直 → 平行，不报。
+	good := []Panel{{Title: "图1", Spec: Spec{Points: []Point{
+		{Name: "A", X: 10, Y: 50}, {Name: "G", X: 15, Y: 20},
+		{Name: "C", X: 20, Y: 30}, {Name: "E", X: 25, Y: 5},
+	}}}}
+	CheckParallelRelations(good, stem)
+	if len(good[0].Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", good[0].Issues)
 	}
 }

@@ -27,6 +27,7 @@ func NewFromConfig(cfg *config.Loader) (Provider, error) {
 			Endpoint:        cfg.String("recognition.zhipu.endpoint", ""),
 			MaxTokens:       cfg.Int("recognition.zhipu.max_tokens", 0),
 			ReasoningEffort: cfg.String("recognition.zhipu.reasoning_effort", ""),
+			GeometryEffort:  cfg.String("recognition.zhipu.geometry_effort", ""),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported recognition provider: %s", name)
