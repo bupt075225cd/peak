@@ -7,8 +7,11 @@ import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
   getRecognitionFileURLs,
   type RecognitionTask, type RecognitionResult, type QuestionItem, type QuestionImageRef,
+  type QuestionTable,
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
+import StemText from '../components/StemText.vue'
+import { inlineStemTables, serializeStemWithTables } from '../utils/stemTable'
 
 // 上传与识别状态。
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -25,6 +28,9 @@ const questions = ref<QuestionItem[]>([])
 
 // 识别结果（可手动修正）。
 const stemText = ref('')
+// 题干中的表格：识别阶段从正文摘出（题干里只留 {{table1}} 占位），
+// 保存时再序列化成 Markdown 表格写回题干，导出侧按 Markdown 还原成表格。
+const tables = ref<QuestionTable[]>([])
 // 文档拆题场景：子问几何图的存储 key（保存到题目记录，不自动重绘）。
 const selectedGeometryKeys = ref<string[]>([])
 
@@ -62,7 +68,7 @@ const subject = ref('')
 // 来源：这道错题的出处（如"期中考试""练习册 P32"），录入时必填。
 const source = ref('')
 
-// 识别进度文案：processing 阶段优先展示后端上报的阶段说明（如"正在几何重绘…"），
+// 识别进度文案：processing 阶段优先展示后端上报的阶段说明（如"正在重绘图形…"），
 // 让用户能感知当前正在执行哪一步，而不是长时间只看到百分比。
 const progressText = computed(() => {
   if (!task.value) return ''
@@ -186,7 +192,12 @@ function applyResult(t: RecognitionTask) {
     questions.value = result.questions
   } else {
     // 图片单题结果。
-    stemText.value = result.stem_text || ''
+    // 表格结构单独存一份；编辑框里展示可读的表格文本（否则只剩 {{table1}} 占位符，
+    // 用户看不出表格内容，会以为表格没识别出来）。
+    tables.value = Array.isArray(result.tables)
+      ? result.tables.filter((t) => t && typeof t.id === 'string' && t.id.length > 0)
+      : []
+    stemText.value = inlineStemTables(result.stem_text || '', tables.value)
     subject.value = result.subject || '数学'
     questionType.value = result.question_type || '解答题'
     // 几何重绘结果：数学题含几何图时由识别流水线对原图重绘，每个子图一张独立 SVG，
@@ -199,11 +210,44 @@ function applyResult(t: RecognitionTask) {
     redrawConsistent.value = result.redraw_report ? result.redraw_report.consistent !== false : true
   }
   warningMsg.value = result.warning || ''
+  // 服务端识别前可能把整图转正过（无 EXIF 方向时靠模型判倾斜角），这里把本地预览
+  // 也转到同一朝向，让用户看到的就是模型实际识别的那张图。
+  rectifyPreview(result.image_rotation || 0)
   // 为全部产物图（重绘 SVG + 文档子图）换取签名访问 URL。
   void loadFileUrls([
     ...redrawFigures.value.map((f) => f.key),
     ...questions.value.flatMap((q) => (q.sub_questions || []).flatMap((sq) => sq.geometry_keys || [])),
   ])
+}
+
+// 把本地预览图顺时针旋转 deg 度（服务端识别时对整图做过同样的转正）。
+// 用 canvas 重新编码而不是 CSS transform：90/270 度需要交换宽高，用 CSS 会溢出或留白。
+function rectifyPreview(deg: number) {
+  if (!deg || !previewUrl.value) return
+  const src = previewUrl.value
+  const img = new Image()
+  img.onload = () => {
+    const swap = deg % 180 !== 0
+    const w = swap ? img.naturalHeight : img.naturalWidth
+    const h = swap ? img.naturalWidth : img.naturalHeight
+    if (!w || !h) return
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.translate(w / 2, h / 2)
+    ctx.rotate((deg * Math.PI) / 180)
+    ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2)
+    canvas.toBlob((blob) => {
+      // 期间用户重新选了图就不再覆盖（previewUrl 已被换掉）。
+      if (!blob || previewUrl.value !== src) return
+      previewUrl.value = URL.createObjectURL(blob)
+      URL.revokeObjectURL(src)
+    }, 'image/jpeg', 0.92)
+  }
+  img.onerror = () => console.error('预览图转正失败：图片加载失败')
+  img.src = src
 }
 
 async function handleRetry() {
@@ -249,7 +293,8 @@ async function handleSave() {
     const question = await createQuestion({
       subject: subject.value || '数学',
       grade: grade.value,
-      stem_text: stemText.value,
+      // 题干里的表格占位在这里还原成 Markdown 表格，落库后导出侧按它渲染表格。
+      stem_text: serializeStemWithTables(stemText.value, tables.value),
       image: JSON.stringify(imageRefsValue()),
       question_type: questionType.value || '解答题',
     })
@@ -276,6 +321,7 @@ function reset() {
   isDoc.value = false
   questions.value = []
   stemText.value = ''
+  tables.value = []
   selectedGeometryKeys.value = []
   redrawFigures.value = []
   redrawConsistent.value = true
@@ -470,6 +516,16 @@ function selectQuestion(idx: number) {
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-ink-soft mb-1.5">题干</label>
+              <!-- 题干预览放在编辑框上方：先让用户看到识别出的表格，再看可编辑的题干原文。
+                   与列表页/编辑弹窗共用同一渲染组件，观感一致。 -->
+              <div
+                v-if="tables.length > 0"
+                class="mb-3 rounded-xl border border-slate-200 bg-white/60 p-3"
+                data-testid="stem-preview"
+              >
+                <div class="mb-2 text-xs text-ink-soft">题干预览（表格已还原）</div>
+                <StemText :text="stemText" :tables="tables" class="text-sm text-ink" />
+              </div>
               <textarea
                 v-model="stemText"
                 rows="4"

@@ -121,7 +121,6 @@ func writeTextContent(b *strings.Builder, content string) {
 			} else {
 				b.WriteString(escapeText(content[last:loc[0]]))
 			}
-			sub = false
 		}
 		digits := make([]rune, 0, loc[1]-loc[0])
 		for _, r := range content[loc[0]:loc[1]] {

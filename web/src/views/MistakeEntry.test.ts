@@ -138,6 +138,58 @@ describe('MistakeEntry.vue', () => {
     expect((getSaveBtn(wrapper).element as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('识别结果带表格时，题干转为表格文本并展示表格预览', async () => {
+    const router = buildRouter()
+    router.push('/entry')
+    await router.isReady()
+    const wrapper = mount(MistakeEntry, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const task: RecognitionTask = {
+      id: 11,
+      image_id: 1,
+      status: 'success',
+      progress: 100,
+      provider: 'mock',
+      result_json: JSON.stringify({
+        stem_text: '如表{{table1}}所示，求该户的水费：\n(1) 当220<x≤300时…',
+        subject: '数学',
+        question_type: '解答题',
+        tables: [
+          {
+            id: 'table1',
+            headers: ['计费档', '用水量x/m³', '单价'],
+            rows: [
+              ['第一档', '0<x≤220', '3.5'],
+              ['第二档', '220<x≤300', '5.0'],
+            ],
+          },
+        ],
+      }),
+    }
+    httpMethods.post.mockResolvedValueOnce(ok({ ...task, status: 'pending' }))
+    httpMethods.get.mockResolvedValue(ok(task))
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    // 编辑框里不再出现占位符，而是可读的 Markdown 表格文本
+    const ta = wrapper.find('textarea')
+    const text = (ta.element as HTMLTextAreaElement).value
+    expect(text).toContain('| 计费档 | 用水量x/m³ | 单价 |')
+    expect(text).not.toContain('{{table1}}')
+    // 预览块把表格渲染成真正的 <table>
+    const preview = wrapper.find('[data-testid="stem-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.findAll('th')).toHaveLength(3)
+    expect(preview.findAll('td')).toHaveLength(6)
+    expect(preview.text()).toContain('第一档')
+  })
+
   it('识别失败时展示失败状态与重试按钮', async () => {
     const router = buildRouter()
     router.push('/entry')

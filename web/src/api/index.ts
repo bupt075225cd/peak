@@ -162,6 +162,13 @@ export interface QuestionImageRef {
   label?: string
 }
 
+// 题干中的表格：题干文本里以 {{table1}} 占位，按 id 关联。
+export interface QuestionTable {
+  id: string
+  headers: string[]
+  rows: string[][]
+}
+
 // 识别结果。
 export interface RecognitionResult {
   stem_text: string
@@ -179,6 +186,11 @@ export interface RecognitionResult {
     attempts: number
     consistent: boolean
   }
+  // 服务端在识别前把整图转正所用的顺时针角度（0/90/180/270，不含 EXIF 方向）。
+  // 用于把本地预览图转到与模型识别时相同的朝向。
+  image_rotation?: number
+  // 题干中的表格：stem_text 里以 {{table1}} 占位。
+  tables?: QuestionTable[]
   // 文档识别出的多道题。
   questions?: QuestionItem[]
   // 非致命错误提示（如公式/几何识别失败）。

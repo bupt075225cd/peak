@@ -6,6 +6,7 @@
 import { ref, watch } from 'vue'
 import { X, Plus, Trash2, Loader2, Check, ClipboardList } from 'lucide-vue-next'
 import { updateMistake, type Mistake, type ReviewRecord } from '../api'
+import StemText from './StemText.vue'
 
 const props = defineProps<{
   open: boolean
@@ -152,11 +153,13 @@ function onKey(e: KeyboardEvent) {
           </button>
         </div>
 
-        <!-- 题干只读，帮助确认编辑的是哪道题 -->
+        <!-- 题干只读，帮助确认编辑的是哪道题（表格同样渲染成表格，与列表页一致） -->
         <div v-if="mistake?.question?.stem_text" class="rounded-xl bg-surface-muted/50 p-3 mb-4">
-          <p class="text-sm text-ink-soft line-clamp-3 whitespace-pre-wrap">
-            {{ mistake.question.stem_text }}
-          </p>
+          <StemText
+            :text="mistake.question.stem_text"
+            :clamp="3"
+            class="text-sm text-ink-soft"
+          />
         </div>
 
         <div class="space-y-4">

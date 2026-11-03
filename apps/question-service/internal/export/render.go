@@ -57,6 +57,8 @@ var (
 	colorMeta    = color.RGBA{R: 0x1f, G: 0x29, B: 0x37, A: 0xff} // 元信息
 	colorWarning = color.RGBA{R: 0xb4, G: 0x53, B: 0x09, A: 0xff} // 配图失败提示
 	colorPaper   = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	// colorTableHead 题干表格的表头底色，和正文行区分开。
+	colorTableHead = color.RGBA{R: 0xf1, G: 0xf5, B: 0xf9, A: 0xff}
 )
 
 // itemLayout 单题渲染结果：位图字节、像素尺寸与可安全断页的位置。
@@ -98,17 +100,30 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 
 	metaLines := wrapText(metaFace, itemMetaLine(index, it.item), contentWidth)
 	stemText := strings.TrimSpace(it.item.StemText)
-	stemLines := wrapText(stemFace, stemText, contentWidth)
 
 	metaLineH := lineHeight(metaFace, rc.lineSpacing)
 	stemLineH := lineHeight(stemFace, rc.lineSpacing)
+
+	// 题干先切成"段落 + 表格"块：表格由识别结果的 Markdown 表格还原，
+	// 段落按可用宽度折行，两者高度一起参与画布尺寸预算。
+	parts := make([]stemPart, 0, 4)
+	for _, b := range parseStemBlocks(stemText) {
+		if b.table != nil {
+			if lay := layoutStemTable(stemFace, b.table, contentWidth, stemLineH); lay != nil {
+				parts = append(parts, stemPart{table: lay, height: lay.height})
+			}
+			continue
+		}
+		lines := wrapText(stemFace, b.text, contentWidth)
+		parts = append(parts, stemPart{lines: lines, height: float64(len(lines)) * stemLineH})
+	}
 
 	placed, err := decodeImages(it.images, contentWidth)
 	if err != nil {
 		return itemLayout{}, err
 	}
 
-	hasStem := stemText != ""
+	hasStem := len(parts) > 0
 	hasNote := it.imageFailed
 
 	rowGap := float64(rc.gap) * imageRowGapScale
@@ -117,7 +132,10 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 
 	totalHeight := float64(rc.padding) + float64(len(metaLines))*metaLineH
 	if hasStem {
-		totalHeight += float64(rc.gap) + float64(len(stemLines))*stemLineH
+		totalHeight += float64(rc.gap)
+		for _, p := range parts {
+			totalHeight += p.height
+		}
 	}
 	if hasNote {
 		totalHeight += float64(rc.gap) + metaLineH
@@ -136,7 +154,7 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 	dc.SetColor(colorPaper)
 	dc.Clear()
 
-	breaks := make([]int, 0, len(metaLines)+len(stemLines)+len(rows)+2)
+	breaks := make([]int, 0, len(metaLines)+len(parts)+len(rows)+2)
 
 	x := float64(rc.padding)
 	y := float64(rc.padding)
@@ -148,9 +166,17 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 	if hasStem {
 		y += float64(rc.gap)
 		breaks = append(breaks, int(math.Round(y)))
-		breaks = append(breaks, lineBreaks(y, stemLineH, len(stemLines))...)
 		dc.SetColor(colorInk)
-		y = drawTextLines(dc, stemFace, stemLines, x, y, stemLineH)
+		for _, p := range parts {
+			if p.table != nil {
+				breaks = append(breaks, tableLineBreaks(y, p.table)...)
+				y = drawStemTable(dc, stemFace, p.table, x, y)
+				dc.SetColor(colorInk)
+				continue
+			}
+			breaks = append(breaks, lineBreaks(y, stemLineH, len(p.lines))...)
+			y = drawTextLines(dc, stemFace, p.lines, x, y, stemLineH)
+		}
 	}
 
 	if hasNote {
@@ -301,6 +327,178 @@ func decodeImages(assets []ImageAsset, contentWidth float64) ([]placedImage, err
 		out = append(out, placedImage{src: src, w: w, h: h, caption: strings.TrimSpace(asset.Caption)})
 	}
 	return out, nil
+}
+
+// stemPart 题干的一个排版块：普通段落（lines）或表格（table），height 为占用高度。
+type stemPart struct {
+	lines  []string
+	table  *stemTableLayout
+	height float64
+}
+
+// 表格单元格内边距：水平留白大一点（列之间不拥挤），垂直用小值（行高接近常规表格）。
+const (
+	stemTableCellPadX = 8.0
+	stemTableCellPadY = 4.0
+)
+
+// stemTableBottomGap 表格与后续段落之间的间距。
+const stemTableBottomGap = 12.0
+
+// stemTableMinColWidth 列的最小宽度，避免窄列把汉字挤成竖排。
+const stemTableMinColWidth = 28.0
+
+// stemTableLayout 表格排版结果：列宽、每行单元格折行文本与行高。
+type stemTableLayout struct {
+	cols      []float64
+	cells     [][][]string // cells[row][col] 为折行后的文本
+	rowH      []float64
+	height    float64
+	lineH     float64
+	hasHeader bool
+}
+
+// layoutStemTable 计算表格排版：列宽按内容自然宽度分配，超出可用宽度时等比压缩，
+// 单元格文本按列宽折行；表头行与数据行同字号，靠分隔线与居中排版区分。
+func layoutStemTable(face font.Face, tbl *stemTable, contentWidth, lineH float64) *stemTableLayout {
+	cols := tbl.columnCount()
+	if cols == 0 {
+		return nil
+	}
+	widths := make([]float64, cols)
+	for c := 0; c < cols; c++ {
+		w := 0.0
+		for r := -1; r < len(tbl.rows); r++ {
+			if s := runesWidth(face, []rune(tbl.cell(r, c))); s > w {
+				w = s
+			}
+		}
+		widths[c] = w + 2*stemTableCellPadX
+		if widths[c] < stemTableMinColWidth {
+			widths[c] = stemTableMinColWidth
+		}
+	}
+	total := 0.0
+	for _, w := range widths {
+		total += w
+	}
+	if total > contentWidth && total > 0 {
+		ratio := contentWidth / total
+		total = 0
+		for i := range widths {
+			widths[i] *= ratio
+			if widths[i] < stemTableMinColWidth {
+				widths[i] = stemTableMinColWidth
+			}
+			total += widths[i]
+		}
+	}
+
+	// 单元格内行距比正文紧凑（正文行距是为阅读留白，表格行不需要那么多）。
+	cellLineH := lineHeight(face, 1.25)
+	if cellLineH > lineH {
+		cellLineH = lineH
+	}
+	lay := &stemTableLayout{
+		cols:      widths,
+		cells:     make([][][]string, 0, tbl.rowCount()),
+		rowH:      make([]float64, 0, tbl.rowCount()),
+		lineH:     cellLineH,
+		hasHeader: len(tbl.header) > 0,
+	}
+	for r := 0; r < tbl.rowCount(); r++ {
+		// rowCount 把表头算作第 0 行；tbl.cell 用 -1 表示表头行。
+		ri := r
+		if lay.hasHeader {
+			ri = r - 1
+		}
+		rowCells := make([][]string, cols)
+		maxLines := 1
+		for c := 0; c < cols; c++ {
+			lines := wrapText(face, tbl.cell(ri, c), widths[c]-2*stemTableCellPadX)
+			rowCells[c] = lines
+			if len(lines) > maxLines {
+				maxLines = len(lines)
+			}
+		}
+		lay.cells = append(lay.cells, rowCells)
+		h := float64(maxLines)*cellLineH + 2*stemTableCellPadY
+		lay.rowH = append(lay.rowH, h)
+		lay.height += h
+	}
+	// 表格与后续段落之间留白（高度预算和绘制都按同一值）。
+	lay.height += stemTableBottomGap
+	return lay
+}
+
+// tableLineBreaks 表格内每一行的起始 y，作为可安全断页的位置。
+func tableLineBreaks(y float64, lay *stemTableLayout) []int {
+	out := make([]int, 0, len(lay.rowH))
+	cur := y
+	for _, h := range lay.rowH {
+		out = append(out, int(math.Round(cur)))
+		cur += h
+	}
+	return out
+}
+
+// drawStemTable 绘制题干表格（外框 + 行列线 + 单元格文本），返回表格底部的 y。
+func drawStemTable(dc *gg.Context, face font.Face, lay *stemTableLayout, x, y float64) float64 {
+	dc.SetFontFace(face)
+	ascent := float64(face.Metrics().Ascent) / 64.0
+	totalW := 0.0
+	for _, w := range lay.cols {
+		totalW += w
+	}
+	bottom := y + lay.height - stemTableBottomGap
+
+	// 表头底色：与数据行区分（PDF 只有一种字重，靠底色而非加粗）。
+	if lay.hasHeader && len(lay.rowH) > 0 {
+		dc.SetColor(colorTableHead)
+		dc.DrawRectangle(x, y, totalW, lay.rowH[0])
+		dc.Fill()
+	}
+
+	// gg 的 DrawLine 只是把线段累积进当前路径，必须 Stroke 才真正落笔——
+	// 少了这一步，表格只剩对齐的文本、看不到任何框线。
+	dc.SetColor(colorInk)
+	dc.SetLineWidth(1)
+	dc.DrawLine(x, y, x+totalW, y)
+	cur := y
+	for _, h := range lay.rowH {
+		cur += h
+		dc.DrawLine(x, cur, x+totalW, cur)
+	}
+	cx := x
+	dc.DrawLine(cx, y, cx, bottom)
+	for _, w := range lay.cols {
+		cx += w
+		dc.DrawLine(cx, y, cx, bottom)
+	}
+	dc.Stroke()
+
+	cur = y
+	for r, h := range lay.rowH {
+		cx = x
+		for c, w := range lay.cols {
+			lines := lay.cells[r][c]
+			top := cur + (h-float64(len(lines))*lay.lineH)/2
+			for i, ln := range lines {
+				if ln == "" {
+					continue
+				}
+				baseline := top + float64(i)*lay.lineH + ascent
+				if lay.hasHeader && r == 0 {
+					dc.DrawStringAnchored(ln, cx+w/2, baseline, 0.5, 0)
+					continue
+				}
+				dc.DrawString(ln, cx+stemTableCellPadX, baseline)
+			}
+			cx += w
+		}
+		cur += h
+	}
+	return y + lay.height
 }
 
 // drawTextLines 逐行绘制文本，返回绘制后下一段的 y 起点。

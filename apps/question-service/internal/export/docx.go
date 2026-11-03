@@ -62,8 +62,14 @@ func buildDocx(title string, items []renderItem) ([]byte, error) {
 		it := &items[i]
 		body.WriteString(docxParagraph(itemMetaLine(i+1, it.item), "Heading3"))
 
-		if stem := strings.TrimSpace(it.item.StemText); stem != "" {
-			body.WriteString(docxParagraph(stem, ""))
+		// 题干按"段落 + 表格"块输出：表格由识别结果里的 Markdown 表格还原，
+		// 与 PDF 走同一解析层（parseStemBlocks），两种格式版式一致。
+		for _, block := range parseStemBlocks(it.item.StemText) {
+			if block.table != nil {
+				body.WriteString(docxStemTable(block.table))
+				continue
+			}
+			body.WriteString(docxParagraph(block.text, ""))
 		}
 
 		// 先收集全部配图资源，再按宽度分行排版（与 PDF 的 groupImageRows 语义一致：
@@ -195,6 +201,67 @@ func docxParagraph(text, style string) string {
 		runs.WriteString(`<w:t xml:space="preserve">` + escapeXMLText(ln) + `</w:t>`)
 	}
 	return `<w:p>` + pPr + `<w:r>` + runs.String() + `</w:r></w:p>`
+}
+
+// docxStemTable 把题干表格渲染成带边框的 Word 表格：列宽等分，表头加粗居中、数据行左对齐。
+// 与 PDF 的 drawStemTable 共用同一解析层（parseStemBlocks），版式语义保持一致。
+func docxStemTable(tbl *stemTable) string {
+	cols := tbl.columnCount()
+	if cols == 0 {
+		return ""
+	}
+	colTwips := docxContentWidthEMU / emuPerTwip / cols
+	if colTwips < 1 {
+		colTwips = 1
+	}
+	var grid strings.Builder
+	for i := 0; i < cols; i++ {
+		grid.WriteString(fmt.Sprintf(`<w:gridCol w:w="%d"/>`, colTwips))
+	}
+
+	var rows strings.Builder
+	writeRow := func(cells []string, header bool) {
+		rows.WriteString(`<w:tr>`)
+		for c := 0; c < cols; c++ {
+			text := ""
+			if c < len(cells) {
+				text = cells[c]
+			}
+			jc := "left"
+			rPr := ""
+			if header {
+				jc = "center"
+				rPr = `<w:rPr><w:b/></w:rPr>`
+			}
+			rows.WriteString(`<w:tc><w:tcPr>` +
+				fmt.Sprintf(`<w:tcW w:w="%d" w:type="dxa"/>`, colTwips) +
+				`</w:tcPr>` +
+				`<w:p><w:pPr><w:jc w:val="` + jc + `"/></w:pPr><w:r>` + rPr +
+				`<w:t xml:space="preserve">` + escapeXMLText(sanitizeXMLText(text)) + `</w:t></w:r></w:p>` +
+				`</w:tc>`)
+		}
+		rows.WriteString(`</w:tr>`)
+	}
+	if len(tbl.header) > 0 {
+		writeRow(tbl.header, true)
+	}
+	for _, r := range tbl.rows {
+		writeRow(r, false)
+	}
+
+	return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>` +
+		`<w:tblBorders>` +
+		`<w:top w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`<w:left w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`<w:bottom w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`<w:right w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`<w:insideH w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`<w:insideV w:val="single" w:sz="6" w:space="0" w:color="111827"/>` +
+		`</w:tblBorders>` +
+		`<w:tblCellMar><w:left w:w="57" w:type="dxa"/><w:right w:w="57" w:type="dxa"/></w:tblCellMar>` +
+		`</w:tblPr><w:tblGrid>` + grid.String() + `</w:tblGrid>` + rows.String() + `</w:tbl>` +
+		// 表格后紧跟段落时 Word 不会自动留白，补一个空段。
+		`<w:p><w:pPr><w:spacing w:before="0" w:after="60"/></w:pPr></w:p>`
 }
 
 // docxFigureGapEMU 并排配图之间的间距（约 3.2mm）。

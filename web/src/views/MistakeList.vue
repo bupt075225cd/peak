@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h, type FunctionalComponent } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { BookOpen, Plus, Search, Loader2, Download, Pencil, Trash2, MoreHorizontal } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import {
@@ -8,6 +8,8 @@ import {
 } from '../api'
 import ImageViewer from '../components/ImageViewer.vue'
 import MistakeEditDialog from '../components/MistakeEditDialog.vue'
+import HighlightText from '../components/HighlightText.vue'
+import StemText from '../components/StemText.vue'
 
 const router = useRouter()
 const keyword = ref('')
@@ -136,46 +138,6 @@ watch(keyword, () => {
 watch([activeSubject, activeSource], () => void loadFirstPage())
 
 onUnmounted(() => clearTimeout(keywordTimer))
-
-// 关键词高亮：把命中片段拆成数组交给模板渲染（不使用 v-html，避免 XSS）。
-function highlightParts(text: string): { text: string; hit: boolean }[] {
-  const terms = keyword.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (!text || terms.length === 0) return [{ text, hit: false }]
-
-  const lower = text.toLowerCase()
-  const marks = new Array<boolean>(text.length).fill(false)
-  for (const term of terms) {
-    for (let from = 0; ; ) {
-      const idx = lower.indexOf(term, from)
-      if (idx < 0) break
-      for (let i = idx; i < idx + term.length; i++) marks[i] = true
-      from = idx + term.length
-    }
-  }
-
-  const parts: { text: string; hit: boolean }[] = []
-  let start = 0
-  for (let i = 1; i <= text.length; i++) {
-    if (i === text.length || (marks[i] ?? false) !== (marks[start] ?? false)) {
-      parts.push({ text: text.slice(start, i), hit: marks[start] ?? false })
-      start = i
-    }
-  }
-  return parts
-}
-
-// 高亮渲染组件：命中片段标黄，其余原样输出。
-const HighlightText: FunctionalComponent<{ text: string }> = (props) => {
-  if (!props.text) return null
-  return h(
-    'span',
-    highlightParts(props.text).map((part, i) =>
-      part.hit
-        ? h('mark', { key: i, class: 'bg-amber-200/70 text-ink rounded px-0.5' }, part.text)
-        : h('span', { key: i }, part.text),
-    ),
-  )
-}
 
 onMounted(loadFirstPage)
 
@@ -592,13 +554,13 @@ async function resolveExportError(err: unknown): Promise<string> {
                     <span
                       v-if="mistakeSource(item)"
                       class="text-xs text-ink-soft bg-surface-tint px-2 py-0.5 rounded-full"
-                    >来源：<HighlightText :text="mistakeSource(item)" /></span>
+                    >来源：<HighlightText :text="mistakeSource(item)" :keyword="keyword" /></span>
                     <span class="text-xs text-ink-faint">{{ item.recorded_at?.slice(0, 10) }}</span>
                   </div>
-                  <!-- 题干：命中的关键词标黄；pre-line 保留识别出的换行 -->
-                  <p class="text-sm text-ink leading-relaxed whitespace-pre-line">
-                    <HighlightText :text="item.question?.stem_text ?? ''" />
-                  </p>
+                  <!-- 题干：表格还原成表格、命中的关键词标黄（与录入页一致） -->
+                  <div class="text-sm text-ink leading-relaxed">
+                    <StemText :text="item.question?.stem_text ?? ''" :keyword="keyword" />
+                  </div>
                   <!-- 知识点标签 -->
                   <div v-if="knowledgePoints(item.question).length" class="mt-2 flex gap-1.5 flex-wrap">
                     <span
