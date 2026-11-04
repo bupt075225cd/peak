@@ -91,6 +91,10 @@ type RedrawReport struct {
 	MaxSoft    float64 `json:"max_soft"`   // Deprecated: 残差语义已废弃，恒为 0
 	Attempts   int     `json:"attempts"`   // 实际执行的"提取→渲染"轮数
 	Consistent bool    `json:"consistent"` // 是否全部子图通过结构校验
+	// StructIssues 最终输出版本的结构问题数（0 表示结构完整，可直接渲染）。
+	StructIssues int `json:"struct_issues,omitempty"`
+	// SemanticIssues 最终输出版本的语义偏差数（多源于题干转录不准，只记日志不重试）。
+	SemanticIssues int `json:"semantic_issues,omitempty"`
 }
 
 // Service 识别服务业务逻辑。
@@ -398,6 +402,7 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 		}
 		if rerr := s.redrawGeometry(redrawCtx, taskID, imageData, geomBBox, result); rerr != nil {
 			if ctxErr := redrawCtx.Err(); ctxErr == context.DeadlineExceeded {
+				observability.ObserveGeometryRedraw(s.prov.Name(), "timeout", 0, 0, 0, redrawStart)
 				s.log.Warn("geometry redraw timeout, skip redraw",
 					zap.Duration("timeout", s.geometryRedrawTimeout))
 				if result.Warning != "" {
@@ -405,6 +410,7 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 				}
 				result.Warning += "几何重绘超时，已跳过（仅保留原图）"
 			} else {
+				observability.ObserveGeometryRedraw(s.prov.Name(), "failed", 0, 0, 0, redrawStart)
 				s.log.Error("geometry redraw failed", zap.String("error", rerr.Error()))
 				if result.Warning != "" {
 					result.Warning += "；"
@@ -412,6 +418,19 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 				result.Warning += "几何重绘失败：" + rerr.Error()
 			}
 		} else {
+			// 记录重绘结果指标：ok=已产出子图，empty=未检出几何图形（干净跳过）。
+			report := result.RedrawReport
+			attempts, structIssues, semanticIssues := 0, 0, 0
+			outcome := "empty"
+			if report != nil {
+				attempts = report.Attempts
+				structIssues = report.StructIssues
+				semanticIssues = report.SemanticIssues
+				if len(result.RedrawFigures) > 0 {
+					outcome = "ok"
+				}
+			}
+			observability.ObserveGeometryRedraw(s.prov.Name(), outcome, attempts, structIssues, semanticIssues, redrawStart)
 			s.logStage("geometry-redraw", redrawStart)
 		}
 	}
@@ -687,10 +706,15 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			best, bestHard, bestSoft = snapshotPanels(panels), structCount, semanticCount
 			bestIssues = issues
 		}
-		if len(issues) == 0 {
-			break // 结构完整，提前结束。
+		// 结构问题已清零即停止回喂（含"结构+语义均无"与"仅剩语义偏差"两种情况）。
+		// 语义偏差（题干与图形不一致）多源于题干转录不准，反复让模型"修正"只会越改越差，
+		// 且每轮都要等满一次 VLM 提取；结构完整即可输出，剩余语义偏差只记日志、不再重试。
+		if structCount == 0 {
+			break
 		}
-		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempt), zap.Strings("issues", issues))
+		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempt),
+			zap.Int("structural", structCount), zap.Int("semantic", semanticCount),
+			zap.Strings("issues", issues))
 		correction = formatValidateIssues(issues)
 	}
 
@@ -723,7 +747,10 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 
 	// 一致性只看结构问题：语义偏差多由题干转录不准引起，不该对用户报"结构校验未通过"。
 	consistent := bestHard == 0
-	result.RedrawReport = &RedrawReport{Attempts: attempts, Consistent: consistent}
+	result.RedrawReport = &RedrawReport{
+		Attempts: attempts, Consistent: consistent,
+		StructIssues: bestHard, SemanticIssues: bestSoft,
+	}
 	if !consistent {
 		if result.Warning != "" {
 			result.Warning += "；"

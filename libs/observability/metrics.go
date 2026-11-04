@@ -60,6 +60,33 @@ var (
 		Name: "frontend_report_total",
 		Help: "Total number of frontend monitoring events received.",
 	}, []string{"type", "name"})
+
+	// GeometryRedrawDuration 几何重绘阶段整体耗时直方图（provider、outcome）。
+	GeometryRedrawDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "geometry_redraw_duration_seconds",
+		Help: "Geometry redraw stage total latency in seconds.",
+		// 重绘含多轮 VLM 提取，通常 30~300s，桶向大值偏移。
+		Buckets: []float64{5, 10, 15, 30, 60, 120, 180, 240, 300, 360, 600},
+	}, []string{"provider", "outcome"})
+
+	// GeometryRedrawOutcome 几何重绘结果计数（outcome: ok/empty/timeout/failed）。
+	GeometryRedrawOutcome = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "geometry_redraw_total",
+		Help: "Total geometry redraw results by outcome.",
+	}, []string{"provider", "outcome"})
+
+	// GeometryRedrawAttempts 每次重绘实际执行的"提取→渲染"轮数直方图。
+	GeometryRedrawAttempts = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "geometry_redraw_attempts",
+		Help:    "Geometry redraw extraction-render rounds per task.",
+		Buckets: []float64{1, 2, 3, 4, 5, 6, 8, 10},
+	}, []string{"provider"})
+
+	// GeometryRedrawIssueCount 重绘校验问题计数（category: structural/semantic）。
+	GeometryRedrawIssueCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "geometry_redraw_issues_total",
+		Help: "Geometry redraw validation issues by category (structural or semantic).",
+	}, []string{"provider", "category"})
 )
 
 // ObserveAICall 记录一次 AI provider 调用的耗时与结果（成功记 ok，失败记 error）。
@@ -80,4 +107,20 @@ func ObserveMistakeOp(operation string, err error) {
 		status = "error"
 	}
 	MistakeOpsTotal.WithLabelValues(operation, status).Inc()
+}
+
+// ObserveGeometryRedraw 记录一次几何重绘的结果：耗时（按 outcome 分桶）、实际轮数、
+// 结构/语义问题数。用于观察重绘耗时与准确率，以及结构/语义分流回喂修正的效果。
+func ObserveGeometryRedraw(provider, outcome string, attempts, structIssues, semanticIssues int, start time.Time) {
+	GeometryRedrawDuration.WithLabelValues(provider, outcome).Observe(time.Since(start).Seconds())
+	GeometryRedrawOutcome.WithLabelValues(provider, outcome).Inc()
+	if attempts > 0 {
+		GeometryRedrawAttempts.WithLabelValues(provider).Observe(float64(attempts))
+	}
+	if structIssues > 0 {
+		GeometryRedrawIssueCount.WithLabelValues(provider, "structural").Add(float64(structIssues))
+	}
+	if semanticIssues > 0 {
+		GeometryRedrawIssueCount.WithLabelValues(provider, "semantic").Add(float64(semanticIssues))
+	}
 }

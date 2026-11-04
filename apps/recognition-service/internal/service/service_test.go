@@ -464,13 +464,20 @@ func TestProcessImageRedrawSemanticDeviationNotReported(t *testing.T) {
 	if result.RedrawReport == nil {
 		t.Fatal("expected redraw report")
 	}
-	// 语义偏差不会自愈，修正回路会跑到尝试上限。
-	if result.RedrawReport.Attempts < 2 {
-		t.Fatalf("expected retries while deviations remain, got %d attempt(s)", result.RedrawReport.Attempts)
+	// 结构完整时语义偏差不再触发回喂：第一轮即停止，不会跑到尝试上限。
+	if result.RedrawReport.Attempts != 1 {
+		t.Fatalf("expected 1 attempt (semantic deviations no longer trigger retry), got %d attempt(s)", result.RedrawReport.Attempts)
 	}
 	// 语义偏差不算结构问题：不报"结构校验未通过"。
 	if !result.RedrawReport.Consistent {
 		t.Fatalf("semantic deviation should not be reported as structural failure, got %+v", result.RedrawReport)
+	}
+	// 分流后：结构问题为 0，语义偏差被记录但不重试。
+	if result.RedrawReport.StructIssues != 0 {
+		t.Fatalf("expected 0 structural issues, got %d", result.RedrawReport.StructIssues)
+	}
+	if result.RedrawReport.SemanticIssues < 1 {
+		t.Fatalf("expected >=1 semantic deviation recorded, got %d", result.RedrawReport.SemanticIssues)
 	}
 	if strings.Contains(result.Warning, "结构问题") {
 		t.Fatalf("unexpected structural warning: %q", result.Warning)
