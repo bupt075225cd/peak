@@ -288,6 +288,9 @@ export async function listCategories(type?: string): Promise<Category[]> {
 }
 
 // 题目。
+// 年级固定选项：录入页与编辑弹窗共用同一口径（与列表分组顺序一致）。
+export const GRADE_OPTIONS: string[] = ['七年级上', '七年级下', '八年级上', '八年级下', '九年级上', '九年级下']
+
 export interface Question {
   id: number
   subject: string
@@ -340,6 +343,14 @@ export async function createMistake(payload: Record<string, unknown>): Promise<u
 export async function updateMistake(id: number, payload: Record<string, unknown>): Promise<Mistake> {
   const { data } = await http.put<ApiResponse<Mistake>>(`/mistakes/${id}`, payload)
   return data.data as Mistake
+}
+
+// 更新题目（如修改年级）。服务端按整条记录覆盖保存（仅保留 created_at），
+// payload 需带上 subject/stem_text/answer 等全部题目字段，否则会被写成零值；
+// 前端在编辑弹窗里基于原题目构造。
+export async function updateQuestion(id: number, payload: Record<string, unknown>): Promise<Question> {
+  const { data } = await http.put<ApiResponse<Question>>(`/questions/${id}`, payload)
+  return data.data as Question
 }
 
 // 删除错题：后端会级联清理题目、图片记录、识别任务等关联数据，

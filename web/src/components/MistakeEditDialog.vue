@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// 错题编辑弹窗：修正错误原因、来源，并维护重做（复习）记录。
+// 错题编辑弹窗：修正年级、错误原因、来源，并维护重做（复习）记录。
 //
 // 服务端 PUT /mistakes/:id 会整条覆盖保存，因此提交时需带上 user_id /
 // question_id / recorded_at 等不可丢字段（否则会被写成零值），这里基于原记录构造。
-import { ref, watch } from 'vue'
+// 年级挂在关联的 Question 上，走 PUT /questions/:id（同样整条覆盖，需带全题目字段）。
+import { computed, ref, watch } from 'vue'
 import { X, Plus, Trash2, Loader2, Check, ClipboardList } from 'lucide-vue-next'
-import { updateMistake, type Mistake, type ReviewRecord } from '../api'
+import { updateMistake, updateQuestion, GRADE_OPTIONS, type Mistake, type ReviewRecord } from '../api'
 import StemText from './StemText.vue'
 
 const props = defineProps<{
@@ -19,11 +20,22 @@ const emit = defineEmits<{
 }>()
 
 // 表单状态：编辑期间不改动原记录，保存成功后再回写列表。
+const grade = ref('')
 const wrongReason = ref('')
 const source = ref('')
 const records = ref<{ reviewed_at: string; result: string; wrong_reason: string }[]>([])
 const saving = ref(false)
 const errorMsg = ref('')
+
+// 打开时的原始年级：年级只在用户改动后才提交，避免历史无年级数据被误清。
+const initialGrade = ref('')
+
+// 年级下拉选项：历史数据可能存有枚举外的自由文本（早期无校验），
+// 把它作为额外选项保留，避免编辑时被覆盖丢失。
+const gradeOptions = computed(() => {
+  const g = initialGrade.value
+  return g && !GRADE_OPTIONS.includes(g) ? [g, ...GRADE_OPTIONS] : [...GRADE_OPTIONS]
+})
 
 // 重做结果固定选项：统一口径便于统计，避免自由输入出现同义不同写法。
 const RESULT_OPTIONS = ['正确', '部分正确', '错误']
@@ -43,6 +55,8 @@ watch(
   [() => props.open, () => props.mistake],
   ([open, m]) => {
     if (!open || !m) return
+    grade.value = m.question?.grade ?? ''
+    initialGrade.value = m.question?.grade ?? ''
     wrongReason.value = m.wrong_reason ?? ''
     source.value = m.source ?? ''
     records.value = (m.review_records ?? []).map((r) => ({
@@ -111,7 +125,26 @@ async function handleSave() {
       review_records: reviewRecords,
       recorded_at: current.recorded_at,
     })
-    emit('saved', updated)
+
+    // 年级在 Question 上：仅当用户改动过才提交（后端 PUT /questions/:id 整条覆盖，
+    // 必须带上原题目全部字段，避免未传字段被写成零值）。
+    let question = current.question
+    const gradeChanged = question && grade.value !== initialGrade.value
+    if (question && gradeChanged) {
+      question = await updateQuestion(question.id, {
+        subject: question.subject,
+        grade: grade.value,
+        stem_text: question.stem_text,
+        answer: question.answer,
+        analysis: question.analysis,
+        question_type: question.question_type,
+        image: question.image,
+        knowledge_points: question.knowledge_points,
+        source: question.source,
+      })
+    }
+
+    emit('saved', { ...updated, question })
   } catch (err) {
     console.error('更新错题失败', err)
     errorMsg.value = '保存失败，请重试'
@@ -141,7 +174,7 @@ function onKey(e: KeyboardEvent) {
         <div class="flex items-start justify-between mb-4">
           <div>
             <h2 class="text-lg font-semibold text-ink">编辑错题</h2>
-            <p class="text-xs text-ink-faint mt-1">更新错误原因、来源与重做记录</p>
+            <p class="text-xs text-ink-faint mt-1">更新年级、错误原因、来源与重做记录</p>
           </div>
           <button
             type="button"
@@ -163,17 +196,31 @@ function onKey(e: KeyboardEvent) {
         </div>
 
         <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-ink-soft mb-1.5">来源 <span class="text-red-500">*</span></label>
-            <input
-              v-model="source"
-              type="text"
-              maxlength="128"
-              autofocus
-              data-testid="edit-source-input"
-              class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
-              placeholder="如：期中考试 / 练习册 P32"
-            />
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-ink-soft mb-1.5">来源 <span class="text-red-500">*</span></label>
+              <input
+                v-model="source"
+                type="text"
+                maxlength="128"
+                autofocus
+                data-testid="edit-source-input"
+                class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
+                placeholder="如：期中考试 / 练习册 P32"
+              />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-ink-soft mb-1.5">年级</label>
+              <select
+                v-model="grade"
+                data-testid="edit-grade-select"
+                class="w-full rounded-xl border border-slate-200 bg-surface-muted/50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-shadow"
+              >
+                <option disabled value="">未设置</option>
+                <option v-for="opt in gradeOptions" :key="opt" :value="opt">{{ opt }}</option>
+              </select>
+            </div>
           </div>
 
           <div>
