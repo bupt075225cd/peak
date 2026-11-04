@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -71,6 +72,11 @@ func main() {
 	if cfg.Bool("geometry.enabled", false) {
 		maxAttempts := cfg.Int("geometry.max_attempts", 3)
 		svcOpts = append(svcOpts, service.WithGeometryRender(true, maxAttempts))
+		// 重绘阶段整体超时（秒，0 表示不限制）：超时跳过重绘、保留原图。
+		if secs := cfg.Int("geometry.redraw_timeout", 360); secs > 0 {
+			svcOpts = append(svcOpts, service.WithGeometryRenderTimeout(time.Duration(secs)*time.Second))
+			appLog.Info("geometry redraw timeout", zap.Int("seconds", secs))
+		}
 		appLog.Info("geometry redraw enabled", zap.Int("max_attempts", maxAttempts))
 	} else {
 		appLog.Info("geometry redraw disabled (geometry.enabled is false)")

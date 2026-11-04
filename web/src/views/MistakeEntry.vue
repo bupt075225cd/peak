@@ -166,8 +166,10 @@ async function startRecognition(file: File) {
 
 async function pollTask(id: number) {
   // 轮询识别任务，直到完成或失败。
-  // 文档拆题（多图 OCR + 结构化拆题）耗时较长，给到 180s。
-  for (let i = 0; i < 180; i++) {
+  // 常规阶段 180s；几何重绘阶段单次 VLM 调用可能耗时数分钟（且可能多轮重试），
+  // 检测到重绘文案时放宽到 600s（一旦放宽保持粘性，避免文案切换后上限回缩）。
+  let limit = 180
+  for (let i = 0; i < limit; i++) {
     await new Promise((r) => setTimeout(r, 1000))
     const t = await getTask(id)
     task.value = t
@@ -179,8 +181,11 @@ async function pollTask(id: number) {
       errorMsg.value = t.error_message || '识别失败，请重试'
       return
     }
+    if ((t.progress_text || '').includes('重绘')) {
+      limit = Math.max(limit, 600)
+    }
   }
-  // 180s 仍无结果时提示用户去手动查询/刷新，而不是显示"超时失败"，避免误判。
+  // 轮询仍无结果时提示用户去手动查询/刷新，而不是显示"超时失败"，避免误判。
   errorMsg.value = '识别耗时较长，刷新页面查看结果，或点击重试'
 }
 

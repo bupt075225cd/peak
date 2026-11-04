@@ -103,6 +103,8 @@ type Service struct {
 	geometryRender bool
 	// geometryMaxAttempts 结构校验失败回喂修正的最大轮数（提取→渲染→修正）。
 	geometryMaxAttempts int
+	// geometryRedrawTimeout 重绘阶段整体超时：超时后跳过重绘、保留原图识别结果。
+	geometryRedrawTimeout time.Duration
 	// wg 跟踪在途的异步识别流程，Wait 供测试收尾等待，避免后台协程
 	// 与临时目录清理（t.TempDir）竞态。
 	wg sync.WaitGroup
@@ -121,6 +123,11 @@ func WithGeometryRender(enabled bool, maxAttempts int) Option {
 		}
 		s.geometryMaxAttempts = maxAttempts
 	}
+}
+
+// WithGeometryRenderTimeout 设置重绘阶段整体超时；d<=0 表示不限制。
+func WithGeometryRenderTimeout(d time.Duration) Option {
+	return func(s *Service) { s.geometryRedrawTimeout = d }
 }
 
 // New 创建识别服务实例。
@@ -380,12 +387,30 @@ func (s *Service) processImage(ctx context.Context, taskID uint64, storageKey st
 	// 作为 VLM 几何描述提取的输入（不落库），以大幅减少 vision token、缩短耗时。
 	if s.geometryRender && result.Subject == "数学" && hasGeometry {
 		redrawStart := time.Now()
-		if rerr := s.redrawGeometry(ctx, taskID, imageData, geomBBox, result); rerr != nil {
-			s.log.Error("geometry redraw failed", zap.String("error", rerr.Error()))
-			if result.Warning != "" {
-				result.Warning += "；"
+		// 整体 deadline：单次 VLM 几何提取可能耗时数分钟，失败重试回路
+		// 最坏可耗 30 分钟以上且任务级 context 无 deadline；这里对重绘
+		// 阶段单独限时，超时降级为跳过重绘（保留原图识别结果），不判任务失败。
+		redrawCtx := ctx
+		if s.geometryRedrawTimeout > 0 {
+			var cancel context.CancelFunc
+			redrawCtx, cancel = context.WithTimeout(ctx, s.geometryRedrawTimeout)
+			defer cancel()
+		}
+		if rerr := s.redrawGeometry(redrawCtx, taskID, imageData, geomBBox, result); rerr != nil {
+			if ctxErr := redrawCtx.Err(); ctxErr == context.DeadlineExceeded {
+				s.log.Warn("geometry redraw timeout, skip redraw",
+					zap.Duration("timeout", s.geometryRedrawTimeout))
+				if result.Warning != "" {
+					result.Warning += "；"
+				}
+				result.Warning += "几何重绘超时，已跳过（仅保留原图）"
+			} else {
+				s.log.Error("geometry redraw failed", zap.String("error", rerr.Error()))
+				if result.Warning != "" {
+					result.Warning += "；"
+				}
+				result.Warning += "几何重绘失败：" + rerr.Error()
 			}
-			result.Warning += "几何重绘失败：" + rerr.Error()
 		} else {
 			s.logStage("geometry-redraw", redrawStart)
 		}
@@ -498,6 +523,11 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	// 入口转正方向判反时的撤销重试只做一次，避免来回旋转耗光重试轮数。
 	entryUprightOppositeTried := false
 	for attempt := 1; attempt <= s.geometryMaxAttempts; attempt++ {
+		// 超时/取消后立即退出：不更新进度、不再发起注定失败的调用。
+		if ctx.Err() != nil {
+			attempts = attempt - 1
+			break
+		}
 		attempts = attempt
 		// 重绘轮次可能较久（VLM 提取几何描述），实时更新进度文案让用户感知。
 		p := 80 + (attempt-1)*8

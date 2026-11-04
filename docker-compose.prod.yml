@@ -180,6 +180,8 @@ services:
       # 全程无外部依赖。
       GEOMETRY_ENABLED: "true"
       GEOMETRY_MAX_ATTEMPTS: ${GEOMETRY_MAX_ATTEMPTS:-3}
+      # 重绘阶段整体超时（秒）：超时跳过重绘、保留原图识别结果。
+      GEOMETRY_REDRAW_TIMEOUT: ${GEOMETRY_REDRAW_TIMEOUT:-360}
       TRACING_ENDPOINT: ${TRACING_ENDPOINT:-}
     volumes:
       - recognition-data:/data
