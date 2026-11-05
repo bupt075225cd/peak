@@ -147,19 +147,22 @@ type Grid struct {
 // 注意：子图标题不在 Spec 内，而由 Panel（多子图包装）承载，
 // 以免同一个 JSON 对象里出现两个含义不同的 title 字段。
 type Spec struct {
-	Canvas      Canvas         `json:"canvas"`
-	Grid        *Grid          `json:"grid,omitempty"`
-	Points      []Point        `json:"points"`
-	Segments    []Segment      `json:"segments"`
-	Axes        *Axes          `json:"axes,omitempty"`
-	Curves      []Curve        `json:"curves,omitempty"`
-	Polygons    []Polygon      `json:"polygons,omitempty"`
-	Circles     []Circle       `json:"circles,omitempty"`
-	Arcs        []Arc          `json:"arcs,omitempty"`
-	RightAngles []RightAngle   `json:"right_angles,omitempty"`
-	AngleMarks  []AngleMark    `json:"angle_marks,omitempty"`
-	Ticks       []TickMark     `json:"ticks,omitempty"`
-	Parallels   []ParallelMark `json:"parallels,omitempty"`
-	Labels      []Label        `json:"labels,omitempty"`
-	SVG         string         `json:"svg,omitempty"` // 兜底：模型直接给出的完整 SVG
+	Canvas      Canvas       `json:"canvas"`
+	Grid        *Grid        `json:"grid,omitempty"`
+	Points      []Point      `json:"points"`
+	Segments    []Segment    `json:"segments"`
+	Axes        *Axes        `json:"axes,omitempty"`
+	Curves      []Curve      `json:"curves,omitempty"`
+	Polygons    []Polygon    `json:"polygons,omitempty"`
+	Circles     []Circle     `json:"circles,omitempty"`
+	Arcs        []Arc        `json:"arcs,omitempty"`
+	RightAngles []RightAngle `json:"right_angles,omitempty"`
+	AngleMarks  []AngleMark  `json:"angle_marks,omitempty"`
+	// HasAngleMarks 原图是否真实画有角的弧线标记（由主提取直接给出，合并了原二次核对）。
+	// 指针以区分"模型未输出该字段"（nil）与"明确 false"；nil 时保留 AngleMarks（向后兼容）。
+	HasAngleMarks *bool          `json:"has_angle_marks,omitempty"`
+	Ticks         []TickMark     `json:"ticks,omitempty"`
+	Parallels     []ParallelMark `json:"parallels,omitempty"`
+	Labels        []Label        `json:"labels,omitempty"`
+	SVG           string         `json:"svg,omitempty"` // 兜底：模型直接给出的完整 SVG
 }

@@ -306,6 +306,51 @@ func TestParsePanelsExplicitEmptyPanels(t *testing.T) {
 	}
 }
 
+func TestParsePanelsHasAngleMarks(t *testing.T) {
+	// has_angle_marks 由主提取直接给出（合并自原二次核对）：
+	// false 时剔除臆造的 angle_marks，true/缺省时保留（向后兼容）。
+	const points = `"points":[{"name":"A","x":20,"y":40},{"name":"B","x":60,"y":20},{"name":"C","x":60,"y":60}],` +
+		`"segments":[{"from":"A","to":"B"},{"from":"A","to":"C"},{"from":"B","to":"C"}]`
+	const marks = `"angle_marks":[{"vertex":"A","a":"B","b":"C","count":1}]`
+
+	cases := []struct {
+		name    string
+		json    string
+		wantNil bool
+	}{
+		{
+			name:    "false drops marks",
+			json:    `{"title":"图1","canvas":{"width":100,"height":70},"has_angle_marks":false,` + marks + `,` + points + `}`,
+			wantNil: true,
+		},
+		{
+			name:    "true keeps marks",
+			json:    `{"title":"图1","canvas":{"width":100,"height":70},"has_angle_marks":true,` + marks + `,` + points + `}`,
+			wantNil: false,
+		},
+		{
+			name:    "missing field keeps marks",
+			json:    `{"title":"图1","canvas":{"width":100,"height":70},` + marks + `,` + points + `}`,
+			wantNil: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			panels, err := ParsePanels(tc.json)
+			if err != nil {
+				t.Fatalf("ParsePanels: %v", err)
+			}
+			if len(panels) != 1 {
+				t.Fatalf("expected 1 panel, got %d", len(panels))
+			}
+			if (panels[0].Spec.AngleMarks == nil) != tc.wantNil {
+				t.Fatalf("AngleMarks nil=%v, want nil=%v", panels[0].Spec.AngleMarks == nil, tc.wantNil)
+			}
+		})
+	}
+}
+
 func TestIsAngleText(t *testing.T) {
 	yes := []string{"", "40°", "∠ABC", "α", "(β)", "【γ】"}
 	no := []string{"AB=2", "AD=2BD", "x"}

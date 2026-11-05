@@ -634,7 +634,6 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 				zap.Uint64("task_id", taskID), zap.Int("attempt", attempt))
 			return nil
 		}
-		s.verifyAngleMarks(ctx, taskID, extractImage, parsed)
 		// 直线名称标签只跟着原图走：题干里的 l₁/l₂ 若原图没印，就不要画到图上。
 		// 印刷名称取识别与描述两个独立看图阶段的共识，单侧误报不能当依据。
 		printedLineNames := geom.PrintedLineNamesConsensus(result.Geometry.LineLabels, parsed)
@@ -771,44 +770,6 @@ func snapshotPanels(src []geom.PanelResult) []geom.PanelResult {
 		out[i].Issues = append([]string(nil), p.Issues...)
 	}
 	return out
-}
-
-// verifyAngleMarks 原图核对角弧线标记（忠实原图）。
-// VLM 提取 spec 时可能臆造 angle_marks（原图没画也输出），对声称含标记的子图
-// 用 VLM 对原图二次确认；未确认的子图剔除标记后再渲染。
-// 核对调用失败时保守保留提取结果（fail-open），避免网络抖动导致标记闪烁。
-func (s *Service) verifyAngleMarks(ctx context.Context, taskID uint64, geoImage []byte, parsed []geom.Panel) {
-	verifier, ok := s.prov.(provider.AngleMarkVerifier)
-	if !ok {
-		return
-	}
-	titles := make([]string, 0, len(parsed))
-	claimed := make(map[string]bool, len(parsed))
-	for i := range parsed {
-		titles = append(titles, parsed[i].Title)
-		if len(parsed[i].Spec.AngleMarks) > 0 {
-			claimed[parsed[i].Title] = true
-		}
-	}
-	if len(claimed) == 0 {
-		return
-	}
-	verdicts, err := verifier.VerifyAngleMarks(ctx, geoImage, titles)
-	if err != nil {
-		s.log.Warn("angle mark verify failed, keep as extracted",
-			zap.Uint64("task_id", taskID), zap.String("error", err.Error()))
-		return
-	}
-	for i := range parsed {
-		if !claimed[parsed[i].Title] {
-			continue
-		}
-		if !verdicts[parsed[i].Title] {
-			parsed[i].Spec.AngleMarks = nil
-			s.log.Info("angle marks dropped by original-image check",
-				zap.Uint64("task_id", taskID), zap.String("panel", parsed[i].Title))
-		}
-	}
 }
 
 // cleanupTaskArtifacts 清理失败任务的重绘产物（transient/geometry/task_<id>. 前缀）。

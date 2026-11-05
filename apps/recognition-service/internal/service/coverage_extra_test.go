@@ -2,97 +2,12 @@ package service
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"testing"
-
-	"peak/apps/recognition-service/internal/geom"
-	"peak/apps/recognition-service/internal/provider"
 )
-
-// fakeAngleMarkProvider 在 mock 之上实现可选的 AngleMarkVerifier 能力。
-type fakeAngleMarkProvider struct {
-	provider.Provider
-	verdicts map[string]bool
-	err      error
-	called   bool
-	titles   []string
-}
-
-func (f *fakeAngleMarkProvider) VerifyAngleMarks(_ context.Context, _ []byte, titles []string) (map[string]bool, error) {
-	f.called = true
-	f.titles = append([]string(nil), titles...)
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.verdicts, nil
-}
-
-func newAngleMarkTestService(t *testing.T, p provider.Provider) *Service {
-	t.Helper()
-	svc, _ := setupServiceWithProvider(t, p)
-	return svc
-}
-
-func angleMarkPanels(marks ...bool) []geom.Panel {
-	panels := make([]geom.Panel, 0, len(marks))
-	for i, has := range marks {
-		p := geom.Panel{Title: "图" + itoa(uint64(i+1))}
-		if has {
-			p.Spec.AngleMarks = []geom.AngleMark{{Vertex: "A", A: "B", B: "C"}}
-		}
-		panels = append(panels, p)
-	}
-	return panels
-}
-
-func TestVerifyAngleMarksWithoutCapability(t *testing.T) {
-	svc, _ := setupService(t) // mock provider 未实现 AngleMarkVerifier
-	panels := angleMarkPanels(true)
-	svc.verifyAngleMarks(context.Background(), 1, []byte("img"), panels)
-	if panels[0].Spec.AngleMarks == nil {
-		t.Fatal("provider 不具备核对能力时应保留提取结果")
-	}
-}
-
-func TestVerifyAngleMarksNoClaimedMarks(t *testing.T) {
-	fake := &fakeAngleMarkProvider{Provider: provider.NewMockProvider()}
-	svc := newAngleMarkTestService(t, fake)
-	panels := angleMarkPanels(false, false)
-	svc.verifyAngleMarks(context.Background(), 1, []byte("img"), panels)
-	if fake.called {
-		t.Fatal("没有子图声称有角标记时不应发起核对")
-	}
-}
-
-func TestVerifyAngleMarksDropsUnconfirmed(t *testing.T) {
-	fake := &fakeAngleMarkProvider{Provider: provider.NewMockProvider(), verdicts: map[string]bool{"图1": false, "图2": true}}
-	svc := newAngleMarkTestService(t, fake)
-	panels := angleMarkPanels(true, true)
-	svc.verifyAngleMarks(context.Background(), 1, []byte("img"), panels)
-	if !fake.called || len(fake.titles) != 2 {
-		t.Fatalf("应对全部子图发起核对，titles=%v", fake.titles)
-	}
-	if panels[0].Spec.AngleMarks != nil {
-		t.Fatal("原图核对为 false 的角标记应被删除")
-	}
-	if panels[1].Spec.AngleMarks == nil {
-		t.Fatal("原图核对为 true 的角标记应保留")
-	}
-}
-
-func TestVerifyAngleMarksErrorKeepsExtracted(t *testing.T) {
-	fake := &fakeAngleMarkProvider{Provider: provider.NewMockProvider(), err: context.DeadlineExceeded}
-	svc := newAngleMarkTestService(t, fake)
-	panels := angleMarkPanels(true)
-	svc.verifyAngleMarks(context.Background(), 1, []byte("img"), panels)
-	if panels[0].Spec.AngleMarks == nil {
-		t.Fatal("核对失败时应保留提取结果")
-	}
-}
 
 // ---------- 纯函数辅助 ----------
 

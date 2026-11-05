@@ -2,8 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -86,6 +84,11 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 - right_angles：直角标记，vertex 为直角顶点，a/b 为两条边上的点。
 - angle_marks：角的弧线标记，vertex/a/b 为角的顶点与两条边上的点，count 为弧线条数（1~3），不要填 label。
   忠实原图：仅当原图中确实画有角的弧线标记时才输出；原图没有弧线标记就不要输出，不要臆造。
+- has_angle_marks：布尔字段，**每个子图都必须输出**（true 或 false，不得省略）。
+  表示"原图中该子图的顶点处是否真实画有角的弧线标记（小弧线/扇形描边，不含直角方块）"。
+  判断标准：只有原图真实画出的弧线才为 true；没有画出、或不确定，一律为 false。
+  has_angle_marks 必须与 angle_marks 一致：has_angle_marks=true 时才输出 angle_marks；
+  has_angle_marks=false 时严禁输出 angle_marks（即使题干提到某个角，只要原图没画弧线就不输出）。
 - ticks / parallels：等长、平行标记，from/to 为线段两端点，count 为标记数量（1~3）。
 - labels：自由文本标注（代数式、结论等非数值文字，如 "AD=2BD"），x/y 为落点，anchor 取 start|middle|end。
   直线名称（l₁/l₂/l₃）只有在原图上印着时才写；原图没印的名称（哪怕题干一直在用）不要写。
@@ -154,6 +157,13 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
 // ExtractGeometrySpec 调用多模态大模型把几何子图 + 题干文本翻译为坐标直出的几何描述 JSON。
 // 题干文本与图形分开输入：已知量（角度/长度）从题干文本读取，不依赖模型从整图识读。
 // correction 非空时为上一轮结构校验的问题清单，要求模型据此修正后重新输出完整 JSON。
+const (
+	// geometrySpecFirstTimeout 首轮几何描述提取超时：模型首次看图直出坐标，最慢。
+	geometrySpecFirstTimeout = 240 * time.Second
+	// geometrySpecRetryTimeout 修正轮超时：输入已带明确问题清单，出图更快，可缩短等待。
+	geometrySpecRetryTimeout = 120 * time.Second
+)
+
 func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []byte, stemText, correction string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("请解析此几何图并输出可绘制的几何描述 JSON（坐标直出）。")
@@ -165,7 +175,11 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 		sb.WriteString("\n【上一轮输出的几何描述存在结构问题，请修正后重新输出完整 JSON】\n")
 		sb.WriteString(correction)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 240*time.Second)
+	timeout := geometrySpecFirstTimeout
+	if strings.TrimSpace(correction) != "" {
+		timeout = geometrySpecRetryTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// 要求服务端以 JSON 对象输出：否则模型容易夹带解释文字、把 JSON 拆成多段。
 	// 思考强度用几何专用覆盖值（默认 high）：该步骤要求看图直出坐标，
@@ -179,47 +193,6 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 		return "", &ModelOutputError{Raw: out, Err: jerr}
 	}
 	return spec, nil
-}
-
-// angleMarkVerifySystemPrompt 角弧线标记核对的系统提示词：让 VLM 对原图逐子图
-// 二次确认是否真的画有角的弧线标记，抑制提取阶段的臆造输出。
-const angleMarkVerifySystemPrompt = `你是几何图核对助手。仔细观察这张几何题图片（可能含多个子图），` +
-	`对列出的每个子图分别判断：原图中该子图的顶点处是否真的画有角的弧线标记（小弧线/扇形描边，不含直角方块）。` +
-	`判断标准：只有原图中真实画出的弧线才记为 true；没有画出、或你不确定，一律记为 false。` +
-	`只输出一个 JSON 对象，格式：{"panels":[{"title":"图1","has_angle_marks":false},...]}，` +
-	`panels 必须覆盖给出的全部子图标题。`
-
-// VerifyAngleMarks 对提取出 angle_marks 的子图做原图二次核对，返回 标题→是否确有标记。
-func (v *vlmCapabilities) VerifyAngleMarks(ctx context.Context, geoImage []byte, titles []string) (map[string]bool, error) {
-	var sb strings.Builder
-	sb.WriteString("请逐个核对以下子图的原图中是否画有角的弧线标记：\n")
-	for _, t := range titles {
-		sb.WriteString("- " + t + "\n")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-	out, err := v.dash.chatSystem(ctx, angleMarkVerifySystemPrompt, sb.String(), geoImage)
-	if err != nil {
-		return nil, err
-	}
-	jsonPart, err := extractJSON(out)
-	if err != nil {
-		return nil, err
-	}
-	var parsed struct {
-		Panels []struct {
-			Title         string `json:"title"`
-			HasAngleMarks bool   `json:"has_angle_marks"`
-		} `json:"panels"`
-	}
-	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
-		return nil, fmt.Errorf("parse verify json: %w", err)
-	}
-	verdicts := make(map[string]bool, len(titles))
-	for _, p := range parsed.Panels {
-		verdicts[strings.TrimSpace(p.Title)] = p.HasAngleMarks
-	}
-	return verdicts, nil
 }
 
 // ModelOutputError 表示模型输出无法解析为 JSON，保留原始输出供排查日志使用。

@@ -7,6 +7,8 @@ import (
 )
 
 // panelJSON 模型返回的单张子图（标题 + 几何描述）。
+// 注：Spec 实现了 UnmarshalJSON 并接管整段 JSON 解析，因此外层不能新增字段
+// （会被 Spec.UnmarshalJSON 忽略），has_angle_marks 等面板级字段须放进 Spec。
 type panelJSON struct {
 	Title string `json:"title,omitempty"`
 	Spec
@@ -75,6 +77,11 @@ func ParsePanels(raw string) ([]Panel, error) {
 	panels := make([]Panel, 0, len(multi.Panels))
 	for i, pj := range multi.Panels {
 		spec := pj.Spec
+		// 合并的角标记核对：模型明确声明原图没有弧线标记（has_angle_marks=false）时，
+		// 直接剔除其臆造的 angle_marks，避免非法引用在结构校验里误报、也避免画到图上。
+		if spec.HasAngleMarks != nil && !*spec.HasAngleMarks {
+			spec.AngleMarks = nil
+		}
 		// 先把"端点写成坐标字符串"的引用补成隐藏点，再做结构校验：
 		// 这类写法在网格图里很常见，不修就会被判成悬空引用、整条线丢掉。
 		spec.RepairCoordRefs()
