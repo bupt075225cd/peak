@@ -18,7 +18,17 @@ import (
 
 // orientationProbeMaxDim 方向探测的缩图上限：只判断文字朝向，不需要高分辨率，
 // 缩小后上传更快、vision token 更省。
-const orientationProbeMaxDim = 1024
+const orientationProbeMaxDim = 512
+
+// 方向探测/正立确认的独立短超时：二者都是"转正增强"步骤（失败可降级用原图），
+// 模型变慢时不应拖住整条识别链路（实测单次方向探测曾达 77s）。
+// 正立确认超时不能压得太紧：它答"是/否"只需很少输出，但排队+首字延迟可达 5~6s，
+// 实测 6s 会周期性超时；超时后只能沿用探测结果，而探测对 90/270 本就不稳，
+// 一旦取反就是整图倒立（题干、几何图全部反向），代价远大于多等几秒。
+const (
+	orientationDetectTimeout  = 15 * time.Second
+	orientationUprightTimeout = 12 * time.Second
+)
 
 // uprightImage 在识别前把整图转到文字正立，返回转正后的字节与"额外顺时针旋转角"。
 //
@@ -48,7 +58,9 @@ func (s *Service) uprightImage(ctx context.Context, taskID uint64, imageData []b
 	var tilt provider.Rotation
 	var derr error
 	s.callProvider(ctx, "detect_orientation", func(c context.Context) error {
-		tilt, derr = det.DetectOrientation(c, probe)
+		dctx, cancel := context.WithTimeout(c, orientationDetectTimeout)
+		defer cancel()
+		tilt, derr = det.DetectOrientation(dctx, probe)
 		return derr
 	})
 	if derr != nil {
@@ -91,7 +103,9 @@ func (s *Service) confirmUpright(ctx context.Context, taskID uint64, probe []byt
 		var up bool
 		var err error
 		s.callProvider(ctx, "upright_check", func(c context.Context) error {
-			up, err = chk.IsUpright(c, candidate)
+			uctx, cancel := context.WithTimeout(c, orientationUprightTimeout)
+			defer cancel()
+			up, err = chk.IsUpright(uctx, candidate)
 			return err
 		})
 		return up, err
