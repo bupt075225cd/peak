@@ -60,11 +60,11 @@ recognition:
     max_tokens: "${ZHIPU_MAX_TOKENS:-16384}"
     # 思考强度 low/high/max；off 表示不下发该参数（用于不支持该参数的模型）。
     reasoning_effort: "${ZHIPU_REASONING_EFFORT:-low}"
-    # 几何描述提取专用思考强度（默认 high）：该步骤要求看图直出坐标，
-    # low 强度下漏画直线、点跑偏的失败率明显更高。注意：当前模型仅支持
-    # low/high/max 三档（不支持 medium，下发会被 1210 错误拒绝）；
-    # 单次调用耗时长的问题由 ZHIPU_MAX_TOKENS 与 GEOMETRY_REDRAW_TIMEOUT 兜底。
-    geometry_effort: "${ZHIPU_GEOMETRY_EFFORT:-high}"
+    # 几何描述提取专用思考强度：该步骤要求看图直出坐标，high 更准但明显更慢
+    # （实测同一张 4.9MB 数学题图：high 50~60s / low 16~35s，端到端约 -45%）；
+    # low 档质量由结构校验失败回喂修正兜底，仍有个别漏画时只记语义偏差、不再重试。
+    # 注意：当前模型仅支持 low/high/max 三档（不支持 medium，下发会被 1210 错误拒绝）。
+    geometry_effort: "${ZHIPU_GEOMETRY_EFFORT:-low}"
 
 geometry:
   # 几何重绘开关：启用时由服务内置的 Go 渲染器（internal/geom）完成
