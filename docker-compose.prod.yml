@@ -176,6 +176,9 @@ services:
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
       ZHIPU_MODEL: ${ZHIPU_MODEL:-glm-5.3-flash}
       ZHIPU_REASONING_EFFORT: ${ZHIPU_REASONING_EFFORT:-low}
+      # 几何描述提取专用思考强度：high 更准但单次调用明显更慢（实测 -45% 端到端），
+      # 默认 low 由结构校验失败回喂修正兜底；可经 .env.production 覆盖为 high。
+      ZHIPU_GEOMETRY_EFFORT: ${ZHIPU_GEOMETRY_EFFORT:-low}
       # 几何重绘由服务内置的 Go 渲染器完成（VLM 坐标直出 + 文字避让 + 手写 SVG），
       # 全程无外部依赖。
       GEOMETRY_ENABLED: "true"
