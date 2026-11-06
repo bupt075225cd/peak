@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
-  Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText,
+  Upload, RefreshCw, Check, X, ImagePlus, Loader2, BookOpen, FileText, Info,
 } from 'lucide-vue-next'
 import {
   uploadImage, uploadDocument, isDocument, getTask, retryTask, createQuestion, createMistake,
@@ -95,6 +95,88 @@ function openViewer(url: string) {
 }
 function closeViewer() {
   viewerOpen.value = false
+}
+
+// 原图内嵌平移查看：按住拖动可上下左右移动查看放大后的原图，便于对照识别结果。
+const PAN_SCALE = 1.8
+const panEl = ref<HTMLElement | null>(null)
+const panX = ref(0)
+const panY = ref(0)
+const panDragging = ref(false)
+const panMoved = ref(false)
+const panStart = { x: 0, y: 0, px: 0, py: 0 }
+
+// 换图后重置平移位置，避免新图沿用上一张的偏移。
+watch(previewUrl, () => {
+  panX.value = 0
+  panY.value = 0
+})
+
+// 可平移范围：放大后图像超出容器的半宽/半高（transform-origin 居中）。
+function panRange() {
+  const el = panEl.value
+  if (!el) return { x: 0, y: 0 }
+  return {
+    x: ((PAN_SCALE - 1) * el.clientWidth) / 2,
+    y: ((PAN_SCALE - 1) * el.clientHeight) / 2,
+  }
+}
+
+function clampPan(v: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, v))
+}
+
+function onPanStart(clientX: number, clientY: number) {
+  panDragging.value = true
+  panMoved.value = false
+  panStart.x = clientX
+  panStart.y = clientY
+  panStart.px = panX.value
+  panStart.py = panY.value
+}
+
+function onPanMove(clientX: number, clientY: number) {
+  if (!panDragging.value) return
+  const dx = clientX - panStart.x
+  const dy = clientY - panStart.y
+  if (Math.abs(dx) + Math.abs(dy) > 4) panMoved.value = true
+  const range = panRange()
+  panX.value = clampPan(panStart.px + dx, -range.x, range.x)
+  panY.value = clampPan(panStart.py + dy, -range.y, range.y)
+}
+
+function onPanEnd() {
+  panDragging.value = false
+}
+
+function onPanMouseDown(e: MouseEvent) {
+  onPanStart(e.clientX, e.clientY)
+}
+function onPanMouseMove(e: MouseEvent) {
+  onPanMove(e.clientX, e.clientY)
+}
+function onPanMouseUp() {
+  onPanEnd()
+}
+function onPanTouchStart(e: TouchEvent) {
+  const t = e.touches[0]
+  if (t) onPanStart(t.clientX, t.clientY)
+}
+function onPanTouchMove(e: TouchEvent) {
+  const t = e.touches[0]
+  if (t) onPanMove(t.clientX, t.clientY)
+}
+function onPanTouchEnd() {
+  onPanEnd()
+}
+
+// 卡片点击仅在未发生拖拽时视为"重新选择"，避免拖动看图误触发。
+function onCardClick() {
+  if (panMoved.value) {
+    panMoved.value = false
+    return
+  }
+  pickImage()
 }
 
 function pickImage() {
@@ -379,13 +461,13 @@ function selectQuestion(idx: number) {
       <!-- 左侧：图片上传 + 识别进度 -->
       <div class="lg:col-span-2 space-y-6">
         <div
-          class="relative rounded-2xl border-2 border-dashed border-slate-300 bg-white overflow-hidden transition-all hover:border-primary-light cursor-pointer group"
-          @click="pickImage"
+          class="relative rounded-2xl border-2 border-dashed border-slate-300 bg-white overflow-hidden transition-all hover:border-primary-light group"
+          @click="onCardClick"
           @dragover.prevent
           @drop.prevent="onDrop"
         >
           <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFileChange" />
-          <div v-if="!previewUrl && !docName" class="flex flex-col items-center justify-center py-16 px-6 text-center">
+          <div v-if="!previewUrl && !docName" class="flex flex-col items-center justify-center py-16 px-6 text-center cursor-pointer">
             <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 group-hover:animate-float">
               <ImagePlus class="w-8 h-8 text-primary" />
             </div>
@@ -418,17 +500,39 @@ function selectQuestion(idx: number) {
             </div>
           </div>
           <div v-else class="relative group">
-            <img :src="previewUrl" class="w-full h-72 object-cover" alt="试卷预览" />
+            <!-- 原图预览：放大展示（PAN_SCALE），按住可上下左右拖动查看，便于对照识别结果 -->
+            <div
+              ref="panEl"
+              class="relative h-72 overflow-hidden select-none touch-none"
+              :class="panDragging ? 'cursor-grabbing' : 'cursor-grab'"
+              @mousedown="onPanMouseDown"
+              @mousemove="onPanMouseMove"
+              @mouseup="onPanMouseUp"
+              @mouseleave="onPanMouseUp"
+              @touchstart.passive="onPanTouchStart"
+              @touchmove.passive="onPanTouchMove"
+              @touchend="onPanTouchEnd"
+            >
+              <img
+                :src="previewUrl"
+                class="pointer-events-none absolute left-1/2 top-1/2 h-full w-full object-cover select-none"
+                :style="{ transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${PAN_SCALE})` }"
+                draggable="false"
+                alt="试卷预览（按住拖动查看）"
+              />
+            </div>
             <!-- 悬停才浮现"重新选择"，避免常驻遮罩挡住题目内容 -->
-            <div class="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+            <div class="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
               <button
                 type="button"
-                class="inline-flex items-center gap-2 rounded-xl bg-white/90 text-ink px-4 py-2 text-sm font-medium hover:bg-white transition-colors"
+                class="pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-white/90 text-ink px-4 py-2 text-sm font-medium hover:bg-white transition-colors"
                 @click.stop="pickImage"
               >
                 <Upload class="w-4 h-4" /> 重新选择
               </button>
             </div>
+            <!-- 拖动查看提示（低调角标） -->
+            <span class="absolute bottom-2 right-2 rounded-md bg-black/40 text-white/90 text-xs px-2 py-0.5 pointer-events-none">按住拖动查看</span>
           </div>
         </div>
 
@@ -516,6 +620,15 @@ function selectQuestion(idx: number) {
           <div class="flex items-center gap-2 mb-5">
             <BookOpen class="w-4 h-4 text-primary" />
             <h2 class="font-semibold text-ink">题目信息</h2>
+          </div>
+
+          <!-- 识别完成引导校对：可对照左侧原图核对，提交后无法修改 -->
+          <div
+            v-if="task?.status === 'success'"
+            class="mb-4 flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5"
+          >
+            <Info class="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <p class="text-sm text-amber-700">识别完成，请对照左侧原图核对题干与图形，确认无误后保存；保存后无法修改。</p>
           </div>
 
           <div class="space-y-4">
@@ -614,6 +727,7 @@ function selectQuestion(idx: number) {
         <!-- 底部操作栏 -->
         <div v-if="stemText.trim()" class="space-y-3">
           <p v-if="saveError" class="text-sm text-red-500 text-right">{{ saveError }}</p>
+          <p class="text-xs text-ink-faint text-right">保存后不可再修改，请仔细核对</p>
           <div class="flex items-center justify-end gap-3">
             <button
               type="button"
