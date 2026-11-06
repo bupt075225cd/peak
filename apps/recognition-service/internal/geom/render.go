@@ -255,17 +255,21 @@ func drawStructured(s *Spec) string {
 			vs = append(vs, vec{X: p.X, Y: p.Y})
 		}
 		fill := "none"
-		if poly.Fill {
-			fill = "rgba(37,99,235,0.10)"
-		}
-		writeVoid(&b, "polygon",
+		attrs := []svgAttr{
 			attr("points", strings.Join(coords, " ")),
 			attr("fill", fill),
 			attr("stroke", colorLine),
 			attr("stroke-width", "0.9"),
 			attr("stroke-linejoin", "round"),
 			attr("stroke-dasharray", dashAttr(poly.Dashed)),
-		)
+		}
+		if poly.Fill {
+			// 半透明填充拆成 rgb + fill-opacity：oksvg 的 ParseSVGColor
+			// 不支持 rgba()，且该解析错误不受 IgnoreErrorMode 兜底，
+			// 会导致导出时光栅化整图失败。
+			attrs = append(attrs, attr("fill", "rgb(37,99,235)"), attr("fill-opacity", "0.10"))
+		}
+		writeVoid(&b, "polygon", attrs...)
 		layout.addPolygon(vs)
 	}
 

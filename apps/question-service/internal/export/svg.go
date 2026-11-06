@@ -33,10 +33,17 @@ const (
 // 几何重绘产物是 SVG，而 PDF/docx 都只接受位图，因此用纯 Go 的 oksvg + rasterx
 // 做光栅化，避免引入外部渲染进程。
 //
-// oksvg 有两处固有限制需要在这里补足：
-//   - stroke-width 不随 SetTarget 的缩放同步放大，直接放大画布会让线条细如发丝；
-//   - 不支持 <text> 元素，几何图的顶点标注会丢失。
+// oksvg 有三处固有限制需要在这里补足：
+//   - 描边尺寸（stroke-width / stroke-dasharray / stroke-dashoffset）不随
+//     SetTarget 的缩放同步放大，直接放大画布会让线条细如发丝、虚线糊成实线；
+//   - 不支持 <text> 元素，几何图的顶点标注会丢失；
+//   - ParseSVGColor 不支持 rgba() 颜色，且该解析错误绕过 ErrorMode 直接导致
+//     ReadIconStream 整体失败（存量几何产物即踩中此坑）。
 func rasterizeSVG(data []byte, maxWidth int, fonts *FontProvider) (*ImageAsset, error) {
+	// 兼容存量产物：把 fill/stroke 上的 rgba(r,g,b,a) 改写为
+	// rgb(r,g,b) + fill-opacity/stroke-opacity 属性后再交给 oksvg。
+	data = normalizeSVGRGBA(data)
+
 	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.IgnoreErrorMode)
 	if err != nil {
 		return nil, fmt.Errorf("parse svg: %w", err)
@@ -49,9 +56,9 @@ func rasterizeSVG(data []byte, maxWidth int, fonts *FontProvider) (*ImageAsset, 
 
 	w, h := svgTargetSize(vw, vh, maxWidth)
 
-	// 缩放不为 1 时预先换算描边宽度，再重新解析。
+	// 缩放不为 1 时预先换算描边尺寸类属性，再重新解析。
 	if scale := float64(w) / float64(vw); scale != 1 {
-		scaled := scaleSVGStrokeWidth(data, scale)
+		scaled := scaleSVGStrokeMetrics(data, scale)
 		icon, err = oksvg.ReadIconStream(bytes.NewReader(scaled), oksvg.IgnoreErrorMode)
 		if err != nil {
 			return nil, fmt.Errorf("parse scaled svg: %w", err)
@@ -114,14 +121,46 @@ func svgTargetSize(vw, vh, maxWidth int) (int, int) {
 	return w, h
 }
 
-var svgStrokeWidthRe = regexp.MustCompile(`stroke-width="([0-9.]+)"`)
+var (
+	// svgStrokeWidthRe 匹配线宽属性。
+	svgStrokeWidthRe = regexp.MustCompile(`stroke-width="([0-9.]+)"`)
+	// svgDashArrayRe 匹配虚线节距属性（值可为空格/逗号分隔的多个数字）。
+	svgDashArrayRe = regexp.MustCompile(`stroke-dasharray="([0-9.,\s]+)"`)
+	// svgDashOffsetRe 匹配虚线相位偏移属性。
+	svgDashOffsetRe = regexp.MustCompile(`stroke-dashoffset="([0-9.]+)"`)
+)
 
-// scaleSVGStrokeWidth 按比例换算 SVG 中的 stroke-width。
+// svgRGBARe 匹配 fill/stroke 属性上的 rgba(r,g,b,a) 颜色。
+var svgRGBARe = regexp.MustCompile(`(fill|stroke)="rgba\(\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9.]+)\s*\)"`)
+
+// normalizeSVGRGBA 把 fill/stroke 上的 rgba(r,g,b,a) 颜色改写为
+// rgb(r,g,b) + fill-opacity/stroke-opacity 属性。
 //
-// oksvg/rasterx 描边时按属性原值处理，不会随 SetTarget 的缩放变化，
-// 因此放大画布前需要先把线宽换算到目标像素尺度。
-func scaleSVGStrokeWidth(data []byte, scale float64) []byte {
-	return svgStrokeWidthRe.ReplaceAllFunc(data, func(m []byte) []byte {
+// oksvg 的 ParseSVGColor 只支持 rgb()/hsl()/#hex，rgba() 会返回解析错误；
+// 该错误经 PushStyle 直接上抛、不受 IgnoreErrorMode 兜底，最终让
+// ReadIconStream 整体失败、整张配图导出为占位或被 docx 静默丢弃。
+// 浏览器对两种写法均支持，此改写不影响前端展示语义。
+func normalizeSVGRGBA(data []byte) []byte {
+	return svgRGBARe.ReplaceAllFunc(data, func(m []byte) []byte {
+		sub := svgRGBARe.FindSubmatch(m)
+		if len(sub) != 6 {
+			return m
+		}
+		return []byte(fmt.Sprintf(`%s="rgb(%s,%s,%s)" %s-opacity="%s"`,
+			sub[1], sub[2], sub[3], sub[4], sub[1], sub[5]))
+	})
+}
+
+// scaleSVGStrokeMetrics 按比例换算 SVG 描边的尺寸类属性：
+// stroke-width、stroke-dasharray（节距）与 stroke-dashoffset（相位）。
+//
+// oksvg/rasterx 对这三者都按属性原值在目标像素空间处理，不随 SetTarget
+// 的缩放同步变化，因此放大画布前需要先换算到目标像素尺度。
+// 若只补偿线宽而不补偿虚线节距，放大后 gap 会远小于线宽（例如 3/2.4 的
+// 节距在 16 倍放大下变成 2.4px 的缝 vs 15px 的粗线），缝隙在文档缩小显示时
+// 被抹平，虚线视觉上糊成实线。
+func scaleSVGStrokeMetrics(data []byte, scale float64) []byte {
+	data = svgStrokeWidthRe.ReplaceAllFunc(data, func(m []byte) []byte {
 		sub := svgStrokeWidthRe.FindSubmatch(m)
 		if len(sub) < 2 {
 			return m
@@ -131,6 +170,42 @@ func scaleSVGStrokeWidth(data []byte, scale float64) []byte {
 			return m
 		}
 		return []byte(fmt.Sprintf(`stroke-width="%.4f"`, v*scale))
+	})
+
+	data = svgDashOffsetRe.ReplaceAllFunc(data, func(m []byte) []byte {
+		sub := svgDashOffsetRe.FindSubmatch(m)
+		if len(sub) < 2 {
+			return m
+		}
+		v, err := strconv.ParseFloat(string(sub[1]), 64)
+		if err != nil {
+			return m
+		}
+		return []byte(fmt.Sprintf(`stroke-dashoffset="%.4f"`, v*scale))
+	})
+
+	return svgDashArrayRe.ReplaceAllFunc(data, func(m []byte) []byte {
+		sub := svgDashArrayRe.FindSubmatch(m)
+		if len(sub) < 2 {
+			return m
+		}
+		// 值可为空格或逗号分隔的多个数字（如 "3 2.4" / "3,2.4"），逐个换算，
+		// 统一以空格连接（oksvg 解析时两者等价）。
+		vals := strings.FieldsFunc(string(sub[1]), func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t'
+		})
+		out := make([]string, 0, len(vals))
+		for _, s := range vals {
+			v, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return m
+			}
+			out = append(out, strconv.FormatFloat(v*scale, 'f', -1, 64))
+		}
+		if len(out) == 0 {
+			return m
+		}
+		return []byte(fmt.Sprintf(`stroke-dasharray="%s"`, strings.Join(out, " ")))
 	})
 }
 

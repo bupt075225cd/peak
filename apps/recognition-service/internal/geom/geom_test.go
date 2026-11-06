@@ -156,7 +156,7 @@ func TestRenderAllPrimitives(t *testing.T) {
 	str := string(out)
 	for _, want := range []string{
 		"<polygon", "<circle", "<path", "<line", "<text", "AB=AC",
-		"stroke-dasharray", "rgba(37,99,235,0.10)",
+		"stroke-dasharray", `fill="rgb(37,99,235)"`, `fill-opacity="0.10"`,
 	} {
 		if !strings.Contains(str, want) {
 			t.Fatalf("rendered svg missing %q: %s", want, str)

@@ -38,14 +38,129 @@ const svgWithText = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50
 	`<text x="60" y="25" font-size="10" fill="#000000">B</text>` +
 	`</svg>`
 
-func TestScaleSVGStrokeWidth(t *testing.T) {
-	in := []byte(`<line stroke-width="0.95"/><line stroke-width="2"/>`)
-	out := scaleSVGStrokeWidth(in, 10)
+func TestScaleSVGStrokeMetrics(t *testing.T) {
+	in := []byte(`<line stroke-width="0.95" stroke-dasharray="3 2.4" stroke-dashoffset="1.5"/>` +
+		`<line stroke-width="2"/>` +
+		`<polyline stroke-dasharray="3, 2.4"/>` +
+		`<line stroke-dasharray="none"/>`)
+	out := scaleSVGStrokeMetrics(in, 10)
+
 	if !bytes.Contains(out, []byte(`stroke-width="9.5000"`)) {
 		t.Fatalf("stroke width not scaled: %s", out)
 	}
 	if !bytes.Contains(out, []byte(`stroke-width="20.0000"`)) {
 		t.Fatalf("stroke width not scaled: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`stroke-dasharray="30 24"`)) {
+		t.Fatalf("dash array not scaled: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`stroke-dasharray="30, 24"`)) && !bytes.Contains(out, []byte(`stroke-dasharray="30 24"`)) {
+		t.Fatalf("comma separated dash array not scaled: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`stroke-dashoffset="15.0000"`)) {
+		t.Fatalf("dash offset not scaled: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`stroke-dasharray="none"`)) {
+		t.Fatalf("dasharray=none must be preserved: %s", out)
+	}
+}
+
+// 回归：光栅化放大后虚线节距未随线宽同步缩放，gap（2.4px）远小于线宽
+// （15px），嵌入文档缩小显示时缝隙被抹平、虚线糊成实线。
+// 修复后 dash/gap 应等比放大，中心扫描线上仍能看到清晰的明暗交替。
+func TestRasterizeSVGKeepsDashPattern(t *testing.T) {
+	dashed := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 20">` +
+		`<rect x="0" y="0" width="100" height="20" fill="#ffffff"/>` +
+		`<line x1="5" y1="10" x2="95" y2="10" stroke="#111827" stroke-width="0.95" stroke-dasharray="3 2.4"/>` +
+		`</svg>`
+	solid := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 20">` +
+		`<rect x="0" y="0" width="100" height="20" fill="#ffffff"/>` +
+		`<line x1="5" y1="10" x2="95" y2="10" stroke="#111827" stroke-width="0.95"/>` +
+		`</svg>`
+
+	dashAsset, err := rasterizeSVG([]byte(dashed), 0, nil)
+	if err != nil {
+		t.Fatalf("rasterize dashed svg: %v", err)
+	}
+	solidAsset, err := rasterizeSVG([]byte(solid), 0, nil)
+	if err != nil {
+		t.Fatalf("rasterize solid svg: %v", err)
+	}
+	if dashAsset.Width != svgRenderWidth {
+		t.Fatalf("raster width = %d, want %d", dashAsset.Width, svgRenderWidth)
+	}
+
+	dashRuns := maxDarkRunsOnLine(t, dashAsset.Data)
+	solidRuns := maxDarkRunsOnLine(t, solidAsset.Data)
+
+	// 修复前：节距不放大，1600px 下产生数百个 3px 小段（>100）；实线恒为 1 段。
+	// 修复后：节距等比放大到 48/38.4px，约 1600/86.4 ≈ 17 段。
+	if dashRuns < 8 || dashRuns > 60 {
+		t.Fatalf("dashed line runs = %d, want 8~60 (dash pattern must scale with render size)", dashRuns)
+	}
+	if solidRuns != 1 {
+		t.Fatalf("solid line runs = %d, want 1", solidRuns)
+	}
+}
+
+// maxDarkRunsOnLine 解码 PNG 并返回暗像素游程最多的扫描线上的游程数。
+func maxDarkRunsOnLine(t *testing.T, data []byte) int {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode raster: %v", err)
+	}
+	best := 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		runs, inDark := 0, false
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			r, _, _, _ := img.At(x, y).RGBA()
+			isDark := r < 0xf000
+			if isDark {
+				if !inDark {
+					runs++
+					inDark = true
+				}
+			} else {
+				inDark = false
+			}
+		}
+		if runs > best {
+			best = runs
+		}
+	}
+	return best
+}
+
+func TestNormalizeSVGRGBA(t *testing.T) {
+	out := normalizeSVGRGBA([]byte(
+		`<polygon points="0,0 1,1" fill="rgba(37,99,235,0.10)" stroke="rgba(17,24,39,1)"/>`))
+	for _, want := range []string{
+		`fill="rgb(37,99,235)" fill-opacity="0.10"`,
+		`stroke="rgb(17,24,39)" stroke-opacity="1"`,
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("rgba not normalized: %s", out)
+		}
+	}
+	if !bytes.Contains(out, []byte(`points="0,0 1,1"`)) {
+		t.Fatalf("unrelated attributes must be preserved: %s", out)
+	}
+}
+
+// 回归：存量几何产物使用 rgba() 半透明填充，oksvg 解析此类 SVG 会整体失败
+// （曾导致导出时该配图被静默丢弃），光栅化前必须先规范化。
+func TestRasterizeSVGAcceptsRGBAFill(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 90" width="100" height="90">` +
+		`<rect x="0" y="0" width="100" height="90" fill="#ffffff"/>` +
+		`<polygon points="25,40 25,65 43,64" fill="rgba(37,99,235,0.10)" stroke="#111827" stroke-width="0.9"/>` +
+		`</svg>`
+	asset, err := rasterizeSVG([]byte(svg), 0, nil)
+	if err != nil {
+		t.Fatalf("rasterizeSVG: %v", err)
+	}
+	if _, err := png.Decode(bytes.NewReader(asset.Data)); err != nil {
+		t.Fatalf("rasterized bytes are not a valid png: %v", err)
 	}
 }
 
