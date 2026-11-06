@@ -97,33 +97,75 @@ function closeViewer() {
   viewerOpen.value = false
 }
 
-// 原图内嵌平移查看：按住拖动可上下左右移动查看放大后的原图，便于对照识别结果。
-const PAN_SCALE = 1.8
+// 原图内嵌查看：初始完整显示整图（contain），滚轮/双击缩放，放大后按住拖动
+// 上下左右平移查看细节，便于对照识别结果。平移范围按"图片渲染尺寸超出容器的
+// 部分"计算，缩到能完整显示时自动归位，保证任何缩放级别下都不会拖出空白。
+const PAN_MAX_SCALE = 5
 const panEl = ref<HTMLElement | null>(null)
+const panImg = ref<HTMLImageElement | null>(null)
+const panScale = ref(1)
 const panX = ref(0)
 const panY = ref(0)
 const panDragging = ref(false)
 const panMoved = ref(false)
 const panStart = { x: 0, y: 0, px: 0, py: 0 }
 
-// 换图后重置平移位置，避免新图沿用上一张的偏移。
-watch(previewUrl, () => {
+// 换图后重置缩放与平移位置。
+watch(previewUrl, resetPan)
+
+function resetPan() {
+  panScale.value = 1
   panX.value = 0
   panY.value = 0
-})
+  panDragging.value = false
+}
 
-// 可平移范围：放大后图像超出容器的半宽/半高（transform-origin 居中）。
-function panRange() {
+// contain 适配后的图片显示尺寸（scale=1 时）。需要图片自然尺寸，
+// 未加载完成时返回 null（此时不约束平移）。
+function containedSize() {
   const el = panEl.value
-  if (!el) return { x: 0, y: 0 }
+  const img = panImg.value
+  if (!el || !img || !img.naturalWidth || !img.naturalHeight) return null
+  const k = Math.min(el.clientWidth / img.naturalWidth, el.clientHeight / img.naturalHeight)
+  return { w: img.naturalWidth * k, h: img.naturalHeight * k }
+}
+
+// 当前缩放下可平移的半程范围：图片渲染尺寸超出容器的部分/2（transform 居中）。
+function panRange() {
+  const size = containedSize()
+  const el = panEl.value
+  if (!size || !el) return { x: 0, y: 0 }
   return {
-    x: ((PAN_SCALE - 1) * el.clientWidth) / 2,
-    y: ((PAN_SCALE - 1) * el.clientHeight) / 2,
+    x: Math.max(0, (size.w * panScale.value - el.clientWidth) / 2),
+    y: Math.max(0, (size.h * panScale.value - el.clientHeight) / 2),
   }
 }
 
-function clampPan(v: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, v))
+function clampPan() {
+  const r = panRange()
+  panX.value = Math.min(r.x, Math.max(-r.x, panX.value))
+  panY.value = Math.min(r.y, Math.max(-r.y, panY.value))
+}
+
+function zoomPan(delta: number) {
+  const next = Math.min(PAN_MAX_SCALE, Math.max(1, panScale.value + delta))
+  if (next === panScale.value) return
+  panScale.value = next
+  clampPan()
+}
+
+function onPanWheel(e: WheelEvent) {
+  e.preventDefault()
+  zoomPan(e.deltaY < 0 ? 0.5 : -0.5)
+}
+
+// 双击在"放大 2.5 倍"与"还原整图"间切换。
+function onPanDblClick() {
+  if (panScale.value > 1) {
+    resetPan()
+  } else {
+    zoomPan(1.5)
+  }
 }
 
 function onPanStart(clientX: number, clientY: number) {
@@ -140,9 +182,9 @@ function onPanMove(clientX: number, clientY: number) {
   const dx = clientX - panStart.x
   const dy = clientY - panStart.y
   if (Math.abs(dx) + Math.abs(dy) > 4) panMoved.value = true
-  const range = panRange()
-  panX.value = clampPan(panStart.px + dx, -range.x, range.x)
-  panY.value = clampPan(panStart.py + dy, -range.y, range.y)
+  panX.value = panStart.px + dx
+  panY.value = panStart.py + dy
+  clampPan()
 }
 
 function onPanEnd() {
@@ -500,25 +542,29 @@ function selectQuestion(idx: number) {
             </div>
           </div>
           <div v-else class="relative group">
-            <!-- 原图预览：放大展示（PAN_SCALE），按住可上下左右拖动查看，便于对照识别结果 -->
+            <!-- 原图预览：初始完整显示整图，滚轮/双击缩放，放大后按住拖动查看细节 -->
             <div
               ref="panEl"
               class="relative h-72 overflow-hidden select-none touch-none"
-              :class="panDragging ? 'cursor-grabbing' : 'cursor-grab'"
+              :class="panScale > 1 ? (panDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'"
               @mousedown="onPanMouseDown"
               @mousemove="onPanMouseMove"
               @mouseup="onPanMouseUp"
               @mouseleave="onPanMouseUp"
+              @wheel.prevent="onPanWheel"
+              @dblclick="onPanDblClick"
               @touchstart.passive="onPanTouchStart"
               @touchmove.passive="onPanTouchMove"
               @touchend="onPanTouchEnd"
             >
               <img
+                ref="panImg"
                 :src="previewUrl"
-                class="pointer-events-none absolute left-1/2 top-1/2 h-full w-full object-cover select-none"
-                :style="{ transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${PAN_SCALE})` }"
+                class="pointer-events-none absolute left-1/2 top-1/2 h-full w-full object-contain select-none"
+                :style="{ transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${panScale})` }"
                 draggable="false"
-                alt="试卷预览（按住拖动查看）"
+                alt="试卷预览（滚轮缩放，按住拖动查看）"
+                @load="clampPan"
               />
             </div>
             <!-- 悬停才浮现"重新选择"，避免常驻遮罩挡住题目内容 -->
@@ -531,8 +577,8 @@ function selectQuestion(idx: number) {
                 <Upload class="w-4 h-4" /> 重新选择
               </button>
             </div>
-            <!-- 拖动查看提示（低调角标） -->
-            <span class="absolute bottom-2 right-2 rounded-md bg-black/40 text-white/90 text-xs px-2 py-0.5 pointer-events-none">按住拖动查看</span>
+            <!-- 操作提示（低调角标） -->
+            <span class="absolute bottom-2 right-2 rounded-md bg-black/40 text-white/90 text-xs px-2 py-0.5 pointer-events-none">滚轮缩放 · 按住拖动 · 双击还原</span>
           </div>
         </div>
 
