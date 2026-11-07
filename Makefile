@@ -35,7 +35,7 @@ POETRY_DIR := $(CURDIR)/apps/poetry-service
 ASSET_DIR := $(CURDIR)/apps/asset-service
 GATEWAY_DIR := $(CURDIR)/apps/gateway
 # recognition-service 默认用 aliyun provider，可覆盖：make run-sqlite RECOGNITION_PROVIDER=mock
-RECOGNITION_PROVIDER ?= aliyun
+RECOGNITION_PROVIDER ?= zhipu
 # 几何重绘开关（内置 Go 渲染器，置空禁用：make run-sqlite GEOMETRY_ENABLED=false）
 GEOMETRY_ENABLED ?= true
 # 认证配置：JWT 密钥网关与 user-service 须一致；超级验证码仅开发模式生效

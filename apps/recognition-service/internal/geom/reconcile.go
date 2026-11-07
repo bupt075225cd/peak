@@ -13,8 +13,10 @@ const (
 	// axisSnapTol 标注点离坐标轴这么近时，直接吸附到轴上。
 	axisSnapTol = 1.6
 	// lineAnchorTol 直线找"锚点"（它该穿过的标注点）的容差，按画布短边取比例。
-	// 模型给的直线常常整体偏移（实测偏到 10 个单位），所以这里放得比较宽。
-	lineAnchorTol = 0.15
+	// 收紧到 0.06：过宽会让"最近标注点"选择对采样漂移过于敏感，把无字母点直线
+	// （如 l₃）错误拉到 O/B/C 上、改变斜率甚至变成贴轴线段（过原点/穿错象限的来源）。
+	// 锚点不足或不可信时宁可不重拟合，保持模型给的原始方向，交给修正回路兜底。
+	lineAnchorTol = 0.06
 	// pointSecondTol 普通标注点（非交点）找第二条约束的容差。
 	pointSecondTol = 0.08
 	// junctionTol 交点类标注点（同时是某条直线的端点）找第二条约束的容差。
@@ -407,6 +409,12 @@ func (s *Spec) anchorExtendedLines() []string {
 		if s.duplicatesExtendedLine(i, fitted) {
 			continue
 		}
+		// 重拟合后的直线不得与坐标轴重合（如被拉到 O→B 竖线、O→A 水平线）：
+		// 这种线画出来会被轴线盖住，而且会误导结构校验报"与轴重合"、浪费修正轮。
+		// 这里直接放弃拟合，保留模型给的原方向（它至少不是沿轴的退化线段）。
+		if s.coincidentWithAxis(fitted) {
+			continue
+		}
 		moved := false
 		for _, idx := range free {
 			np := projectOnLine(s.pt(idx), fitted)
@@ -436,6 +444,52 @@ func (s *Spec) duplicatesExtendedLine(idx int, fitted line2) bool {
 			continue
 		}
 		if sameLine(line2{a: s.pt(pi), b: s.pt(pj)}, fitted) {
+			return true
+		}
+	}
+	return false
+}
+
+// coincidentWithAxis 判断一条直线是否与坐标轴重合（方向接近水平/竖直且过原点），
+// 画出来会被轴线盖住。anchorExtendedLines 用它阻止把构造直线重拟合成贴轴线段。
+func (s *Spec) coincidentWithAxis(l line2) bool {
+	a := s.Axes
+	if a == nil || !l.valid() {
+		return false
+	}
+	oi := s.pointIndex(a.Origin)
+	if oi < 0 {
+		return false
+	}
+	o := s.pt(oi)
+	// 直线须通过原点（距离足够近）才算"与轴重合"；仅平行轴但偏移的线不会被轴盖住。
+	if distToLine(o, l) > 0.8 {
+		return false
+	}
+	dx, dy := l.b.X-l.a.X, l.b.Y-l.a.Y
+	length := math.Hypot(dx, dy)
+	if length < 1e-6 {
+		return false
+	}
+	// 与水平轴（x 轴）重合：方向接近水平。
+	if math.Abs(dy) <= 0.02*length {
+		return true
+	}
+	// 与竖直轴（y 轴）重合：方向接近竖直。
+	if math.Abs(dx) <= 0.02*length {
+		return true
+	}
+	return false
+}
+
+// coincidesWithOtherPoint 判断把点 except 移到 q 后是否会与其它已有点重合（距离 < 0.8）。
+// snapPointsToLines 用它避免把 C 这类交点搬到 O（或其它点）上、把直线/点退化掉。
+func (s *Spec) coincidesWithOtherPoint(except int, q vec) bool {
+	for j := range s.Points {
+		if j == except {
+			continue
+		}
+		if dist(s.pt(j), q) < 0.8 {
 			return true
 		}
 	}
@@ -523,7 +577,17 @@ func (s *Spec) snapPointsToLines() []string {
 				continue // 平行（如 x 轴与它上面那条重复的线段已被去重，这里兜底）
 			}
 			d := dist(pv, q)
-			if d <= 1e-6 || d > secTol*1.4 {
+			if d <= 1e-6 {
+				// 点已精确落在这两条线的交点上（如 C 同时是 l₁、l₂ 的交点），无需再移动；
+				// 继续找更远的第三条线反而会把点拉离正确交点（实测 C 被拉到 l₁∩l₃）。
+				break
+			}
+			if d > secTol*1.4 {
+				continue
+			}
+			// 交点与其它标注点重合时放弃搬移：把 C 搬到 O（l₂ 与 l₃ 的交点被拉到原点）
+			// 会让直线退化、触发"与轴重合"误报，破坏原本正确的交点。
+			if s.coincidesWithOtherPoint(i, q) {
 				continue
 			}
 			s.setPt(i, q)

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -150,14 +151,21 @@ const GeometrySpecSystemPrompt = `你是初中数学几何配图解析器：看�
     网格的行列数按原图**网格自身的边界**数（见 grid 字段的四步做法），
     不得为了让图形填满而增删行列；原图网格通常比图形略大或正好包住图形。
 16. 坐标系里直线的位置必须与解析式/题意一致（这类题最容易"线画错位置"）：
+    (0) **先算再画，严禁目测**：题干给出函数解析式（如 y=nx+7、y=mx、y=kx+k）与已知点
+        坐标时，先按解析式推算每条直线的斜率正负与坐标轴交点（x 轴交点令 y=0 反解 x，
+        y 轴交点令 x=0 反解 y），再按推算结果给坐标。斜率正负、交点在哪一侧、距原点多远
+        都必须与推算一致；例如"y=kx+k 与 x 轴交于 (-1,0)"说明该线在 O 左侧穿过 x 轴，
+        就不要把它画成过原点或穿到 O 右侧。
     (1) 正比例函数（y=mx、y=kx 等常数项为 0 的函数）的图象必过原点 O：
         它的 extend 线段端点必须直接用 O（如 {"from":"O","to":"C","extend":true}），
         严禁自造两个都不过 O 的构造点——画出来不过原点就与解析式矛盾。
     (2) 与坐标轴相交的字母点必须精确落在轴上：x 轴上的点（如 A）y 坐标必须等于 O 的 y 坐标，
         y 轴上的点（如 B）x 坐标必须等于 O 的 x 坐标，不得悬空偏离轴。
-    (3) 没有字母标注点、需要自造 hidden 构造点的直线，先判断它与 O 的相对位置再给坐标：
-        它与 x 轴的交点在 O 的哪一侧、交点距 O 多远（相对坐标比例），在轴上方还是下方，
-        两个构造点的连线必须与这些关系一致；尤其当交点紧贴 O（如 l₃:y=kx+k 与 x 轴交于
+    (3) 没有字母标注点、需要自造 hidden 构造点的直线（如只印了 l₃），构造点**优先取
+        "由解析式推算出的、它与 x 轴/y 轴的交点"**：允许构造点落在坐标轴上——只要两个
+        构造点不落在同一条轴上即可，落在轴上的交点不会被轴线盖住，反而是最可靠的定位依据。
+        只有推算不出轴交点时才取图上的其它点，但必须保证两个构造点不共线于同一条轴，
+        且斜率正负、交点位置与解析式一致。尤其当交点紧贴 O（如 l₃:y=kx+k 与 x 轴交于
         O 左侧一格的 (-1,0)）时，严禁把构造点放到 O 上或 O 的另一侧。
 
 仅当某张图完全无法用上述结构化字段表达时，才在该张图里额外提供 "svg" 字段，
@@ -181,6 +189,14 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 		sb.WriteString("\n【题干文字（已知量以此为准，不要采信图形目测值）】\n")
 		sb.WriteString(t)
 	}
+	// 题干含函数解析式时，把"先算再画"作为硬约束再强调一次：解析式 + 已知点坐标
+	// 完全决定了每条直线的斜率与轴交点，模型按推算给坐标即可，不要目测图给坐标——
+	// 这是"同一条线有时过原点、有时穿别的象限"这类随机漂移最直接的收敛手段。
+	if hasFunctionExpression(stemText) {
+		sb.WriteString("\n【坐标系硬约束】题干给出了函数解析式与已知点坐标：请先按解析式推算每条直线的" +
+			"斜率正负与 x 轴/y 轴交点坐标（x 轴交点令 y=0 反解 x、y 轴交点令 x=0 反解 y），" +
+			"再按推算结果给坐标，严禁凭目测估点。正比例函数的 extend 线段必须直接用原点 O 作为端点。")
+	}
 	if correction != "" {
 		sb.WriteString("\n【上一轮输出的几何描述存在结构问题，请修正后重新输出完整 JSON】\n")
 		sb.WriteString(correction)
@@ -203,6 +219,15 @@ func (v *vlmCapabilities) ExtractGeometrySpec(ctx context.Context, geoImage []by
 		return "", &ModelOutputError{Raw: out, Err: jerr}
 	}
 	return spec, nil
+}
+
+// funcExprRe 匹配题干里的函数解析式（y=kx+b / y=mx / y=kx+k 等一次/正比例函数），
+// 用于判断是否需要向几何提取注入"先算再画"的坐标系硬约束。
+var funcExprRe = regexp.MustCompile(`y\s*[＝=]\s*[^\s，。；,;]+x`)
+
+// hasFunctionExpression 判断题干文字是否包含一次/正比例函数解析式。
+func hasFunctionExpression(stem string) bool {
+	return funcExprRe.MatchString(stem)
 }
 
 // ModelOutputError 表示模型输出无法解析为 JSON，保留原始输出供排查日志使用。
