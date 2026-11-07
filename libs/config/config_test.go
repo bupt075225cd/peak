@@ -185,6 +185,33 @@ func TestIntTypeConversions(t *testing.T) {
 	}
 }
 
+func TestFloatTypeConversions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "float.yaml")
+	// 覆盖 Float 的各类型分支：整型、浮点、字符串数字、非法值回退默认。
+	content := "a: 0\nb: 2.5\nc: \"0.1\"\nd: not-a-number\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := Load(path)
+	if got := cfg.Float("a", 1); got != 0 {
+		t.Fatalf("expected 0, got %v", got)
+	}
+	if got := cfg.Float("b", 0); got != 2.5 {
+		t.Fatalf("expected 2.5, got %v", got)
+	}
+	if got := cfg.Float("c", 0); got != 0.1 {
+		t.Fatalf("expected 0.1, got %v", got)
+	}
+	if got := cfg.Float("d", 0.7); got != 0.7 {
+		t.Fatalf("invalid value should fall back to default, got %v", got)
+	}
+	// 键不存在时返回默认值。
+	if got := cfg.Float("missing", 1.5); got != 1.5 {
+		t.Fatalf("missing key should return default, got %v", got)
+	}
+}
+
 func TestExpandEnvInSlice(t *testing.T) {
 	// 覆盖 expandMap 的 []any 分支：slice 中的字符串与嵌套 map 都会被展开。
 	dir := t.TempDir()
