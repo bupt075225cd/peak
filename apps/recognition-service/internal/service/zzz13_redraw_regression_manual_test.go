@@ -142,6 +142,7 @@ func TestManualRedrawRegression(t *testing.T) {
 			geom.StripUnprintedLineNames(panels, printedLineNames)
 			geom.CheckFigureCount(panels, c.stem+"\n"+geo.Description)
 			geom.CheckNamedLines(panels, c.stem, geo.Description, printedLineNames)
+			geom.CheckFunctionGraphPoints(panels, c.stem)
 			geom.CheckAxisCoincidentSegments(panels)
 			geom.CheckFloatingPoints(panels)
 			geom.CheckTriangleEdges(panels, c.stem)

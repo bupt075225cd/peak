@@ -549,6 +549,10 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	var bestIssues []string
 	// 入口转正方向判反时的撤销重试只做一次，避免来回旋转耗光重试轮数。
 	entryUprightOppositeTried := false
+	// 函数图象过点问题的回喂上限：约束来自题干解析式，通常一两轮即可修正；
+	// 题干解析本身可能有误，给独立上限避免反复回喂不收敛。
+	const maxFuncPointRetries = 2
+	funcPointRetries := 0
 	// valid 统计"有效轮"（产出非空 panels 且完成校验）——才消耗 geometryMaxAttempts 修正预算。
 	for valid := 0; valid < s.geometryMaxAttempts && infraRetries <= geometryMaxInfraRetries; {
 		// 超时/取消后立即退出：不更新进度、不再发起注定失败的调用。
@@ -685,6 +689,9 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		// 必须同时用几何描述（VLM 对图的判读）把关：题干后面小问才会引入的直线
 		// （如"直线 l₃ 与 x 轴交于点 E"）原图并没有画，不能要求模型凭空补画。
 		geom.CheckNamedLines(parsed, result.StemText, result.Geometry.Description, printedLineNames)
+		// 函数图象过点核对：题干要求经过的标注点/定点必须真的落在直线上
+		// （如 l₁ 应过 A、B，l₃:y=kx+k 恒过 (-1,0) 不得过原点）。
+		funcPointIssues := geom.CheckFunctionGraphPoints(parsed, result.StemText)
 
 		panels = panels[:0]
 		renderFailed := false
@@ -717,11 +724,19 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			best, bestHard, bestSoft = snapshotPanels(panels), structCount, semanticCount
 			bestIssues = issues
 		}
-		// 结构问题已清零即停止回喂（含"结构+语义均无"与"仅剩语义偏差"两种情况）。
-		// 语义偏差（题干与图形不一致）多源于题干转录不准，反复让模型"修正"只会越改越差，
-		// 且每轮都要等满一次 VLM 提取；结构完整即可输出，剩余语义偏差只记日志、不再重试。
+		// 结构问题已清零时的收尾：
+		//   - 仍有"函数图象没过题干要求的点"（基于题干解析式的硬约束、误报率低）→ 单独回喂；
+		//   - 其余语义偏差（题干与图形不一致）多源于题干转录不准，反复"修正"只会越改越差，
+		//     只记日志、不再重试。
 		if structCount == 0 {
-			break
+			if len(funcPointIssues) == 0 || funcPointRetries >= maxFuncPointRetries {
+				break
+			}
+			funcPointRetries++
+			s.log.Warn("geometry function points mismatch, retrying",
+				zap.Int("attempt", attempts), zap.Strings("issues", funcPointIssues))
+			correction = formatFunctionPointIssues(funcPointIssues)
+			continue
 		}
 		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempts),
 			zap.Int("structural", structCount), zap.Int("semantic", semanticCount),
@@ -808,6 +823,25 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// formatFunctionPointIssues 把"函数图象没过题干要求的点"回喂给模型。
+// 与结构问题模板区分：修正方向是"按解析式重算坐标"，不是"修 JSON 结构"。
+func formatFunctionPointIssues(issues []string) string {
+	var sb strings.Builder
+	sb.WriteString("上一轮重绘的函数图象与题干条件不一致：\n")
+	for i, issue := range issues {
+		if i >= 8 {
+			sb.WriteString("-（其余问题省略）\n")
+			break
+		}
+		sb.WriteString("- ")
+		sb.WriteString(issue)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("请先用题干给出的解析式与已知点重新解出各条直线的系数、斜率与坐标轴交点，" +
+		"再据此校正 points 坐标后重新输出完整 JSON（只改坐标，不要增删图元）。")
+	return sb.String()
 }
 
 // formatValidateIssues 把几何描述的结构校验问题清单格式化为回喂 VLM 的修正提示。

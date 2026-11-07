@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -992,6 +993,288 @@ func CheckNamedLines(panels []Panel, stemText, figDescription string, lineLabels
 				strings.Join(missing, "、")))
 		}
 	}
+}
+
+// ---------- 函数图象过点核对 ----------
+
+// functionPointTolRatio 判定"直线经过某标注点/定点"的阈值（占画布短边比例）。
+// 4% 对 100x70 画布约 2.8 个单位：能抓住实测中"点偏离直线 10~19 个单位"的明显错误，
+// 又不会因坐标取整（1~2 位小数）或文字避让误报。
+const functionPointTolRatio = 0.04
+
+// functionLineConstraint 题干解析出的"某条函数图象必须满足"的几何约束。
+type functionLineConstraint struct {
+	line           string   // 归一化直线名，如 l1
+	display        string   // 原样名称，如 l₁
+	points         []string // 该直线必须经过的标注点（题干"交于 A、B"/"交于点 C"）
+	proportional   bool     // 正比例函数（y=mx，常数项为 0），图象必过原点
+	fixedNegativeX bool     // y=kx+k 型：恒过 (-1,0)，与 x 轴交点须在 O 负方向且不过 O
+}
+
+var (
+	// proportionalLineRe 匹配"正比例函数 y=mx 的图象 l₂"。
+	proportionalLineRe = regexp.MustCompile(
+		`正比例函数\s*y\s*=\s*[a-zA-Z]?\s*x\s*(?:的)?\s*(?:图象|图像|图)?\s*(l\s*[0-9₀-₉])`)
+	// selfParamLineRe 匹配"y=kx+k 的图象 l₃"（x 系数与常数项为同一字母）。
+	// Go 的 regexp 不支持反向引用，故捕获两个字母后在代码里比较。
+	selfParamLineRe = regexp.MustCompile(
+		`y\s*=\s*([a-zA-Z])\s*x\s*[+＋]\s*([a-zA-Z])\s*(?:的)?\s*(?:图象|图像|图)?\s*(l\s*[0-9₀-₉])`)
+	// lineNameTokenRe2 匹配题干里出现的直线名（l₁ / l1）。
+	lineNameTokenRe2 = regexp.MustCompile(`l\s*[0-9₀-₉]`)
+	// axisInterceptsRe 匹配"分别与 x，y 轴交于 A，B"/"与 x 轴，y 轴分别交于 A(-4,0)，B"。
+	axisInterceptsRe = regexp.MustCompile(
+		`(?:分别与\s*x\s*[，,、]?\s*y\s*轴|与\s*x\s*轴\s*[，,、]?\s*y\s*轴\s*分别)\s*交于\s*` +
+			`([A-Z])(?:\s*[（(][^）)]*[）)])?\s*[，,、]\s*([A-Z])`)
+	// crossPointRe 匹配"交于点 C"。
+	crossPointRe = regexp.MustCompile(`交于点\s*([A-Z])`)
+)
+
+// splitStemSentences 按句号/分号/换行切句（不按逗号切，避免拆散"x，y 轴""A，B"）。
+func splitStemSentences(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool {
+		return r == '。' || r == '；' || r == ';' || r == '\n'
+	})
+}
+
+func appendUniqueString(list []string, items ...string) []string {
+	for _, it := range items {
+		dup := false
+		for _, e := range list {
+			if e == it {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			list = append(list, it)
+		}
+	}
+	return list
+}
+
+// parseFunctionLineConstraints 从题干解析函数图象的"必须过点"约束。
+// 采用保守解析：句式不认识时直接跳过（宁漏勿错），只处理教材/试卷里最常见的表述。
+func parseFunctionLineConstraints(stemText string) []functionLineConstraint {
+	if strings.TrimSpace(stemText) == "" {
+		return nil
+	}
+	byName := make(map[string]*functionLineConstraint)
+	get := func(raw string) *functionLineConstraint {
+		n := normalizeLineName(raw)
+		if n == "" {
+			return nil
+		}
+		c := byName[n]
+		if c == nil {
+			c = &functionLineConstraint{line: n, display: strings.TrimSpace(raw)}
+			byName[n] = c
+		}
+		return c
+	}
+	for _, m := range proportionalLineRe.FindAllStringSubmatch(stemText, -1) {
+		if c := get(m[1]); c != nil {
+			c.proportional = true
+		}
+	}
+	for _, m := range selfParamLineRe.FindAllStringSubmatch(stemText, -1) {
+		if !strings.EqualFold(m[1], m[2]) {
+			continue // 不是 y=kx+k 型（系数与常数项不同）
+		}
+		if c := get(m[3]); c != nil {
+			c.fixedNegativeX = true
+		}
+	}
+	for _, sentence := range splitStemSentences(stemText) {
+		names := lineNameTokenRe2.FindAllString(sentence, -1)
+		if len(names) == 0 {
+			continue
+		}
+		// 轴交点归属句内第一条直线（"直线 l₁ … 分别与 x，y 轴交于 A，B"）。
+		if m := axisInterceptsRe.FindStringSubmatch(sentence); m != nil {
+			if c := get(names[0]); c != nil {
+				c.points = appendUniqueString(c.points, m[1], m[2])
+			}
+		}
+		// "A 与 B 交于点 C"：交点由"交于点"之前最近的两条直线确定。
+		// 不能关联句内所有直线——同一句后半段可能又引入别的线（如"…l₂ 交于点 C，
+		// 若一次函数 y=kx+k 的图象 l₃ 与…"），把 C 也挂到 l₃ 上会误报。
+		for _, loc := range crossPointRe.FindAllStringSubmatchIndex(sentence, -1) {
+			prior := lineNameTokenRe2.FindAllString(sentence[:loc[0]], -1)
+			if len(prior) > 2 {
+				prior = prior[len(prior)-2:]
+			}
+			pt := sentence[loc[2]:loc[3]]
+			for _, n := range prior {
+				if c := get(n); c != nil {
+					c.points = appendUniqueString(c.points, pt)
+				}
+			}
+		}
+	}
+	out := make([]functionLineConstraint, 0, len(byName))
+	for _, c := range byName {
+		if c.proportional || c.fixedNegativeX || len(c.points) > 0 {
+			out = append(out, *c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].line < out[j].line })
+	return out
+}
+
+// extendedLineByLabelName 用图上印刷的直线名称标签（l₁/l₂…）找到对应的延长线。
+// 标签离所有延长线都太远（或该名称未印刷）时返回 false，调用方跳过校验。
+func (s *Spec) extendedLineByLabelName(name string) (line2, bool) {
+	want := normalizeLineName(name)
+	if want == "" || len(s.Labels) == 0 {
+		return line2{}, false
+	}
+	var lp vec
+	found := false
+	for _, l := range s.Labels {
+		if normalizeLineName(l.Text) == want {
+			lp = vec{X: l.X, Y: l.Y}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return line2{}, false
+	}
+	short := math.Min(s.Canvas.Width, s.Canvas.Height)
+	if short <= 0 {
+		return line2{}, false
+	}
+	best, bestD := line2{}, math.Inf(1)
+	for _, seg := range s.Segments {
+		if !seg.Extend {
+			continue
+		}
+		pi, pj := s.pointIndex(seg.From), s.pointIndex(seg.To)
+		if pi < 0 || pj < 0 || pi == pj {
+			continue
+		}
+		ln := line2{a: s.pt(pi), b: s.pt(pj)}
+		if d := distToLine(lp, ln); d < bestD {
+			best, bestD = ln, d
+		}
+	}
+	if bestD > lineLabelTol*short {
+		return line2{}, false
+	}
+	return best, true
+}
+
+// xAxisLine 取 x 轴所在直线（原点 → x 轴正方向端点）。
+func xAxisLine(s *Spec) (line2, bool) {
+	a := s.Axes
+	if a == nil {
+		return line2{}, false
+	}
+	oi, xi := s.pointIndex(a.Origin), s.pointIndex(a.X.To)
+	if oi < 0 || xi < 0 || oi == xi {
+		return line2{}, false
+	}
+	return line2{a: s.pt(oi), b: s.pt(xi)}, true
+}
+
+// CheckFunctionGraphPoints 题干-图形语义核对：函数图象必须经过题干明确要求的点。
+// 结构校验只检查"标注点是否落在某条线/轴上"，无法发现"直线该过某个点却没画过"：
+// 实测同一道题里 l₁ 应过 A、B 却漏了 B（B 浮在线外 18 个单位），
+// l₃:y=kx+k 恒过 (-1,0) 却被画成过原点。这里补上三类低误报的硬约束：
+//  1. 正比例函数（y=mx，常数项为 0）的图象必须过原点 O；
+//  2. y=kx+k 型渐过 (-1,0)：与 x 轴交点须在 O 负方向，且整条线不得过 O；
+//  3. 题干"交于 A、B"/"交于点 C"里的标注点必须真的落在对应的直线上。
+// 返回值是本轮新增的问题文本，供调用方决定是否回喂模型修正
+// （这类约束来自题干解析式，误报率低，值得单独回喂；不计入结构问题）。
+func CheckFunctionGraphPoints(panels []Panel, stemText string) []string {
+	cons := parseFunctionLineConstraints(stemText)
+	if len(cons) == 0 {
+		return nil
+	}
+	added := make([]string, 0, 4)
+	add := func(pi int, msg string) {
+		panels[pi].Issues = append(panels[pi].Issues, msg)
+		added = append(added, msg)
+	}
+	for i := range panels {
+		spec := &panels[i].Spec
+		if spec.Axes == nil {
+			continue
+		}
+		short := math.Min(spec.Canvas.Width, spec.Canvas.Height)
+		if short <= 0 {
+			continue
+		}
+		tol := functionPointTolRatio * short
+		originName := strings.TrimSpace(spec.Axes.Origin)
+		for _, c := range cons {
+			ln, ok := spec.extendedLineByLabelName(c.line)
+			if !ok {
+				continue
+			}
+			// 1) 必须经过的标注点
+			var miss []string
+			for _, pn := range c.points {
+				p, ok := spec.PointByName(pn)
+				if !ok || p.Hidden || !isFigureLabel(strings.TrimSpace(p.Name)) {
+					continue
+				}
+				if d := distToLine(vec{X: p.X, Y: p.Y}, ln); d > tol {
+					miss = append(miss, fmt.Sprintf("%s（偏离约 %s 个单位）", pn, num(d)))
+				}
+			}
+			if len(miss) > 0 {
+				add(i, fmt.Sprintf(
+					"题干中直线 %s 经过 %s，但重绘的 %s 没有穿过：%s。"+
+						"请按题干给出的解析式/已知点重新推算 %s 的斜率与位置，使它同时经过这些点。",
+					c.display, strings.Join(c.points, "、"), c.display,
+					strings.Join(miss, "、"), c.display))
+			}
+			// 2) 正比例函数必过原点
+			if c.proportional {
+				if o, ok := spec.PointByName(spec.Axes.Origin); ok {
+					if d := distToLine(vec{X: o.X, Y: o.Y}, ln); d > tol {
+						add(i, fmt.Sprintf(
+							"题干中 %s 是正比例函数（y=mx，常数项为 0），图象必须过原点 %s，"+
+								"但重绘的 %s 偏离原点约 %s 个单位。请把它改成过原点的直线。",
+							c.display, originName, c.display, num(d)))
+					}
+				}
+			}
+			// 3) y=kx+k 恒过 (-1,0)，不可能过原点
+			if c.fixedNegativeX {
+				o, ok := spec.PointByName(spec.Axes.Origin)
+				if !ok {
+					continue
+				}
+				ov := vec{X: o.X, Y: o.Y}
+				if d := distToLine(ov, ln); d <= tol {
+					add(i, fmt.Sprintf(
+						"题干中 %s 的解析式是 y=kx+k（x 的系数与常数项相同），它恒过 (-1,0)、不可能过原点，"+
+							"但重绘的 %s 却穿过了原点 %s。请按原图把它改成与 x 轴交于 O 左侧一点的直线。",
+						c.display, c.display, originName))
+					continue
+				}
+				axis, ok := xAxisLine(spec)
+				if !ok {
+					continue
+				}
+				q, ok := lineCross(ln, axis)
+				if !ok {
+					continue
+				}
+				if dir := unit(sub(axis.b, axis.a)); dir.X != 0 || dir.Y != 0 {
+					if t := dot(sub(q, ov), dir); t > 0 {
+						add(i, fmt.Sprintf(
+							"题干中 %s 的解析式是 y=kx+k，恒过 (-1,0)，与 x 轴的交点应在原点 %s 的左侧，"+
+								"但重绘的 %s 与 x 轴交于 O 的右侧。请把交点改到 O 左侧。",
+							c.display, originName, c.display))
+					}
+				}
+			}
+		}
+	}
+	return added
 }
 
 // lineNameTokenRe 匹配文本里出现的直线名称（l₁ / l2 / L 3 / 单独的 l）。

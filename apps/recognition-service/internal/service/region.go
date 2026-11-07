@@ -124,6 +124,13 @@ func planGeometryRegion(img image.Image, bbox *provider.BoundingBox) (image.Rect
 	baseArea := areaOf(base)
 	unionArea := areaOf(union)
 	if unionArea > int64(float64(w*h)*regionMaxImageRatio) {
+		// 整页试卷照片里，几何图的墨迹连通域常经细线/文字蔓延到整页，并集接近整图。
+		// 此时不要回退整图：超宽图（如 5706x2232）缩到 960 宽后高度只剩 376px，
+		// 几何区域实际不足 200px 宽，模型目测点位置必然漂移。bbox 由几何识别给出、
+		// 且框内已确认有墨迹（touch=true），外扩 12% 后直接裁剪即可保证分辨率。
+		if baseArea > 0 && baseArea <= int64(float64(w*h)*regionMaxImageRatio) {
+			return base, "base"
+		}
 		return b, "full"
 	}
 	if baseArea > 0 && unionArea < int64(float64(baseArea)*regionMinUnionRatio) {
