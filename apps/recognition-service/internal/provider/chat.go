@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"peak/libs/observability"
 )
 
 // dashScopeEndpoint 阿里云百炼 token-plan（套餐）的 OpenAI 兼容地址。
@@ -104,6 +106,14 @@ type chatImageURL struct {
 	URL string `json:"url"`
 }
 
+// chatUsage OpenAI 兼容响应的 token 用量统计。
+// GLM 等推理模型的 reasoning token 已计入 completion_tokens。
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // chatResponse OpenAI 兼容 chat.completions 响应体。
 type chatResponse struct {
 	Choices []struct {
@@ -115,6 +125,9 @@ type chatResponse struct {
 		// 不检查它的话，截断的 JSON 只会表现为"模型输出不是合法 JSON"，无法定位。
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	// Usage token 用量：用于 Prometheus 指标（ai_tokens_total / ai_call_tokens），
+	// 截断等错误场景下响应也可能带 usage，因此解析后立即上报、不依赖成功路径。
+	Usage *chatUsage `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
@@ -206,6 +219,13 @@ func (d *ChatClient) chatWith(ctx context.Context, system, user string, image []
 	var out chatResponse
 	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fmt.Errorf("%s parse: %w", d.provider, err)
+	}
+
+	// token 用量上报：按 provider + 业务操作名（context 注入）分维度累计。
+	// 放在错误检查之前：截断/错误响应也可能携带 usage，同样计费、同样要观测。
+	if out.Usage != nil {
+		observability.ObserveAITokens(d.provider, observability.AIOperationFromContext(ctx),
+			out.Usage.PromptTokens, out.Usage.CompletionTokens)
 	}
 
 	if out.Error != nil {

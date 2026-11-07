@@ -274,6 +274,9 @@ func (s *Service) observeTask(ctx context.Context, status string, start time.Tim
 // 便于区分"慢在自家代码还是第三方 AI"、统计各能力调用的失败率与耗时分布。
 func (s *Service) callProvider(ctx context.Context, operation string, call func(context.Context) error) {
 	ctx, span := observability.StartAISpan(ctx, s.prov.Name(), operation)
+	// 业务操作名注入 context：底层 ChatClient 据此把 token 消耗计入
+	// ai_tokens_total 的 operation 维度（OCR/整题解析/几何提取…分摊成本）。
+	ctx = observability.WithAIOperation(ctx, operation)
 	start := time.Now()
 	err := call(ctx)
 	observability.ObserveAICall(s.prov.Name(), operation, err, start)

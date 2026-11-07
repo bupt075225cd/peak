@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"peak/libs/observability"
 )
 
 func TestZhipuProviderDefaults(t *testing.T) {
@@ -130,5 +134,43 @@ func TestGeometrySpecSamplingParams(t *testing.T) {
 	}
 	if _, ok := got["temperature"]; ok {
 		t.Fatalf("regular chat should not send temperature: %v", got["temperature"])
+	}
+}
+
+// TestChatUsageMetrics 响应中的 usage 被解析并计入 token 指标（按 operation 分维度）。
+func TestChatUsageMetrics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],` +
+			`"usage":{"prompt_tokens":120,"completion_tokens":45,"total_tokens":165}}`))
+	}))
+	defer srv.Close()
+
+	z := NewZhipuProvider(ZhipuConfig{APIKey: "k", Endpoint: srv.URL})
+	ctx := observability.WithAIOperation(context.Background(), "geometry_spec_extract")
+	if _, err := z.RecognizeText(ctx, []byte("img")); err != nil {
+		t.Fatalf("recognize text: %v", err)
+	}
+	if got := testutil.ToFloat64(observability.AITokensTotal.WithLabelValues("zhipu", "geometry_spec_extract", "prompt")); got != 120 {
+		t.Fatalf("prompt tokens metric: got %v", got)
+	}
+	if got := testutil.ToFloat64(observability.AITokensTotal.WithLabelValues("zhipu", "geometry_spec_extract", "completion")); got != 45 {
+		t.Fatalf("completion tokens metric: got %v", got)
+	}
+
+	// 截断响应（finish_reason=length）同样携带 usage，也应计入后再报错。
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"length"}],` +
+			`"usage":{"prompt_tokens":10,"completion_tokens":8192,"total_tokens":8202}}`))
+	}))
+	defer srv2.Close()
+
+	z2 := NewZhipuProvider(ZhipuConfig{APIKey: "k", Endpoint: srv2.URL})
+	if _, err := z2.RecognizeText(ctx, []byte("img")); err == nil {
+		t.Fatal("expected truncation error")
+	}
+	if got := testutil.ToFloat64(observability.AITokensTotal.WithLabelValues("zhipu", "geometry_spec_extract", "completion")); got != 45+8192 {
+		t.Fatalf("truncated usage should still be recorded, got %v", got)
 	}
 }

@@ -22,6 +22,41 @@ func (fakeDriver) Open(string) (driver.Conn, error) { return nil, errors.New("no
 
 func init() { sql.Register("fake-observability-test", fakeDriver{}) }
 
+func TestObserveAITokens(t *testing.T) {
+	const provider, op = "test-provider", "test-op"
+	beforePrompt := testutil.ToFloat64(AITokensTotal.WithLabelValues(provider, op, "prompt"))
+	beforeCompletion := testutil.ToFloat64(AITokensTotal.WithLabelValues(provider, op, "completion"))
+
+	ObserveAITokens(provider, op, 120, 45)
+	if got := testutil.ToFloat64(AITokensTotal.WithLabelValues(provider, op, "prompt")); got != beforePrompt+120 {
+		t.Fatalf("prompt tokens: want %v, got %v", beforePrompt+120, got)
+	}
+	if got := testutil.ToFloat64(AITokensTotal.WithLabelValues(provider, op, "completion")); got != beforeCompletion+45 {
+		t.Fatalf("completion tokens: want %v, got %v", beforeCompletion+45, got)
+	}
+
+	// usage 缺失（0/0）时不上报，不给 unknown 维度灌零值。
+	ObserveAITokens(provider, op, 0, 0)
+	if got := testutil.ToFloat64(AITokensTotal.WithLabelValues(provider, op, "prompt")); got != beforePrompt+120 {
+		t.Fatalf("zero usage should not be recorded, got %v", got)
+	}
+
+	// 空 provider/operation 兜底为 unknown。
+	ObserveAITokens("", "", 10, 5)
+	if got := testutil.ToFloat64(AITokensTotal.WithLabelValues("unknown", "unknown", "prompt")); got != 10 {
+		t.Fatalf("empty labels should fall back to unknown, got %v", got)
+	}
+
+	// context 注入/读取。
+	ctx := WithAIOperation(context.Background(), "geometry_spec_extract")
+	if got := AIOperationFromContext(ctx); got != "geometry_spec_extract" {
+		t.Fatalf("operation from context: got %q", got)
+	}
+	if got := AIOperationFromContext(context.Background()); got != "" {
+		t.Fatalf("expected empty operation, got %q", got)
+	}
+}
+
 func TestObserveAICall(t *testing.T) {
 	const provider, op = "test-provider", "test-op"
 	beforeOK := testutil.ToFloat64(AICallTotal.WithLabelValues(provider, op, "ok"))

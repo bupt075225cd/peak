@@ -2,6 +2,7 @@
 package observability
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -87,6 +88,22 @@ var (
 		Name: "geometry_redraw_issues_total",
 		Help: "Geometry redraw validation issues by category (structural or semantic).",
 	}, []string{"provider", "category"})
+
+	// AITokensTotal LLM token 消耗累计（type: prompt/completion）。
+	// 由 ChatClient 从 OpenAI 兼容响应的 usage 字段解析上报，覆盖全部 provider；
+	// operation 取调用方经 WithAIOperation 注入的业务操作名（未注入记 unknown）。
+	AITokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ai_tokens_total",
+		Help: "Total LLM tokens consumed by provider/operation/type (prompt or completion).",
+	}, []string{"provider", "operation", "type"})
+
+	// AICallTokens 单次 AI 调用的 token 总量直方图（prompt+completion）。
+	// 用于观察单次调用分布、定位 token 异常的轮次（如重绘反复重试）。
+	AICallTokens = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "ai_call_tokens",
+		Help:    "Total tokens (prompt+completion) per AI provider call.",
+		Buckets: []float64{100, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 65000},
+	}, []string{"provider", "operation"})
 )
 
 // ObserveAICall 记录一次 AI provider 调用的耗时与结果（成功记 ok，失败记 error）。
@@ -107,6 +124,49 @@ func ObserveMistakeOp(operation string, err error) {
 		status = "error"
 	}
 	MistakeOpsTotal.WithLabelValues(operation, status).Inc()
+}
+
+// ObserveAITokens 记录一次 AI 调用的 token 消耗：累计计数（按 prompt/completion
+// 分型）与单次总量直方图。usage 缺失（0/0）时跳过，避免给 unknown 维度灌零值。
+func ObserveAITokens(providerName, operation string, prompt, completion int) {
+	if prompt <= 0 && completion <= 0 {
+		return
+	}
+	if providerName == "" {
+		providerName = "unknown"
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if prompt > 0 {
+		AITokensTotal.WithLabelValues(providerName, operation, "prompt").Add(float64(prompt))
+	}
+	if completion > 0 {
+		AITokensTotal.WithLabelValues(providerName, operation, "completion").Add(float64(completion))
+	}
+	AICallTokens.WithLabelValues(providerName, operation).Observe(float64(prompt + completion))
+}
+
+// aiOperationKey context 中业务操作名的键。
+type aiOperationKey struct{}
+
+// WithAIOperation 把业务操作名（如 "geometry_spec_extract"）注入 context，
+// 供底层 ChatClient 上报 token 指标时按操作分维度。
+func WithAIOperation(ctx context.Context, operation string) context.Context {
+	if operation == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, aiOperationKey{}, operation)
+}
+
+// AIOperationFromContext 读取 context 中的业务操作名；未注入返回空串
+// （指标侧兜底为 unknown）。
+func AIOperationFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	op, _ := ctx.Value(aiOperationKey{}).(string)
+	return op
 }
 
 // ObserveGeometryRedraw 记录一次几何重绘的结果：耗时（按 outcome 分桶）、实际轮数、
