@@ -21,9 +21,11 @@ type Config struct {
 	MaxItems int
 	// FetchTimeout 单张图片拉取超时。
 	FetchTimeout time.Duration
-	// MergeStemLineBreaks 是否把题干中的换行折叠为空格后重新排版。
+	// MergeStemLineBreaks 是否折叠题干中的版式性换行后重新排版。
 	//
-	// 识别阶段带入的换行位置与导出页宽无关，默认合并，避免"一行没排满就换行"。
+	// 识别阶段带入的换行分两类：结构性（小问编号、表格、空行分段）保留，
+	// 版式性（原卷按纸面宽度折行的痕迹）折叠，交由渲染器按正文宽度统一重排，
+	// 避免"一行没排满就换行"。规则与前端 StemText 展示保持一致。
 	MergeStemLineBreaks bool
 }
 

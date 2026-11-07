@@ -26,6 +26,11 @@ type FontProvider struct {
 	mu    sync.Mutex
 	sfnt  *sfnt.Font
 	cache map[float64]font.Face
+
+	// checkMu 保护缺字形探测（与 Face 的 mu 分离：Missing 内部会调用 Face）。
+	checkMu   sync.Mutex
+	missing   map[rune]bool
+	checkFace font.Face
 }
 
 // NewFontProvider 创建字体提供者。
@@ -45,7 +50,7 @@ func NewFontProvider(path string) (*FontProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse export font: %w", err)
 	}
-	return &FontProvider{sfnt: f, cache: make(map[float64]font.Face)}, nil
+	return &FontProvider{sfnt: f, cache: make(map[float64]font.Face), missing: make(map[rune]bool)}, nil
 }
 
 // Face 返回指定字号的字体 face，同一字号复用同一实例。

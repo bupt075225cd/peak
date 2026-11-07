@@ -46,6 +46,21 @@ func defaultRenderConfig() renderConfig {
 // 宽度的该比例时才断在空格处，否则按字符断行，避免行尾参差与"换行太早"。
 const spaceBreakMinFill = 0.6
 
+// forbiddenLineStart 行首禁排标点（避头尾）：这些字符不出现在行首，
+// 断行时前移到上一行行尾悬挂。
+const forbiddenLineStart = "，。、；：？！）】》〉」』”’…％‰℃!%),.:;?]^}"
+
+// isForbiddenLineStart 判断字符是否不可出现在行首。
+func isForbiddenLineStart(r rune) bool {
+	return strings.ContainsRune(forbiddenLineStart, r)
+}
+
+// isLatinWordRune 判断是否为拉丁词元字符（字母/数字）。
+// 断行时连续的词元字符作为整体移动，避免 "BE" 这类记号被从中间切断。
+func isLatinWordRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+}
+
 // imageRowGapScale 同一行内相邻配图之间的水平间距相对段落间距（renderConfig.gap）的倍数。
 //
 // 并排的几何图之间需要比段落间距更明显的间隔，否则两张图挨得太近、容易被看成一整张。
@@ -161,7 +176,7 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 
 	breaks = append(breaks, lineBreaks(y, metaLineH, len(metaLines))...)
 	dc.SetColor(colorMeta)
-	y = drawTextLines(dc, metaFace, metaLines, x, y, metaLineH)
+	y = drawTextLines(dc, fonts, rc.metaSize, metaFace, metaLines, x, y, metaLineH)
 
 	if hasStem {
 		y += float64(rc.gap)
@@ -170,12 +185,12 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 		for _, p := range parts {
 			if p.table != nil {
 				breaks = append(breaks, tableLineBreaks(y, p.table)...)
-				y = drawStemTable(dc, stemFace, p.table, x, y)
+				y = drawStemTable(dc, fonts, rc.stemSize, stemFace, p.table, x, y)
 				dc.SetColor(colorInk)
 				continue
 			}
 			breaks = append(breaks, lineBreaks(y, stemLineH, len(p.lines))...)
-			y = drawTextLines(dc, stemFace, p.lines, x, y, stemLineH)
+			y = drawTextLines(dc, fonts, rc.stemSize, stemFace, p.lines, x, y, stemLineH)
 		}
 	}
 
@@ -183,7 +198,7 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 		y += float64(rc.gap)
 		breaks = append(breaks, int(math.Round(y)))
 		dc.SetColor(colorWarning)
-		y = drawTextLines(dc, metaFace, []string{"（配图加载失败）"}, x, y, metaLineH)
+		y = drawTextLines(dc, fonts, rc.metaSize, metaFace, []string{"（配图加载失败）"}, x, y, metaLineH)
 	}
 
 	// 图注用元信息色（比题干浅、字更小），与配图一起构成"图 + 图号"块。
@@ -201,7 +216,7 @@ func renderItemLayout(rc renderConfig, fonts *FontProvider, index int, it render
 		captionY := y + row.height - row.captionH
 		for _, p := range row.images {
 			drawImageAt(dc, p, x, captionY-p.h)
-			drawCaption(dc, metaFace, p.caption, x, captionY, p.w)
+			drawCaption(dc, fonts, rc.metaSize, metaFace, p.caption, x, captionY, p.w)
 			x += p.w + rowGap
 		}
 		y += row.height
@@ -274,15 +289,14 @@ func groupImageRows(placed []placedImage, contentWidth, gap, captionH float64) [
 }
 
 // drawCaption 在配图正下方水平居中绘制图注（如"图1"）；空图注不绘制。
-func drawCaption(dc *gg.Context, face font.Face, caption string, x, y, width float64) {
+func drawCaption(dc *gg.Context, fonts *FontProvider, size float64, face font.Face, caption string, x, y, width float64) {
 	caption = strings.TrimSpace(caption)
 	if caption == "" {
 		return
 	}
-	dc.SetFontFace(face)
 	ascent := float64(face.Metrics().Ascent) / 64.0
 	textWidth := runesWidth(face, []rune(caption))
-	dc.DrawString(caption, x+(width-textWidth)/2, y+ascent)
+	drawStringSmart(dc, fonts, size, face, caption, x+(width-textWidth)/2, y+ascent)
 }
 
 // drawImageAt 把配图按显示尺寸缩放后绘制到画布指定位置。
@@ -443,8 +457,7 @@ func tableLineBreaks(y float64, lay *stemTableLayout) []int {
 }
 
 // drawStemTable 绘制题干表格（外框 + 行列线 + 单元格文本），返回表格底部的 y。
-func drawStemTable(dc *gg.Context, face font.Face, lay *stemTableLayout, x, y float64) float64 {
-	dc.SetFontFace(face)
+func drawStemTable(dc *gg.Context, fonts *FontProvider, size float64, face font.Face, lay *stemTableLayout, x, y float64) float64 {
 	ascent := float64(face.Metrics().Ascent) / 64.0
 	totalW := 0.0
 	for _, w := range lay.cols {
@@ -489,10 +502,11 @@ func drawStemTable(dc *gg.Context, face font.Face, lay *stemTableLayout, x, y fl
 				}
 				baseline := top + float64(i)*lay.lineH + ascent
 				if lay.hasHeader && r == 0 {
-					dc.DrawStringAnchored(ln, cx+w/2, baseline, 0.5, 0)
+					textWidth := runesWidth(face, []rune(ln))
+					drawStringSmart(dc, fonts, size, face, ln, cx+(w-textWidth)/2, baseline)
 					continue
 				}
-				dc.DrawString(ln, cx+stemTableCellPadX, baseline)
+				drawStringSmart(dc, fonts, size, face, ln, cx+stemTableCellPadX, baseline)
 			}
 			cx += w
 		}
@@ -502,16 +516,33 @@ func drawStemTable(dc *gg.Context, face font.Face, lay *stemTableLayout, x, y fl
 }
 
 // drawTextLines 逐行绘制文本，返回绘制后下一段的 y 起点。
-func drawTextLines(dc *gg.Context, face font.Face, lines []string, x, y, lineH float64) float64 {
-	dc.SetFontFace(face)
+// 缺字形字符（下标/上标数字等）按合成回退绘制。
+func drawTextLines(dc *gg.Context, fonts *FontProvider, size float64, face font.Face, lines []string, x, y, lineH float64) float64 {
 	ascent := float64(face.Metrics().Ascent) / 64.0
 	for i, line := range lines {
 		if line == "" {
 			continue
 		}
-		dc.DrawString(line, x, y+float64(i)*lineH+ascent)
+		drawStringSmart(dc, fonts, size, face, line, x, y+float64(i)*lineH+ascent)
 	}
 	return y + float64(len(lines))*lineH
+}
+
+// drawStringSmart 在指定基线位置绘制文本，返回结束后的 x。
+//
+// 文本按 splitTextSegments 切段：主字体段用主 face 整段绘制；
+// 合成段（缺字替代字形）用缩放 face 绘制并偏移基线。
+func drawStringSmart(dc *gg.Context, fonts *FontProvider, size float64, face font.Face, s string, x, y float64) float64 {
+	for _, seg := range splitTextSegments(fonts, size, s) {
+		if seg.face == nil {
+			dc.SetFontFace(face)
+		} else {
+			dc.SetFontFace(seg.face)
+		}
+		dc.DrawString(seg.text, x, y+seg.dyEm*size)
+		x += runesWidth(face, []rune(seg.text)) * seg.scale
+	}
+	return x
 }
 
 // lineHeight 返回按行距倍数放大的行高。
@@ -524,8 +555,10 @@ func lineHeight(face font.Face, spacing float64) float64 {
 
 // wrapText 按可用宽度对文本换行，支持显式换行符。
 //
-// 中文之间没有空格，必须逐字符测量宽度；同时优先在空格处断行，
-// 避免把英文单词从中间截断。
+// 中文之间没有空格，必须逐字符测量宽度。断行遵循三条排版规则（与浏览器行为对齐）：
+//   - 优先在空格处断行（避免切断英文单词），但仅当断点距行尾足够近；
+//   - 无空格可断时，行尾的拉丁/数字词元整体移到下一行，不从中间切断（如 "BE"）；
+//   - 避头尾：下一行行首不能是标点（，。、；：？！等），标点前移到上一行行尾悬挂。
 func wrapText(face font.Face, text string, maxWidth float64) []string {
 	if maxWidth <= 0 {
 		return []string{text}
@@ -555,6 +588,21 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 						break
 					}
 				}
+				if cut == len(line) {
+					// 无空格可断：行尾的拉丁/数字词元整体移到下一行，
+					// 不从中间切断（词元独占整行、比可用宽度还长时除外）。
+					j := cut
+					for j > 0 && isLatinWordRune(line[j-1]) {
+						j--
+					}
+					if j > 0 && j < cut {
+						cut = j
+					}
+				}
+				// 避头尾：下一行行首不能是标点——标点前移到上一行行尾悬挂。
+				for cut < len(line) && isForbiddenLineStart(line[cut]) {
+					cut++
+				}
 				out = append(out, string(line[:cut]))
 
 				rest := make([]rune, len(line)-cut)
@@ -565,6 +613,12 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 				}
 
 				width = runesWidth(face, line)
+
+				// 溢出字符本身是行首禁排标点且已无残余字符 → 悬挂到刚输出的行尾。
+				if len(line) == 0 && isForbiddenLineStart(r) {
+					out[len(out)-1] += string(r)
+					continue
+				}
 			}
 			line = append(line, r)
 			width += rw
@@ -581,7 +635,13 @@ func wrapText(face font.Face, text string, maxWidth float64) []string {
 }
 
 // runeWidth 返回单个字符的显示宽度（像素）。
+//
+// 内置字体缺字且可合成的字符（下标/上标数字、部分分数）按合成替代字符的
+// 缩放宽度计量，保证 wrapText 的宽度预算与实际绘制一致。
 func runeWidth(face font.Face, r rune) float64 {
+	if g, ok := synthFor(r); ok {
+		return float64(font.MeasureString(face, g.base)) / 64.0 * g.scale
+	}
 	return float64(font.MeasureString(face, string(r))) / 64.0
 }
 

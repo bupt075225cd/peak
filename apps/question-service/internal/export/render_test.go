@@ -62,6 +62,70 @@ func TestWrapTextKeepsExplicitNewlines(t *testing.T) {
 	}
 }
 
+// 回归：无空格可断时，行尾的拉丁词元应整体移到下一行，不从中间切断。
+// 曾导致导出文档中 "BE" 被切成行尾 "B" + 独行 "E"。
+func TestWrapTextKeepsLatinWordIntact(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(20)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+
+	isLatin := func(r rune) bool {
+		return (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+	}
+	assertNoLatinWordSplit := func(lines []string) {
+		t.Helper()
+		for i := 0; i+1 < len(lines); i++ {
+			prev := []rune(lines[i])
+			next := []rune(lines[i+1])
+			if len(prev) > 0 && len(next) > 0 &&
+				isLatin(prev[len(prev)-1]) && isLatin(next[0]) {
+				t.Fatalf("latin word split across lines: %#v", lines)
+			}
+		}
+	}
+
+	// 断行边界压在 "BE" 中间：前缀 + "BE" 超出可用宽度。
+	prefix := "将长方形沿"
+	for _, extra := range []float64{0.5, 1, 1.5} {
+		maxWidth := lineWidth(face, prefix) + lineWidth(face, "BE") - extra
+		lines := wrapText(face, prefix+"BE翻折", maxWidth)
+		assertNoLatinWordSplit(lines)
+		if got := strings.Join(lines, ""); got != prefix+"BE翻折" {
+			t.Fatalf("text content lost while wrapping (maxWidth=%.1f): %#v", maxWidth, lines)
+		}
+	}
+}
+
+// 回归：避头尾——断行后下一行行首不能是标点，标点应悬挂到上一行行尾。
+// 曾导致导出文档中出现以 "，" 开头的行。
+func TestWrapTextAvoidsLineStartPunctuation(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(20)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+
+	// 构造 "翻折，" 恰好压在断行边界上：逗号是溢出字符。
+	prefix := "沿BE翻折"
+	maxWidth := lineWidth(face, prefix) + 1
+	lines := wrapText(face, prefix+"，点C落在", maxWidth)
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "，") {
+			t.Fatalf("line starts with punctuation: %#v", lines)
+		}
+	}
+	if got := strings.Join(lines, ""); got != prefix+"，点C落在" {
+		t.Fatalf("text content lost while wrapping: %#v", lines)
+	}
+	// 悬挂校验：逗号应挂在第一行行尾。
+	if !strings.HasSuffix(lines[0], "，") {
+		t.Fatalf("comma should hang at end of first line: %#v", lines)
+	}
+}
+
 func TestWrapTextBreaksAtSpaceWithoutSplittingWords(t *testing.T) {
 	fonts := testFonts(t)
 	face, err := fonts.Face(20)
@@ -421,6 +485,114 @@ func TestImageRowGapIsWiderThanParagraphGap(t *testing.T) {
 	}
 }
 
+// TestRuneWidthSynthSubscript 下标字符按合成替代字形的缩放宽度计量，
+// 保证 wrapText 的宽度预算与实际绘制一致。
+func TestRuneWidthSynthSubscript(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(20)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+	want := runeWidth(face, '1') * 0.6
+	if got := runeWidth(face, '₁'); got != want {
+		t.Fatalf("runeWidth('₁') = %v, want %v", got, want)
+	}
+}
+
+// TestSplitTextSegments 缺字下标切成合成段，普通字符保持主字体段。
+func TestSplitTextSegments(t *testing.T) {
+	fonts := testFonts(t)
+	segs := splitTextSegments(fonts, 20, "C₁D₂E")
+	if len(segs) != 5 {
+		t.Fatalf("segments = %d, want 5: %#v", len(segs), segs)
+	}
+	for i, want := range []struct {
+		text  string
+		synth bool
+	}{
+		{"C", false}, {"1", true}, {"D", false}, {"2", true}, {"E", false},
+	} {
+		if segs[i].text != want.text {
+			t.Fatalf("seg %d text = %q, want %q", i, segs[i].text, want.text)
+		}
+		if want.synth && segs[i].scale == 1 {
+			t.Fatalf("seg %d should be a synthesized subscript: %#v", i, segs[i])
+		}
+		if !want.synth && segs[i].scale != 1 {
+			t.Fatalf("seg %d should use the main face: %#v", i, segs[i])
+		}
+	}
+}
+
+// 回归：内置字体缺 ₁ 下标字形，直接绘制会得到空白；合成回退应把对应数字
+// 缩小后画在下标位置（基线下方），使 "C₁" 与 "C" 的绘制结果可区分。
+func TestDrawTextLinesPaintsSynthesizedSubscript(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(20)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+
+	const (
+		x     = 10.0
+		y     = 20.0
+		lineH = 30.0
+		size  = 20.0
+	)
+	ascent := float64(face.Metrics().Ascent) / 64.0
+	descent := float64(face.Metrics().Descent) / 64.0
+	// 下标绘制区域：C 宽度之后；合成参数 0.6 缩放 / 0.20em 下移基线，
+	// 字形墨迹在"下标基线"上方（字形高度内）到基线下方一点。
+	subBaseline := y + ascent + 0.20*size
+	left := x + runeWidth(face, 'C')
+	right := left + runeWidth(face, '1')*0.6
+	top := subBaseline - ascent*0.6
+	bottom := subBaseline + descent*0.6
+
+	drawAt := func(s string) *image.RGBA {
+		dc := gg.NewContext(int(right)+20, 80)
+		dc.SetColor(colorPaper)
+		dc.Clear()
+		dc.SetColor(colorInk)
+		drawTextLines(dc, fonts, size, face, []string{s}, x, y, lineH)
+		return dc.Image().(*image.RGBA)
+	}
+
+	countDark := func(img *image.RGBA) int {
+		n := 0
+		for yy := int(top); yy <= int(bottom); yy++ {
+			for xx := int(left); xx <= int(right); xx++ {
+				if r, _, _, _ := img.At(xx, yy).RGBA(); r < 0x8000 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
+	if n := countDark(drawAt("C₁")); n == 0 {
+		t.Fatalf("no glyph pixels in subscript area (missing ₁ drawn as blank)")
+	}
+	if n := countDark(drawAt("C")); n != 0 {
+		t.Fatalf("control region should be empty without subscript: %d dark pixels", n)
+	}
+}
+
+// TestFontCoversStemSymbols 内置字体必须覆盖题干常用数学符号；
+// 下标/上标数字走合成回退，不在此断言范围。
+func TestFontCoversStemSymbols(t *testing.T) {
+	fonts := testFonts(t)
+	face, err := fonts.Face(20)
+	if err != nil {
+		t.Fatalf("Face: %v", err)
+	}
+	for _, r := range "√∠△∥⊥∽≈≠≤≥±×÷°′″½¼¾²³∵∴①②③ⅠⅡⅢ（）" {
+		if _, ok := face.GlyphAdvance(r); !ok {
+			t.Fatalf("embedded font missing glyph U+%04X %q", r, string(r))
+		}
+	}
+}
+
 // TestDrawCaptionPaintsCenteredUnderFigure 验证图注确实被绘制，且横向居中在配图宽度内。
 func TestDrawCaptionPaintsCenteredUnderFigure(t *testing.T) {
 	fonts := testFonts(t)
@@ -435,7 +607,7 @@ func TestDrawCaptionPaintsCenteredUnderFigure(t *testing.T) {
 	dc.SetColor(colorPaper)
 	dc.Clear()
 	dc.SetColor(colorMeta)
-	drawCaption(dc, face, "图1", figureX, 0, figureW)
+	drawCaption(dc, fonts, rc.metaSize, face, "图1", figureX, 0, figureW)
 
 	minX, maxX, count := paintedBounds(dc.Image())
 	if count == 0 {
@@ -457,7 +629,7 @@ func TestDrawCaptionSkipsEmptyText(t *testing.T) {
 	dc := gg.NewContext(400, 60)
 	dc.SetColor(colorPaper)
 	dc.Clear()
-	drawCaption(dc, face, "   ", 100, 0, 200)
+	drawCaption(dc, fonts, defaultRenderConfig().metaSize, face, "   ", 100, 0, 200)
 
 	if _, _, count := paintedBounds(dc.Image()); count != 0 {
 		t.Fatalf("empty caption painted %d pixels", count)

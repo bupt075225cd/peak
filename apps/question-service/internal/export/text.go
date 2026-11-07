@@ -1,22 +1,29 @@
 package export
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
 
+// stemQuestionMarkerRe 以小问编号开头的行：(1)、（1）、①⑧㈠ 等。
+// 这类行之前的换行是结构边界（题干分小问），折叠时必须保留。
+// 注意不含 "1." 裸编号：避免把正文里的 "1.5 倍" 等数字误判为小问标记
+// （生产存量数据中的小问编号均为括号/圈号形式）。
+var stemQuestionMarkerRe = regexp.MustCompile(`^\s*(\([0-9]{1,2}\)|（[0-9一二三四五六七八九十]{1,3}）|[①-⑳㈠-㈩])`)
+
 // normalizeStemText 归一化题干文本。
 //
-// 识别阶段会把源文档的断行原样带进题干（识别服务用 "\n" 拼接文本块，模型输出也可能
-// 含换行）。这些换行位置与导出页宽无关，按原样断行会导致"一行没排满就换行、整段挤在
-// 左侧"。merge 为 true 时把换行与连续空白折叠为单个空格，交由渲染器按正文宽度统一
-// 重排；merge 为 false 时保留原有换行，仅去除首尾空白。
+// 识别阶段会把源试卷的断行原样带进题干（识别服务用 "\n" 拼接文本块，模型输出
+// 也可能含换行）。这些换行分两类，折叠时区别对待：
+//   - 结构性换行（保留）：小问编号行之前、Markdown 表格内部、空行分段——
+//     它们承载题干的语义结构；
+//   - 版式性换行（折叠）：原卷按纸面宽度折行的痕迹，切在句子中间，与导出
+//     页宽无关——保留会导致"一行没排满就换行"，折叠后交由渲染器按正文宽度
+//     统一重排。
 //
-// 折叠换行时，仅当断行两侧都不是中文/中文标点才补空格：中文之间补空格会显得突兀
-// （如"4。 求"），而英文单词之间必须保留分隔（如"hello\nworld"）。
-//
-// 例外：Markdown 表格块（识别结果里的表格由前端序列化成 "| a | b |" + "|---|---|"）
-// 内部的换行必须保留——折叠成一行后行列关系就没了，导出时无法再还原成表格。
+// 折叠段内换行时，仅当断行两侧都不是中文/中文标点才补空格：中文之间补空格会
+// 显得突兀（如"4。 求"），而英文单词之间必须保留分隔（如"hello\nworld"）。
 func normalizeStemText(raw string, merge bool) string {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	if !merge {
@@ -25,6 +32,7 @@ func normalizeStemText(raw string, merge bool) string {
 
 	lines := strings.Split(raw, "\n")
 	inTable := tableLineMask(lines)
+
 	var (
 		out []string
 		buf []string
@@ -39,14 +47,26 @@ func normalizeStemText(raw string, merge bool) string {
 		buf = buf[:0]
 	}
 	for i, ln := range lines {
-		if inTable[i] {
+		switch {
+		case inTable[i]:
+			// 表格行逐行保留：折叠成一行后行列关系就没了，导出时无法还原成表格。
 			flush()
 			if s := strings.TrimSpace(ln); s != "" {
 				out = append(out, s)
 			}
-			continue
+		case strings.TrimSpace(ln) == "":
+			// 空行是段落分隔，保留（连续空行压缩为一个）。
+			flush()
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+		case i+1 < len(lines) && stemQuestionMarkerRe.MatchString(lines[i+1]):
+			// 下一行是小问编号：本行与其后的换行是结构边界，保留。
+			buf = append(buf, ln)
+			flush()
+		default:
+			buf = append(buf, ln)
 		}
-		buf = append(buf, ln)
 	}
 	flush()
 	return strings.Join(out, "\n")

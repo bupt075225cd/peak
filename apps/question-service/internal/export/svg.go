@@ -292,19 +292,21 @@ func readElementText(dec *xml.Decoder) string {
 //
 // 坐标系与 SVG 用户单位一致，因此按 scale 换算到像素后再定位，
 // 并按 text-anchor / dominant-baseline 做对齐。
+// 缺字形字符（下标/上标数字等）按合成回退绘制。
 func drawSVGTexts(dst *image.RGBA, data []byte, scale float64, fonts *FontProvider) error {
 	if fonts == nil {
 		return nil
 	}
 
 	for _, t := range parseSVGTexts(data) {
-		face, err := fonts.Face(t.FontSize * scale)
+		size := t.FontSize * scale
+		face, err := fonts.Face(size)
 		if err != nil {
 			return fmt.Errorf("load svg text face: %w", err)
 		}
 
 		x := t.X * scale
-		if w := float64(font.MeasureString(face, t.Content)) / 64.0; w > 0 {
+		if w := runesWidth(face, []rune(t.Content)); w > 0 {
 			switch t.Anchor {
 			case "middle":
 				x -= w / 2
@@ -325,16 +327,25 @@ func drawSVGTexts(dst *image.RGBA, data []byte, scale float64, fonts *FontProvid
 			y += ascent
 		}
 
-		drawer := &font.Drawer{
-			Dst:  dst,
-			Src:  image.NewUniform(t.Color),
-			Face: face,
-			Dot: fixed.Point26_6{
-				X: fixed.Int26_6(math.Round(x * 64)),
-				Y: fixed.Int26_6(math.Round(y * 64)),
-			},
+		for _, seg := range splitTextSegments(fonts, size, t.Content) {
+			segFace := face
+			segY := y
+			if seg.face != nil {
+				segFace = seg.face
+				segY += seg.dyEm * size
+			}
+			drawer := &font.Drawer{
+				Dst:  dst,
+				Src:  image.NewUniform(t.Color),
+				Face: segFace,
+				Dot: fixed.Point26_6{
+					X: fixed.Int26_6(math.Round(x * 64)),
+					Y: fixed.Int26_6(math.Round(segY * 64)),
+				},
+			}
+			drawer.DrawString(seg.text)
+			x += runesWidth(face, []rune(seg.text)) * seg.scale
 		}
-		drawer.DrawString(t.Content)
 	}
 	return nil
 }
