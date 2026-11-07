@@ -28,6 +28,8 @@ func NewFromConfig(cfg *config.Loader) (Provider, error) {
 			MaxTokens:       cfg.Int("recognition.zhipu.max_tokens", 0),
 			ReasoningEffort: cfg.String("recognition.zhipu.reasoning_effort", ""),
 			GeometryEffort:  cfg.String("recognition.zhipu.geometry_effort", ""),
+			// 0 走 provider 默认（0.1）；配置为负数可显式关闭 temperature 下发。
+			GeometryTemperature: cfg.Float("recognition.zhipu.geometry_temperature", 0),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported recognition provider: %s", name)

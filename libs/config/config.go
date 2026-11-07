@@ -98,6 +98,24 @@ func (l *Loader) Int(key string, def int) int {
 	return def
 }
 
+// Float 读取浮点数配置。字符串值（含经 ${VAR:-default} 展开后的数字）会被解析。
+func (l *Loader) Float(key string, def float64) float64 {
+	v := l.Get(key)
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float64:
+		return n
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
 // Bool 读取布尔配置。字符串值（含经 ${VAR:-default} 展开后的布尔字面量）会被解析。
 func (l *Loader) Bool(key string, def bool) bool {
 	v := l.Get(key)

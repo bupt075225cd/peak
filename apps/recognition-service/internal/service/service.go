@@ -535,25 +535,30 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 	var lastErr error
 	correction := ""
 	attempts := 0
+	// 无效轮（输出被截断、JSON 不合法、空 panels 等未产出可校验结果的轮次）
+	// 不消耗修正预算，只受独立的重试上限约束，防止传输抖动/朝向误判死循环；
+	// 实测同一张图 4 轮里可能有 2 轮被截断与空结果浪费，修正根本没机会生效。
+	const geometryMaxInfraRetries = 3
+	infraRetries := 0
 	// 修正回路里问题最少的一版（结构问题数、语义偏差数），循环结束后据此输出。
 	var best []geom.PanelResult
 	bestHard, bestSoft := 0, 0
 	var bestIssues []string
 	// 入口转正方向判反时的撤销重试只做一次，避免来回旋转耗光重试轮数。
 	entryUprightOppositeTried := false
-	for attempt := 1; attempt <= s.geometryMaxAttempts; attempt++ {
+	// valid 统计"有效轮"（产出非空 panels 且完成校验）——才消耗 geometryMaxAttempts 修正预算。
+	for valid := 0; valid < s.geometryMaxAttempts && infraRetries <= geometryMaxInfraRetries; {
 		// 超时/取消后立即退出：不更新进度、不再发起注定失败的调用。
 		if ctx.Err() != nil {
-			attempts = attempt - 1
 			break
 		}
-		attempts = attempt
+		attempts++
 		// 重绘轮次可能较久（VLM 提取几何描述），实时更新进度文案让用户感知。
-		p := 80 + (attempt-1)*8
+		p := 80 + valid*8
 		if p > 94 {
 			p = 94
 		}
-		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘图形（第 %d 次尝试）…", attempt))
+		s.updateProgress(taskID, p, fmt.Sprintf("正在重绘图形（第 %d 次尝试）…", valid+1))
 		var spec string
 		var eerr error
 		s.callProvider(ctx, "geometry_spec_extract", func(c context.Context) (err error) {
@@ -562,7 +567,8 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		})
 		if eerr != nil {
 			lastErr = eerr
-			fields := []zap.Field{zap.Int("attempt", attempt), zap.String("error", eerr.Error())}
+			infraRetries++
+			fields := []zap.Field{zap.Int("attempt", attempts), zap.String("error", eerr.Error())}
 			// 模型输出不是合法 JSON 时把原文带进日志：否则只剩一句
 			// "model output is not valid JSON"，完全看不出是截断、多段还是转义问题。
 			if moe, ok := eerr.(*provider.ModelOutputError); ok {
@@ -578,7 +584,8 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		parsed, perr := geom.ParsePanels(spec)
 		if perr != nil {
 			lastErr = perr
-			s.log.Warn("geometry parse failed", zap.Int("attempt", attempt),
+			infraRetries++
+			s.log.Warn("geometry parse failed", zap.Int("attempt", attempts),
 				zap.String("error", perr.Error()), zap.String("spec", truncate(spec, 512)))
 			correction = fmt.Sprintf("上一轮输出的 JSON 无法解析（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", perr)
 			continue
@@ -588,6 +595,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		// 回退整张原图重试（提取有题干在手，能从整图找到对应图形）；
 		// 整张原图仍被拒绝才干净跳过重绘（本题确无几何图形）。
 		if len(parsed) == 0 {
+			infraRetries++ // 空 panels 属无效轮，不消耗修正预算
 			// 入口按模型判读把整图转正过，这里却判"没有几何图形"：可能是入口方向判反了，
 			// 撤销入口旋转（转回原始方向）再试一次。
 			if rotationFix == 0 && result.ImageRotation != 0 && !entryUprightOppositeTried {
@@ -596,7 +604,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 				if upright, rerr := rotateImageData(regionImage, opp); rerr == nil {
 					extractImage = upright
 					s.log.Warn("geometry spec empty, retry with entry rotation undone",
-						zap.Uint64("task_id", taskID), zap.Int("attempt", attempt),
+						zap.Uint64("task_id", taskID), zap.Int("attempt", attempts),
 						zap.Int("entry_rotation", result.ImageRotation), zap.Int("rotation", opp))
 					correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
 						"但几何识别阶段已在该题目图片中检测到几何图形，可能是图片朝向被转错导致误判。" +
@@ -612,7 +620,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 					extractImage = upright
 					rotationFix = opp
 					s.log.Warn("geometry spec empty after rotate, retry with opposite rotation",
-						zap.Uint64("task_id", taskID), zap.Int("attempt", attempt), zap.Int("rotation", opp))
+						zap.Uint64("task_id", taskID), zap.Int("attempt", attempts), zap.Int("rotation", opp))
 					correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
 						"但几何识别阶段已在该题目图片中检测到几何图形，可能是图片朝向被转错导致误判。" +
 						"请基于这张图片（题干文字可能侧躺，请按文字实际可读方向理解图形），完整输出其几何描述 JSON。"
@@ -623,7 +631,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 				regionFallback = false
 				extractImage = imageData
 				s.log.Warn("geometry spec empty on cropped region, retry with full image",
-					zap.Uint64("task_id", taskID), zap.Int("attempt", attempt))
+					zap.Uint64("task_id", taskID), zap.Int("attempt", attempts))
 				correction = "上一轮你输出了 {\"panels\":[]}（判定图片区域不是几何示意图），" +
 					"但几何识别阶段已在该题目图片中检测到几何图形，可能是区域裁剪不完整导致误判。" +
 					"请基于这张完整图片，找到与题干对应的几何示意图，完整输出其几何描述 JSON；" +
@@ -631,7 +639,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 				continue
 			}
 			s.log.Info("geometry spec empty, skip redraw",
-				zap.Uint64("task_id", taskID), zap.Int("attempt", attempt))
+				zap.Uint64("task_id", taskID), zap.Int("attempt", attempts))
 			return nil
 		}
 		// 直线名称标签只跟着原图走：题干里的 l₁/l₂ 若原图没印，就不要画到图上。
@@ -681,7 +689,8 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 			svg, rerr := geom.Render(&parsed[i].Spec)
 			if rerr != nil {
 				lastErr = rerr
-				s.log.Warn("geometry render failed", zap.Int("attempt", attempt),
+				infraRetries++ // 无法渲染同属无效轮
+				s.log.Warn("geometry render failed", zap.Int("attempt", attempts),
 					zap.String("error", rerr.Error()), zap.String("spec", truncate(spec, 512)))
 				correction = fmt.Sprintf("上一轮输出的 JSON 无法渲染（错误：%v）。请严格按字段说明重新输出完整 JSON，只输出一个 JSON 对象。", rerr)
 				renderFailed = true
@@ -711,7 +720,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		if structCount == 0 {
 			break
 		}
-		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempt),
+		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempts),
 			zap.Int("structural", structCount), zap.Int("semantic", semanticCount),
 			zap.Strings("issues", issues))
 		correction = formatValidateIssues(issues)

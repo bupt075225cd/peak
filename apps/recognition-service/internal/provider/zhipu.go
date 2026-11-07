@@ -14,7 +14,8 @@ type ZhipuConfig struct {
 	APIKey   string
 	Model    string // 视觉多模态模型名，默认 glm-5.3-flash
 	Endpoint string // OpenAI 兼容地址，默认 https://open.bigmodel.cn/api/paas/v4/chat/completions
-	// MaxTokens 单次输出最大 token 数，默认 8192（GLM 默认值偏小会截断长题干转录）。
+	// MaxTokens 单次输出最大 token 数，默认 16384（8192 下几何描述 JSON 偶发被
+	// finish_reason=length 截断，截断轮只会白白消耗一次重试）。
 	MaxTokens int
 	// ReasoningEffort 思考强度：low/high/max（glm-5.3-flash 始终思考且无法关闭，
 	// 默认强度下单次识别耗时远超超时，因此默认 low）；设为 off 表示不下发该参数
@@ -25,6 +26,11 @@ type ZhipuConfig struct {
 	// 其余调用（整题解析、OCR 等）维持 ReasoningEffort 不变。
 	// 设为 off 表示不下发该参数（与 ReasoningEffort 保持一致）。
 	GeometryEffort string
+	// GeometryTemperature 几何描述提取专用的采样温度覆盖，默认 0.1：
+	// 坐标直出是确定性任务，服务端默认温度下每次采样的点坐标都会漂移，
+	// 低温度可收敛"同一条线有时过原点、有时穿第二/第四象限"这类随机偏差。
+	// 0 表示使用默认 0.1；负数表示不下发 temperature 参数。
+	GeometryTemperature float64
 }
 
 // NewZhipuProvider 创建智谱 provider。
@@ -36,7 +42,7 @@ func NewZhipuProvider(cfg ZhipuConfig) *ZhipuProvider {
 		cfg.Endpoint = zhipuEndpoint
 	}
 	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 8192
+		cfg.MaxTokens = 16384
 	}
 	if cfg.ReasoningEffort == "" {
 		cfg.ReasoningEffort = "low"
@@ -49,6 +55,12 @@ func NewZhipuProvider(cfg ZhipuConfig) *ZhipuProvider {
 	} else if geometryEffort == "off" || geometryEffort == "none" {
 		geometryEffort = ""
 	}
+	geometryTemperature := cfg.GeometryTemperature
+	if geometryTemperature == 0 {
+		geometryTemperature = 0.1
+	} else if geometryTemperature < 0 {
+		geometryTemperature = 0 // 负数 = off：不下发 temperature 参数
+	}
 	return &ZhipuProvider{vlmCapabilities: vlmCapabilities{
 		dash: NewChatClient(ChatConfig{
 			Provider:        "zhipu",
@@ -58,7 +70,8 @@ func NewZhipuProvider(cfg ZhipuConfig) *ZhipuProvider {
 			MaxTokens:       cfg.MaxTokens,
 			ReasoningEffort: cfg.ReasoningEffort,
 		}),
-		geometryEffort: geometryEffort,
+		geometryEffort:      geometryEffort,
+		geometryTemperature: geometryTemperature,
 	}}
 }
 

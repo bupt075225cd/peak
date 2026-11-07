@@ -19,14 +19,22 @@ type vlmCapabilities struct {
 	// 几何描述提取是整条链路里对推理要求最高的一步（看图直出坐标），
 	// 低强度下模型经常漏画直线、点跑到线外，需要更高的思考强度兜底。
 	geometryEffort string
+	// geometryTemperature 几何描述提取专用的采样温度覆盖（如 0.1）；0 表示不下发。
+	// 坐标直出的随机漂移（同一条线有时过原点、有时穿别的象限）随温度升高明显加剧，
+	// 低温度让"看同一张图"的输出尽可能收敛。
+	geometryTemperature float64
 }
 
-// specChat 几何描述提取用的对话客户端：配置了独立思考强度时返回覆盖副本。
+// specChat 几何描述提取用的对话客户端：配置了独立思考强度/采样温度时返回覆盖副本。
 func (v *vlmCapabilities) specChat() *ChatClient {
-	if v.geometryEffort == "" {
-		return v.dash
+	c := v.dash
+	if v.geometryEffort != "" {
+		c = c.withEffort(v.geometryEffort)
 	}
-	return v.dash.withEffort(v.geometryEffort)
+	if v.geometryTemperature > 0 {
+		c = c.withTemperature(v.geometryTemperature)
+	}
+	return c
 }
 
 // RecognizeText 调用多模态大模型提取图片中的全部文字（文档/子图 OCR 场景使用）。

@@ -23,8 +23,17 @@ func TestZhipuProviderDefaults(t *testing.T) {
 	if !strings.Contains(z.dash.endpoint, "open.bigmodel.cn/api/paas/v4/chat/completions") {
 		t.Fatalf("unexpected endpoint: %s", z.dash.endpoint)
 	}
-	if z.dash.maxTokens != 8192 || z.dash.reasoningEffort != "low" {
+	if z.dash.maxTokens != 16384 || z.dash.reasoningEffort != "low" {
 		t.Fatalf("unexpected defaults: maxTokens=%d effort=%q", z.dash.maxTokens, z.dash.reasoningEffort)
+	}
+	// 几何描述提取默认低温度采样：坐标直出的随机漂移随温度明显加剧。
+	if z.geometryTemperature != 0.1 {
+		t.Fatalf("expected default geometry temperature 0.1, got %v", z.geometryTemperature)
+	}
+	// 负数表示不下发 temperature 参数。
+	noTemp := NewZhipuProvider(ZhipuConfig{GeometryTemperature: -1})
+	if noTemp.geometryTemperature != 0 {
+		t.Fatalf("expected temperature off for negative config, got %v", noTemp.geometryTemperature)
 	}
 	// off/none 表示不下发思考强度参数（用于不支持该参数的模型）。
 	off := NewZhipuProvider(ZhipuConfig{ReasoningEffort: "off"})
@@ -75,7 +84,7 @@ func TestChatClientRequestParams(t *testing.T) {
 	if _, err := z.RecognizeText(context.Background(), []byte("img")); err != nil {
 		t.Fatalf("zhipu chat: %v", err)
 	}
-	if got["max_tokens"] != float64(8192) || got["reasoning_effort"] != "low" {
+	if got["max_tokens"] != float64(16384) || got["reasoning_effort"] != "low" {
 		t.Fatalf("unexpected zhipu request params: %v", got)
 	}
 
@@ -88,5 +97,38 @@ func TestChatClientRequestParams(t *testing.T) {
 	}
 	if _, ok := got["reasoning_effort"]; ok {
 		t.Fatalf("dashscope should not send reasoning_effort: %v", got)
+	}
+}
+
+// TestGeometrySpecSamplingParams 验证几何描述提取走专用采样参数：
+// 低温度（默认 0.1）+ 几何专用思考强度；其余调用（RecognizeText）不下发 temperature。
+func TestGeometrySpecSamplingParams(t *testing.T) {
+	got := map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = map[string]any{}
+		_ = json.Unmarshal(body, &got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"panels\":[]}"}}]}`))
+	}))
+	defer srv.Close()
+
+	z := NewZhipuProvider(ZhipuConfig{APIKey: "k", Endpoint: srv.URL})
+	if _, err := z.ExtractGeometrySpec(context.Background(), []byte("img"), "题干", ""); err != nil {
+		t.Fatalf("extract geometry spec: %v", err)
+	}
+	if got["temperature"] != float64(0.1) {
+		t.Fatalf("geometry spec should send low temperature, got %v", got["temperature"])
+	}
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("geometry spec should send high effort, got %v", got["reasoning_effort"])
+	}
+
+	// 普通文本调用不下发 temperature（使用服务端默认）。
+	if _, err := z.RecognizeText(context.Background(), []byte("img")); err != nil {
+		t.Fatalf("recognize text: %v", err)
+	}
+	if _, ok := got["temperature"]; ok {
+		t.Fatalf("regular chat should not send temperature: %v", got["temperature"])
 	}
 }

@@ -31,7 +31,9 @@ type ChatClient struct {
 	maxTokens int
 	// reasoningEffort 思考强度（智谱 GLM 系列专用，low/high/max）；空表示不下发。
 	reasoningEffort string
-	client          *http.Client
+	// temperature 采样温度；0 表示不下发（使用服务端默认）。
+	temperature float64
+	client      *http.Client
 }
 
 // ChatConfig 对话客户端配置。
@@ -45,6 +47,8 @@ type ChatConfig struct {
 	MaxTokens int
 	// ReasoningEffort 思考强度，空表示不下发。
 	ReasoningEffort string
+	// Temperature 采样温度；0 表示不下发（使用服务端默认）。
+	Temperature float64
 }
 
 // NewChatClient 创建对话客户端。
@@ -65,6 +69,7 @@ func NewChatClient(cfg ChatConfig) *ChatClient {
 		endpoint:        cfg.Endpoint,
 		maxTokens:       cfg.MaxTokens,
 		reasoningEffort: cfg.ReasoningEffort,
+		temperature:     cfg.Temperature,
 		client:          &http.Client{Timeout: 300 * time.Second},
 	}
 }
@@ -75,6 +80,7 @@ type chatRequest struct {
 	Messages        []chatMessage       `json:"messages"`
 	MaxTokens       int                 `json:"max_tokens,omitempty"`
 	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	Temperature     float64             `json:"temperature,omitempty"`
 	ResponseFormat  *chatResponseFormat `json:"response_format,omitempty"`
 }
 
@@ -123,6 +129,14 @@ func (d *ChatClient) withEffort(effort string) *ChatClient {
 	return &c
 }
 
+// withTemperature 返回一个仅采样温度不同的客户端副本（其余配置共享）。
+// t<=0 表示不下发 temperature 参数（使用服务端默认）。
+func (d *ChatClient) withTemperature(t float64) *ChatClient {
+	c := *d
+	c.temperature = t
+	return &c
+}
+
 // chat 发送一次多模态对话请求，返回模型输出的文本。
 // image 为 nil 时仅发送文本（纯文本结构化拆题场景）。
 func (d *ChatClient) chat(ctx context.Context, prompt string, image []byte) (string, error) {
@@ -160,6 +174,7 @@ func (d *ChatClient) chatWith(ctx context.Context, system, user string, image []
 		Messages:        messages,
 		MaxTokens:       d.maxTokens,
 		ReasoningEffort: d.reasoningEffort,
+		Temperature:     d.temperature,
 	}
 	if jsonMode {
 		reqBody.ResponseFormat = &chatResponseFormat{Type: "json_object"}

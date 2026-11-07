@@ -85,9 +85,16 @@ func TestManualRedrawRegression(t *testing.T) {
 		correction := ""
 		oppositeTried := false
 		wholeTried := false
-		for attempt := 1; attempt <= 4; attempt++ {
+		// 与线上链路（service.go redrawGeometry）同构：截断/JSON 不合法/空 panels 等
+		// 无效轮不消耗修正预算，只受独立的基础设施重试上限约束。
+		const maxInfraRetries = 3
+		infraRetries := 0
+		attempt := 0
+		for valid := 0; valid < 4 && infraRetries <= maxInfraRetries; {
+			attempt++
 			spec, serr := prov.ExtractGeometrySpec(ctx, extract, c.stem, correction)
 			if serr != nil {
+				infraRetries++
 				t.Logf("[%s#%d] 提取失败：%v", c.name, attempt, serr)
 				correction = "上一轮输出不是合法的 JSON。请只输出一个完整的 JSON 对象，不要 Markdown 代码块与解释文字。"
 				continue
@@ -96,11 +103,13 @@ func TestManualRedrawRegression(t *testing.T) {
 
 			panels, perr := geom.ParsePanels(spec)
 			if perr != nil {
+				infraRetries++
 				t.Logf("[%s#%d] 解析失败：%v", c.name, attempt, perr)
 				correction = fmt.Sprintf("上一轮输出的 JSON 无法解析（%v）。请重新输出完整 JSON。", perr)
 				continue
 			}
 			if len(panels) == 0 {
+				infraRetries++
 				// 侧躺图转反了会被判成"没有几何图形"，反向再试一次。
 				if rotation != 0 && !oppositeTried {
 					oppositeTried = true
@@ -151,6 +160,7 @@ func TestManualRedrawRegression(t *testing.T) {
 			issues := geom.CollectIssues(results)
 			t.Logf("[%s#%d] 子图=%d 问题=%d %v", c.name, attempt, len(results), len(issues), issues)
 
+			valid++ // 本轮产出了完整可校验的结果，消耗一次修正预算
 			if best == nil || len(issues) < bestScore {
 				best, bestIssues, bestScore = results, issues, len(issues)
 			}
