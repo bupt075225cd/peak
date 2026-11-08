@@ -185,3 +185,67 @@ func mustLine(t *testing.T, s *Spec, seg int) line2 {
 	}
 	return ln
 }
+
+func TestFixFunctionGraphs_removesDashedLineType(t *testing.T) {
+	// 复现生产 task 73：l₃:y=kx+k 被模型画成虚线，看起来像"多出辅助线、少一条函数线"。
+	s := funcPointsSpec(20, 32, "A", "B", "P", "Q")
+	s.Segments[2].Dashed = true
+	panels := []Panel{{Title: "图1", Spec: *s}}
+
+	notes := FixFunctionGraphs(panels, stemFuncPoints22)
+	if !strings.Contains(strings.Join(notes, "\n"), "实线") {
+		t.Fatalf("应去除虚线线型并记录说明，实际 %v", notes)
+	}
+	if panels[0].Spec.Segments[2].Dashed {
+		t.Fatal("l₃ 的 dashed 应被清除")
+	}
+}
+
+// ambiguousLineSpec 构造"标签落在两条延长线夹角内、到两线几乎等距"的场景
+// （l₃ 标签到两条交叉直线各距 5.66，归属完全不可靠）。
+func ambiguousLineSpec() *Spec {
+	return &Spec{
+		Canvas: Canvas{Width: 100, Height: 100},
+		Points: []Point{
+			{Name: "O", X: 50, Y: 50},
+			{Name: "XE", X: 95, Y: 50, Hidden: true},
+			{Name: "YE", X: 50, Y: 5, Hidden: true},
+			{Name: "P1", X: 10, Y: 10, Hidden: true},
+			{Name: "P2", X: 90, Y: 90, Hidden: true},
+			{Name: "P3", X: 10, Y: 90, Hidden: true},
+			{Name: "P4", X: 90, Y: 10, Hidden: true},
+		},
+		Segments: []Segment{
+			{From: "P1", To: "P2", Extend: true},
+			{From: "P3", To: "P4", Extend: true},
+		},
+		Axes:   &Axes{Origin: "O", X: Axis{To: "XE"}, Y: Axis{To: "YE"}},
+		Labels: []Label{{X: 50, Y: 42, Text: "l₃"}},
+	}
+}
+
+func TestNamedLineAttributionAmbiguous(t *testing.T) {
+	s := ambiguousLineSpec()
+	if !s.namedLineAttributionAmbiguous("l₃") {
+		t.Fatal("等距场景应判定为归属不明确")
+	}
+	s.Labels[0].X = 30 // 挪到明显靠近其中一条线的位置
+	if s.namedLineAttributionAmbiguous("l₃") {
+		t.Fatal("归属明确的场景不应判定为不明确")
+	}
+}
+
+func TestCheckAndFixSkipWhenAttributionAmbiguous(t *testing.T) {
+	// 归属不明确时：核对不应报"l₃ 过原点/交点在右侧"之类误报，
+	// 纠偏也不应动手改任何线段（否则可能张冠李戴改到别的直线上）。
+	panels := []Panel{{Title: "图1", Spec: *ambiguousLineSpec()}}
+	before := visiblePoints(&panels[0].Spec)
+
+	if issues := CheckFunctionGraphPoints(panels, stemFuncPoints22); len(issues) != 0 {
+		t.Fatalf("归属不明确时不应核对 l₃，实际 %v", issues)
+	}
+	if notes := FixFunctionGraphs(panels, stemFuncPoints22); len(notes) != 0 {
+		t.Fatalf("归属不明确时不应纠偏，实际 %v", notes)
+	}
+	samePoints(t, before, visiblePoints(&panels[0].Spec))
+}

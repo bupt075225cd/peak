@@ -1235,6 +1235,51 @@ func xAxisLine(s *Spec) (line2, bool) {
 	return line2{a: s.pt(oi), b: s.pt(xi)}, true
 }
 
+// namedLineAttributionAmbiguous 判断直线名称标签（l₁/l₂…）的归属是否明确。
+// 标签按"最近的延长线段"归属；当第二近的距离与最近的相差不足 15%（标签落在
+// 两线夹角附近、两线几乎等距）时归属不可靠——对这条线的核对与确定性纠偏都应
+// 跳过，否则会张冠李戴（实测 task 73：l₃ 标签被归到 l₁ 的直线上，报出
+// "l₃ 与 x 轴交于 O 右侧"的误报，白白耗光重试预算）。
+// 标签不在任何延长线附近时返回 false（调用方本就按"找不到"跳过）。
+func (s *Spec) namedLineAttributionAmbiguous(name string) bool {
+	want := normalizeLineName(name)
+	if want == "" || len(s.Labels) == 0 {
+		return false
+	}
+	var lp vec
+	found := false
+	for _, l := range s.Labels {
+		if normalizeLineName(l.Text) == want {
+			lp = vec{X: l.X, Y: l.Y}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	short := math.Min(s.Canvas.Width, s.Canvas.Height)
+	if short <= 0 {
+		return false
+	}
+	ds := make([]float64, 0, 4)
+	for i := range s.Segments {
+		if !s.Segments[i].Extend {
+			continue
+		}
+		ln, ok := s.segmentLine(i)
+		if !ok {
+			continue
+		}
+		ds = append(ds, distToLine(lp, ln))
+	}
+	if len(ds) < 2 || ds[0] > lineLabelTol*short {
+		return false
+	}
+	sort.Float64s(ds)
+	return ds[1] < ds[0]*1.15
+}
+
 // CheckFunctionGraphPoints 题干-图形语义核对：函数图象必须经过题干明确要求的点。
 // 结构校验只检查"标注点是否落在某条线/轴上"，无法发现"直线该过某个点却没画过"：
 // 实测同一道题里 l₁ 应过 A、B 却漏了 B（B 浮在线外 18 个单位），
@@ -1269,6 +1314,12 @@ func CheckFunctionGraphPoints(panels []Panel, stemText string) []string {
 		for _, c := range cons {
 			ln, ok := spec.extendedLineByLabelName(c.line)
 			if !ok {
+				continue
+			}
+			// 标签归属不明确（两线几乎等距）时本条直线的所有核对都不可靠，
+			// 跳过以避免误报触发无谓回喂（实测 task 73：l₃ 标签落在 l₁ 与 l₃
+			// 两线夹角附近，归属摇摆导致整条 l₃ 的核对跟着摇摆）。
+			if spec.namedLineAttributionAmbiguous(c.line) {
 				continue
 			}
 			// 1) 必须经过的标注点

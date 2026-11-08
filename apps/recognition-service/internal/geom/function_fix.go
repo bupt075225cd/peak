@@ -498,6 +498,10 @@ func fixOneLine(spec *Spec, t functionFixTarget, scale float64, hasScale bool, s
 	if !ok {
 		return ""
 	}
+	// 标签归属不明确（两线几乎等距）时不动手：纠偏很可能改到别的直线上。
+	if spec.namedLineAttributionAmbiguous(t.line) {
+		return ""
+	}
 	cur, ok := spec.segmentLine(segIdx)
 	if !ok {
 		return ""
@@ -561,11 +565,25 @@ func fixOneLine(spec *Spec, t functionFixTarget, scale float64, hasScale bool, s
 // 至少保证不出现"恒过 (-1,0) 的直线却穿过原点"这种与解析式矛盾的结果。
 func FixFunctionGraphs(panels []Panel, stemText string) []string {
 	targets := parseFunctionFixTargets(stemText)
-	if len(targets) == 0 {
-		return nil
-	}
 	coords := parseStemPointCoords(stemText)
 	var notes []string
+	// 去虚线：题干点名的一次函数/正比例函数图象应为实线，模型偶尔会写成
+	// dashed（实测 task 73：l₃ 被画成虚线，看起来像"多出一条辅助线、
+	// 少了一条函数线"）。这类图象在教材图形里从不画虚线，直接改实线。
+	for _, c := range parseFunctionLineConstraints(stemText) {
+		for i := range panels {
+			spec := &panels[i].Spec
+			if spec.Axes == nil {
+				continue
+			}
+			segIdx, ok := spec.extendedSegmentByLabelName(c.line)
+			if !ok || !spec.Segments[segIdx].Dashed {
+				continue
+			}
+			spec.Segments[segIdx].Dashed = false
+			notes = append(notes, fmt.Sprintf("%s 函数图象应为实线，已去除虚线线型", c.display))
+		}
+	}
 	for i := range panels {
 		spec := &panels[i].Spec
 		if spec.Axes == nil {
