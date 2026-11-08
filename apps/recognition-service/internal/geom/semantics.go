@@ -904,13 +904,57 @@ func panelLabelText(spec *Spec) string {
 }
 
 // countExtendedLines 统计"画成直线"的图元数量（extend 线段 + 曲线图象）。
+// 与坐标轴完全重合、且没挂直线名称标签的延长线段不计入：它画出来与轴线重叠
+// （等于没画），多半是模型把坐标轴重复表达了一遍、或把某条直线退化到了轴上；
+// 计入会虚增"已画直线数"，让"漏画直线"的核对被骗过（实测 task 72：该画 3 条
+// 只画出 2 条，加 2 条贴轴线段后核对通过）。挂着名称标签的照常计入——真正的
+// 函数图象也可能恰好与轴共线，有标签说明它是一条被点名的直线。
 func countExtendedLines(spec *Spec) (extended, curves int) {
-	for _, seg := range spec.Segments {
-		if seg.Extend {
-			extended++
+	labeled := spec.labeledExtendSegments()
+	for i, seg := range spec.Segments {
+		if !seg.Extend {
+			continue
 		}
+		if spec.axisCoincidentSegment(seg) && !labeled[i] {
+			continue
+		}
+		extended++
 	}
 	return extended, len(spec.Curves)
+}
+
+// labeledExtendSegments 找出"挂着直线名称标签（l₁/l₂…）"的延长线段下标集合：
+// 每个名称标签归属离它最近、且在容忍度内的那条延长线段（与
+// extendedSegmentByLabelName 的归属规则一致）。
+func (s *Spec) labeledExtendSegments() map[int]bool {
+	out := make(map[int]bool)
+	short := math.Min(s.Canvas.Width, s.Canvas.Height)
+	if short <= 0 {
+		return out
+	}
+	for _, l := range s.Labels {
+		if !isNamedLineLabel(l.Text) {
+			continue
+		}
+		lp := vec{X: l.X, Y: l.Y}
+		best, bestD := -1, math.Inf(1)
+		for i := range s.Segments {
+			if !s.Segments[i].Extend {
+				continue
+			}
+			ln, ok := s.segmentLine(i)
+			if !ok {
+				continue
+			}
+			if d := distToLine(lp, ln); d < bestD {
+				best, bestD = i, d
+			}
+		}
+		if best >= 0 && bestD <= lineLabelTol*short {
+			out[best] = true
+		}
+	}
+	return out
 }
 
 // stemLineCountRe 匹配几何描述里的"两条直线""三条相交直线"。

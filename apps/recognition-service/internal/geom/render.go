@@ -338,7 +338,8 @@ func drawStructured(s *Spec) string {
 	}
 
 	// 4) 线段（extend 时向两端延长，用于表达直线/射线）。
-	for _, seg := range s.Segments {
+	labeledSegs := s.labeledExtendSegments()
+	for i, seg := range s.Segments {
 		pa, okA := at(seg.From)
 		pb, okB := at(seg.To)
 		if !okA || !okB {
@@ -349,6 +350,13 @@ func drawStructured(s *Spec) string {
 		// 两端都是 hidden 构造点的线段，模型只是在用两个定位点表达"一条线"，
 		// 若忘了写 extend 就会画成漂浮在图中间的一小截，这里按直线延长。
 		if seg.Extend || (pa.Hidden && pb.Hidden && !seg.Dashed) {
+			// 与坐标轴完全重合、又没挂直线名称标签的延长线段：延长到画布边缘后
+			// 会盖在轴线上、一直画过轴箭头（视觉上"轴线超长"）。它本来就被轴线
+			// 盖住等于没画，检查器（CheckAxisCoincidentSegments）已提示模型修正，
+			// 这里不重复画。挂着名称标签的照常绘制——真实函数图象也可能与轴共线。
+			if s.axisCoincidentSegment(seg) && !labeledSegs[i] {
+				continue
+			}
 			u := unit(sub(p2, p1))
 			if u.X != 0 || u.Y != 0 {
 				// 直线要贯穿图框：原图里的函数图象都是从一侧穿到另一侧，
