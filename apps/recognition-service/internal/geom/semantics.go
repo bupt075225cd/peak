@@ -958,26 +958,32 @@ func requiredNamedLines(names []namedLine, figDescription string) []namedLine {
 //     只连两个标注点的一截线段不算——这是模型最常见的错误（直线被画成线段）；
 //  2. 名称：只有原图上确实印刷了直线名称时才要求在 labels 中写出。题干里的 l₁/l₂
 //     往往只是直线的代号，原图并没有印，多画标签会与原图不一致。
-func CheckNamedLines(panels []Panel, stemText, figDescription string, lineLabels []string) {
+//
+// 返回值是本轮新增的问题文本。这类约束有"题干点名 + 几何描述确认"双重把关、误报率低，
+// 与函数图象过点问题一样值得回喂模型重试（漏画的直线含未知斜率，程序无法确定性补画）。
+func CheckNamedLines(panels []Panel, stemText, figDescription string, lineLabels []string) []string {
 	names := requiredNamedLines(parseStemLineNames(stemText), figDescription)
 	if len(names) == 0 {
-		return
+		return nil
 	}
 	printed := printedLineNames(lineLabels)
 	all := make([]string, 0, len(names))
 	for _, n := range names {
 		all = append(all, n.display)
 	}
+	var added []string
 	for i := range panels {
 		spec := &panels[i].Spec
 		extended, curves := countExtendedLines(spec)
 		if drawn := extended + curves; drawn < len(names) {
-			panels[i].Issues = append(panels[i].Issues, fmt.Sprintf(
+			msg := fmt.Sprintf(
 				"原图共有 %d 条直线（%s），该子图只画出 %d 条贯穿的直线（extend 线段或曲线图象）。"+
 					"请对照原图逐条核对：原图画有的每条直线都要画出来——只有两个标注点时也要写好 extend:true，"+
 					"没有字母标注点的直线请新增 hidden:true 构造点，取两个不共线于轴的坐标后用 extend:true 连成直线；"+
 					"原图确实没有的直线不要添加。",
-				len(names), strings.Join(all, "、"), drawn))
+				len(names), strings.Join(all, "、"), drawn)
+			panels[i].Issues = append(panels[i].Issues, msg)
+			added = append(added, msg)
 		}
 		drawn := lineNamesInText(panelLabelText(spec))
 		var missing []string
@@ -987,12 +993,15 @@ func CheckNamedLines(panels []Panel, stemText, figDescription string, lineLabels
 			}
 		}
 		if len(missing) > 0 {
-			panels[i].Issues = append(panels[i].Issues, fmt.Sprintf(
+			msg := fmt.Sprintf(
 				"原图上印刷了直线名称 %s，但图中没有写出来。请把名称写进 labels（如 {\"text\":\"l₁\"}），"+
 					"位置紧贴对应的那条直线；原图上没有印刷的名称不要添加。",
-				strings.Join(missing, "、")))
+				strings.Join(missing, "、"))
+			panels[i].Issues = append(panels[i].Issues, msg)
+			added = append(added, msg)
 		}
 	}
+	return added
 }
 
 // ---------- 函数图象过点核对 ----------
@@ -1001,6 +1010,11 @@ func CheckNamedLines(panels []Panel, stemText, figDescription string, lineLabels
 // 4% 对 100x70 画布约 2.8 个单位：能抓住实测中"点偏离直线 10~19 个单位"的明显错误，
 // 又不会因坐标取整（1~2 位小数）或文字避让误报。
 const functionPointTolRatio = 0.04
+
+// functionOriginTolRatio 判定 y=kx+k "与 x 轴交点贴在原点/落在原点右侧" 的阈值，
+// 取 functionPointTolRatio 的一半：交点必须明显在 O 左侧一点才算对，
+// 又不能把"正确过 (-1,0) 但斜率很缓"的图形误判成过原点。
+const functionOriginTolRatio = 0.5
 
 // functionLineConstraint 题干解析出的"某条函数图象必须满足"的几何约束。
 type functionLineConstraint struct {
@@ -1184,6 +1198,7 @@ func xAxisLine(s *Spec) (line2, bool) {
 //  1. 正比例函数（y=mx，常数项为 0）的图象必须过原点 O；
 //  2. y=kx+k 型渐过 (-1,0)：与 x 轴交点须在 O 负方向，且整条线不得过 O；
 //  3. 题干"交于 A、B"/"交于点 C"里的标注点必须真的落在对应的直线上。
+//
 // 返回值是本轮新增的问题文本，供调用方决定是否回喂模型修正
 // （这类约束来自题干解析式，误报率低，值得单独回喂；不计入结构问题）。
 func CheckFunctionGraphPoints(panels []Panel, stemText string) []string {
@@ -1241,35 +1256,25 @@ func CheckFunctionGraphPoints(panels []Panel, stemText string) []string {
 					}
 				}
 			}
-			// 3) y=kx+k 恒过 (-1,0)，不可能过原点
+			// 3) y=kx+k 恒过 (-1,0)，不可能过原点。
+			// 这里按"与 x 轴的交点位置"判断，而不是"到原点的垂距"：斜率较缓时
+			// 一条正确过 (-1,0) 的直线离原点本来就很近，用垂距会把正确图形判成"过原点"。
 			if c.fixedNegativeX {
-				o, ok := spec.PointByName(spec.Axes.Origin)
+				t, ok := interceptOffset(spec, ln)
 				if !ok {
 					continue
 				}
-				ov := vec{X: o.X, Y: o.Y}
-				if d := distToLine(ov, ln); d <= tol {
+				nearTol := functionOriginTolRatio * tol
+				if t > nearTol {
+					add(i, fmt.Sprintf(
+						"题干中 %s 的解析式是 y=kx+k，恒过 (-1,0)，与 x 轴的交点应在原点 %s 的左侧，"+
+							"但重绘的 %s 与 x 轴交于 O 的右侧。请把交点改到 O 左侧。",
+						c.display, originName, c.display))
+				} else if t > -nearTol {
 					add(i, fmt.Sprintf(
 						"题干中 %s 的解析式是 y=kx+k（x 的系数与常数项相同），它恒过 (-1,0)、不可能过原点，"+
 							"但重绘的 %s 却穿过了原点 %s。请按原图把它改成与 x 轴交于 O 左侧一点的直线。",
 						c.display, c.display, originName))
-					continue
-				}
-				axis, ok := xAxisLine(spec)
-				if !ok {
-					continue
-				}
-				q, ok := lineCross(ln, axis)
-				if !ok {
-					continue
-				}
-				if dir := unit(sub(axis.b, axis.a)); dir.X != 0 || dir.Y != 0 {
-					if t := dot(sub(q, ov), dir); t > 0 {
-						add(i, fmt.Sprintf(
-							"题干中 %s 的解析式是 y=kx+k，恒过 (-1,0)，与 x 轴的交点应在原点 %s 的左侧，"+
-								"但重绘的 %s 与 x 轴交于 O 的右侧。请把交点改到 O 左侧。",
-							c.display, originName, c.display))
-					}
 				}
 			}
 		}

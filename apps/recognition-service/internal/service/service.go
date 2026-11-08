@@ -653,6 +653,13 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		// 印刷名称取识别与描述两个独立看图阶段的共识，单侧误报不能当依据。
 		printedLineNames := geom.PrintedLineNamesConsensus(result.Geometry.LineLabels, parsed)
 		geom.StripUnprintedLineNames(parsed, printedLineNames)
+		// 程序兜底：题干解析式给出的定点（正比例过 O、y=kx+k 过 (-1,0)、y=kx+b 过 (0,b)、
+		// 题干坐标点）能在程序里直接算出来，就先确定性纠偏，不消耗一次回喂。
+		if fixes := geom.FixFunctionGraphs(parsed, result.StemText); len(fixes) > 0 {
+			s.log.Info("geometry function graph fixed deterministically",
+				zap.Uint64("task_id", taskID), zap.Int("attempt", attempts),
+				zap.Strings("fixes", fixes))
+		}
 		// 语义核对之前先留一份"结构类"问题快照（点引用缺失、坐标非法、图元字段不全等）。
 		// 结构问题会直接渲染出坏图，必须报错；而语义偏差（题干与图形不一致）常常源于
 		// 题干转录不准（如漏掉"点 E 从 B 出发"半句、把"水平向右"录成"竖直向上"），
@@ -688,7 +695,7 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		// 直线名称核对：题干点名 l₁/l₂/l₃ 时，图上每条都要画出来并标注名称。
 		// 必须同时用几何描述（VLM 对图的判读）把关：题干后面小问才会引入的直线
 		// （如"直线 l₃ 与 x 轴交于点 E"）原图并没有画，不能要求模型凭空补画。
-		geom.CheckNamedLines(parsed, result.StemText, result.Geometry.Description, printedLineNames)
+		namedLineIssues := geom.CheckNamedLines(parsed, result.StemText, result.Geometry.Description, printedLineNames)
 		// 函数图象过点核对：题干要求经过的标注点/定点必须真的落在直线上
 		// （如 l₁ 应过 A、B，l₃:y=kx+k 恒过 (-1,0) 不得过原点）。
 		funcPointIssues := geom.CheckFunctionGraphPoints(parsed, result.StemText)
@@ -726,16 +733,21 @@ func (s *Service) redrawGeometry(ctx context.Context, taskID uint64, imageData [
 		}
 		// 结构问题已清零时的收尾：
 		//   - 仍有"函数图象没过题干要求的点"（基于题干解析式的硬约束、误报率低）→ 单独回喂；
+		//   - 仍有"题干点名且几何描述确认的直线没画出来"（双重把关、误报率低）→ 一并回喂。
+		//     程序兜底能消掉过点类问题，若不同时把漏画直线纳入重试，模型漏画的直线
+		//     会因"提前收工"而直接出图（实测 task：l₃:y=kx+k 整条没画）。
 		//   - 其余语义偏差（题干与图形不一致）多源于题干转录不准，反复"修正"只会越改越差，
 		//     只记日志、不再重试。
 		if structCount == 0 {
-			if len(funcPointIssues) == 0 || funcPointRetries >= maxFuncPointRetries {
+			retryIssues := append(append(make([]string, 0, len(funcPointIssues)+len(namedLineIssues)),
+				funcPointIssues...), namedLineIssues...)
+			if len(retryIssues) == 0 || funcPointRetries >= maxFuncPointRetries {
 				break
 			}
 			funcPointRetries++
-			s.log.Warn("geometry function points mismatch, retrying",
-				zap.Int("attempt", attempts), zap.Strings("issues", funcPointIssues))
-			correction = formatFunctionPointIssues(funcPointIssues)
+			s.log.Warn("geometry redraw hard constraints violated, retrying",
+				zap.Int("attempt", attempts), zap.Strings("issues", retryIssues))
+			correction = formatRedrawIssues(retryIssues)
 			continue
 		}
 		s.log.Warn("geometry spec validation failed", zap.Int("attempt", attempts),
@@ -825,11 +837,12 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// formatFunctionPointIssues 把"函数图象没过题干要求的点"回喂给模型。
-// 与结构问题模板区分：修正方向是"按解析式重算坐标"，不是"修 JSON 结构"。
-func formatFunctionPointIssues(issues []string) string {
+// formatRedrawIssues 把"函数图象没过题干要求的点 / 漏画题干点名的直线"
+// 这类低误报硬约束回喂给模型。与结构问题模板区分：修正方向是"按解析式重算
+// 坐标、补画漏掉的直线"，不是"修 JSON 结构"。
+func formatRedrawIssues(issues []string) string {
 	var sb strings.Builder
-	sb.WriteString("上一轮重绘的函数图象与题干条件不一致：\n")
+	sb.WriteString("上一轮重绘的图形与题干条件不一致：\n")
 	for i, issue := range issues {
 		if i >= 8 {
 			sb.WriteString("-（其余问题省略）\n")
@@ -840,7 +853,9 @@ func formatFunctionPointIssues(issues []string) string {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("请先用题干给出的解析式与已知点重新解出各条直线的系数、斜率与坐标轴交点，" +
-		"再据此校正 points 坐标后重新输出完整 JSON（只改坐标，不要增删图元）。")
+		"逐条核对后重新输出完整 JSON：位置/斜率画错的直线只改坐标；漏画的直线必须补画" +
+		"（没有字母标注点时新增 hidden:true 构造点，取两个不共线于轴的坐标用 extend:true 连成直线）；" +
+		"已经正确的图元不要改动。")
 	return sb.String()
 }
 
